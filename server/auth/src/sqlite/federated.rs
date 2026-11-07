@@ -9,7 +9,7 @@ use super::users::read_binding;
 use super::{AuthDb, is_write_conflict, op_error, sql, store_unavailable};
 use crate::federated::FederatedError;
 use crate::federated::users::{
-    NewFederatedUser, ProviderBinding, ROLE_ADMIN, ROLE_USER, StoredUser,
+    NewFederatedUser, ProviderBinding, ROLE_ADMIN, StoredUser, new_federated_user_role,
 };
 use crate::times::secs_to_ms;
 use droppedneedle_kernel::db::statement::Statement;
@@ -157,7 +157,11 @@ impl FederatedUsers {
                     .optional()
                     .map_err(op_error)?
                     .is_some();
-                let role = if has_users { ROLE_USER } else { ROLE_ADMIN };
+                let role = if has_users {
+                    new_federated_user_role(&row.provider)
+                } else {
+                    ROLE_ADMIN
+                };
                 tx.execute(
                     sql::INSERT_USER.text(),
                     rusqlite::params![
