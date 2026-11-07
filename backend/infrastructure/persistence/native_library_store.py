@@ -2540,14 +2540,16 @@ class NativeLibraryStore(PersistenceBase):
     async def get_target_album_release_pin(self, album_identifier: str) -> str | None:
         def operation(connection: sqlite3.Connection) -> str | None:
             album_id = self._resolve_target_album_pin_id(connection, album_identifier)
-            if album_id is None:
-                return None
-            row = connection.execute(
-                "SELECT release_mbid FROM library_album_release_pins "
-                "WHERE local_album_id = ?",
-                (album_id,),
-            ).fetchone()
-            return str(row["release_mbid"]) if row is not None else None
+            if album_id is not None:
+                row = connection.execute(
+                    "SELECT release_mbid FROM library_album_release_pins "
+                    "WHERE local_album_id = ?",
+                    (album_id,),
+                ).fetchone()
+                if row is not None:
+                    return str(row["release_mbid"])
+            pending = self._pending_release_pin(connection, album_identifier)
+            return pending[0] if pending is not None else None
 
         return await self._read(operation)
 
@@ -2562,16 +2564,16 @@ class NativeLibraryStore(PersistenceBase):
 
         def operation(connection: sqlite3.Connection) -> tuple[str | None, str | None]:
             album_id = self._resolve_target_album_pin_id(connection, album_identifier)
-            if album_id is None:
-                return (None, None)
-            row = connection.execute(
-                "SELECT release_mbid, release_group_mbid "
-                "FROM library_album_release_pins WHERE local_album_id = ?",
-                (album_id,),
-            ).fetchone()
-            if row is None:
-                return (None, None)
-            return (str(row["release_mbid"]), str(row["release_group_mbid"]))
+            if album_id is not None:
+                row = connection.execute(
+                    "SELECT release_mbid, release_group_mbid "
+                    "FROM library_album_release_pins WHERE local_album_id = ?",
+                    (album_id,),
+                ).fetchone()
+                if row is not None:
+                    return (str(row["release_mbid"]), str(row["release_group_mbid"]))
+            pending = self._pending_release_pin(connection, album_identifier)
+            return pending if pending is not None else (None, None)
 
         return await self._read(operation)
 
@@ -2584,19 +2586,31 @@ class NativeLibraryStore(PersistenceBase):
     ) -> None:
         def operation(connection: sqlite3.Connection) -> None:
             album_id = self._resolve_target_album_pin_id(connection, album_identifier)
-            if album_id is None:
-                raise ResourceNotFoundError(
-                    f"Album {album_identifier} is not in the local library"
-                )
-            identity = connection.execute(
-                "SELECT release_group_mbid FROM local_album_external_identities "
-                "WHERE local_album_id = ? AND provider = 'musicbrainz'",
-                (album_id,),
-            ).fetchone()
+            identity = (
+                connection.execute(
+                    "SELECT release_group_mbid FROM local_album_external_identities "
+                    "WHERE local_album_id = ? AND provider = 'musicbrainz'",
+                    (album_id,),
+                ).fetchone()
+                if album_id is not None
+                else None
+            )
             if identity is None:
-                raise ResourceNotFoundError(
-                    f"Album {album_identifier} has no MusicBrainz identity"
+                # #460: the album is not (yet) an identified library album - e.g.
+                # the user picks an edition before requesting it. Keep the choice
+                # as a pending release-group pin; reads fall back to it until the
+                # album carries its own pin.
+                self._ensure_pending_release_pin_table(connection)
+                connection.execute(
+                    "INSERT INTO pending_release_group_pins "
+                    "(release_group_mbid, release_mbid, set_by_user_id, set_at) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT(release_group_mbid) DO UPDATE SET "
+                    "release_mbid = excluded.release_mbid, "
+                    "set_by_user_id = excluded.set_by_user_id, "
+                    "set_at = excluded.set_at",
+                    (album_identifier.strip().casefold(), release_mbid, set_by_user_id, set_at),
                 )
+                return
             connection.execute(
                 "INSERT INTO library_album_release_pins "
                 "(local_album_id, release_group_mbid, release_mbid, "
@@ -2620,15 +2634,69 @@ class NativeLibraryStore(PersistenceBase):
     async def clear_target_album_release_pin(self, album_identifier: str) -> bool:
         def operation(connection: sqlite3.Connection) -> bool:
             album_id = self._resolve_target_album_pin_id(connection, album_identifier)
-            if album_id is None:
-                return False
-            cursor = connection.execute(
-                "DELETE FROM library_album_release_pins WHERE local_album_id = ?",
-                (album_id,),
-            )
-            return cursor.rowcount > 0
+            removed = 0
+            if album_id is not None:
+                removed += connection.execute(
+                    "DELETE FROM library_album_release_pins WHERE local_album_id = ?",
+                    (album_id,),
+                ).rowcount
+            if self._pending_release_pin_table_exists(connection):
+                removed += connection.execute(
+                    "DELETE FROM pending_release_group_pins WHERE release_group_mbid = ?",
+                    (album_identifier.strip().casefold(),),
+                ).rowcount
+            return removed > 0
 
         return await self._write(operation)
+
+    @staticmethod
+    def _ensure_pending_release_pin_table(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS pending_release_group_pins ("
+            "release_group_mbid TEXT PRIMARY KEY, release_mbid TEXT NOT NULL, "
+            "set_by_user_id TEXT, set_at TEXT NOT NULL)"
+        )
+
+    @staticmethod
+    def _pending_release_pin_table_exists(connection: sqlite3.Connection) -> bool:
+        return (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'pending_release_group_pins'"
+            ).fetchone()
+            is not None
+        )
+
+    @classmethod
+    def _pending_release_pin(
+        cls, connection: sqlite3.Connection, album_identifier: str
+    ) -> tuple[str, str] | None:
+        """#460: a release-group pin chosen before the album is in the library."""
+        if not cls._pending_release_pin_table_exists(connection):
+            return None
+        key = album_identifier.strip().casefold()
+        row = connection.execute(
+            "SELECT release_mbid, release_group_mbid FROM pending_release_group_pins "
+            "WHERE release_group_mbid = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            # the caller may pass a local album id: map it to its release group
+            identity = connection.execute(
+                "SELECT LOWER(release_group_mbid) AS rg "
+                "FROM local_album_external_identities "
+                "WHERE local_album_id = ? AND provider = 'musicbrainz'",
+                (album_identifier,),
+            ).fetchone()
+            if identity is not None:
+                row = connection.execute(
+                    "SELECT release_mbid, release_group_mbid "
+                    "FROM pending_release_group_pins WHERE release_group_mbid = ?",
+                    (identity["rg"],),
+                ).fetchone()
+        if row is None:
+            return None
+        return (str(row["release_mbid"]), str(row["release_group_mbid"]))
 
     @staticmethod
     def _resolve_target_album_pin_id(

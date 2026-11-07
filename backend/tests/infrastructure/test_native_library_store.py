@@ -1520,10 +1520,19 @@ async def test_target_release_pins_ignore_fileless_provider_ghosts(
         )
 
     assert await store.get_target_album_release_pin("ghost-rg") is None
-    with pytest.raises(ResourceNotFoundError, match="not in the local library"):
-        await store.set_target_album_release_pin(
-            "ghost-rg", "ghost-release", "admin", "target-time"
-        )
+    # #460: pinning an album with no files no longer fails; the choice is kept as
+    # a pending release-group pin and is never attached to the fileless ghosts.
+    await store.set_target_album_release_pin(
+        "ghost-rg", "ghost-release", "admin", "target-time"
+    )
+    with sqlite3.connect(db_path) as connection:
+        attached = connection.execute(
+            "SELECT COUNT(*) FROM library_album_release_pins "
+            "WHERE local_album_id IN ('album-ghost-a', 'album-ghost-b')"
+        ).fetchone()[0]
+    assert attached == 0
+    assert await store.get_target_album_release_pin("ghost-rg") == "ghost-release"
+    assert await store.clear_target_album_release_pin("ghost-rg") is True
     assert await store.clear_target_album_release_pin("ghost-rg") is False
 
 
@@ -5197,3 +5206,58 @@ async def test_get_target_album_tracks_prefers_identified_album_over_embedded_fa
     rows = await store.get_target_album_tracks("rg-x")
 
     assert [row["id"] for row in rows] == ["track-identified"]
+
+
+@pytest.mark.asyncio
+async def test_edition_pin_before_album_is_in_library_is_kept_as_pending(
+    store: NativeLibraryStore,
+) -> None:
+    """#460: picking an edition before requesting must not fail with
+    "not in the local library"; the pin is kept and read back by release group."""
+    await store.set_target_album_release_pin("RG-New", "rel-std", "user-1", "2026-11-07")
+
+    assert await store.get_target_album_release_pin("rg-new") == "rel-std"
+    assert await store.get_target_album_release_pin_with_group("rg-new") == (
+        "rel-std",
+        "rg-new",
+    )
+    assert await store.clear_target_album_release_pin("rg-new") is True
+    assert await store.get_target_album_release_pin("rg-new") is None
+    assert await store.clear_target_album_release_pin("rg-new") is False
+
+
+@pytest.mark.asyncio
+async def test_pending_edition_pin_applies_after_import_until_album_has_own_pin(
+    store: NativeLibraryStore,
+) -> None:
+    await store.set_target_album_release_pin("rg-p", "rel-pending", None, "t1")
+    await store.create_catalog_membership(_membership("p"))
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "INSERT INTO local_album_external_identities "
+            "(local_album_id, provider, release_group_mbid, decision_source, "
+            "selected_at) VALUES ('album-p', 'musicbrainz', 'rg-p', 'embedded', 2)"
+        )
+        connection.commit()
+
+    # imported + identified, no own pin yet -> the pending choice still applies
+    assert await store.get_target_album_release_pin("rg-p") == "rel-pending"
+    assert await store.get_target_album_release_pin("album-p") == "rel-pending"
+
+    # an album-level pin now takes precedence over the pending one
+    await store.set_target_album_release_pin("rg-p", "rel-own", None, "t2")
+    assert await store.get_target_album_release_pin("rg-p") == "rel-own"
+
+
+@pytest.mark.asyncio
+async def test_reading_pins_never_creates_the_pending_table(
+    store: NativeLibraryStore,
+) -> None:
+    assert await store.get_target_album_release_pin("rg-none") is None
+    with sqlite3.connect(store.db_path) as connection:
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = 'pending_release_group_pins'"
+            ).fetchone()
+            is None
+        )
