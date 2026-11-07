@@ -5150,3 +5150,50 @@ async def test_library_revisions_missing_stream_row_raises_not_found(
         )
     with pytest.raises(ResourceNotFoundError, match="operation"):
         await store.get_library_revisions()
+
+
+@pytest.mark.asyncio
+async def test_get_target_album_tracks_finds_unidentified_album_by_embedded_release_group(
+    store: NativeLibraryStore,
+) -> None:
+    """#527: a task's own just-imported tracks carry the release group the import
+    stamped, but the album has no identity yet. The release-group lookup must
+    still see them, or failover re-downloads and collides with its own files."""
+    await store.create_catalog_membership(_membership("fresh"))
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE local_tracks SET embedded_release_group_mbid = 'RG-Fresh', "
+            "embedded_recording_mbid = 'rec-fresh' WHERE id = 'track-fresh'"
+        )
+        connection.commit()
+
+    rows = await store.get_target_album_tracks("rg-fresh")
+
+    assert [row["id"] for row in rows] == ["track-fresh"]
+    assert rows[0]["embedded_release_group_mbid"] == "RG-Fresh"
+    assert rows[0]["embedded_recording_mbid"] == "rec-fresh"
+
+
+@pytest.mark.asyncio
+async def test_get_target_album_tracks_prefers_identified_album_over_embedded_fallback(
+    store: NativeLibraryStore,
+) -> None:
+    """The embedded fallback only applies when no album carries the identity."""
+    await store.create_catalog_membership(_membership("identified"))
+    await store.create_catalog_membership(_membership("stray"))
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "INSERT INTO local_album_external_identities "
+            "(local_album_id, provider, release_group_mbid, decision_source, "
+            "selected_at) VALUES ('album-identified', 'musicbrainz', 'rg-x', "
+            "'legacy_import', 2)"
+        )
+        connection.execute(
+            "UPDATE local_tracks SET embedded_release_group_mbid = 'rg-x' "
+            "WHERE id = 'track-stray'"
+        )
+        connection.commit()
+
+    rows = await store.get_target_album_tracks("rg-x")
+
+    assert [row["id"] for row in rows] == ["track-identified"]

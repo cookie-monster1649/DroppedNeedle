@@ -403,3 +403,43 @@ async def test_reconcile_walks_once_and_scopes_literal_wildcard_paths(
         "availability"
     ] == "missing"
     assert (await store.get_target_track(sibling_id))["availability"] == "indexed"
+
+
+@pytest.mark.asyncio
+async def test_attributions_fall_back_to_import_stamped_identity_until_identified() -> None:
+    """#527: occupancy must recognise a task's own earlier placement before the
+    album is identified, using the release group/recording stamped at import."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from services.native.target_import_library_service import (
+        TargetImportLibraryService,
+    )
+
+    rows = {
+        "/lib/a.flac": {
+            "provider_release_group_mbid": None,
+            "embedded_release_group_mbid": "rg-1",
+            "recording_mbid": None,
+            "embedded_recording_mbid": "rec-1",
+        },
+        "/lib/b.flac": {
+            "provider_release_group_mbid": "rg-2",
+            "embedded_release_group_mbid": "rg-stale",
+            "recording_mbid": "rec-2",
+            "embedded_recording_mbid": "rec-stale",
+        },
+    }
+    fake = SimpleNamespace(
+        _store=SimpleNamespace(
+            get_target_attributions_for_paths=AsyncMock(return_value=rows)
+        )
+    )
+    result = await TargetImportLibraryService.get_attributions_for_paths(
+        fake, list(rows)
+    )
+    assert result["/lib/a.flac"]["release_group_mbid"] == "rg-1"
+    assert result["/lib/a.flac"]["recording_mbid"] == "rec-1"
+    # an identified album keeps its provider identity, never the embedded tags
+    assert result["/lib/b.flac"]["release_group_mbid"] == "rg-2"
+    assert result["/lib/b.flac"]["recording_mbid"] == "rec-2"

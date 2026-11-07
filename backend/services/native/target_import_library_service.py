@@ -799,7 +799,16 @@ class TargetImportLibraryService:
     async def get_attributions_for_paths(self, paths: list[str]) -> dict[str, dict]:
         rows = await self._store.get_target_attributions_for_paths(paths)
         for row in rows.values():
-            row["release_group_mbid"] = row.get("provider_release_group_mbid")
+            # #527: until the album is identified, fall back to the release group and
+            # recording the import stamped on the track, so a task's own earlier
+            # placement is recognised instead of held as a foreign occupant.
+            row["release_group_mbid"] = row.get(
+                "provider_release_group_mbid"
+            ) or row.get("embedded_release_group_mbid")
+            if not row.get("recording_mbid") and not row.get(
+                "provider_release_group_mbid"
+            ):
+                row["recording_mbid"] = row.get("embedded_recording_mbid")
             row["confidence"] = 1.0
             row["source"] = row.get("ingest_source")
         return rows

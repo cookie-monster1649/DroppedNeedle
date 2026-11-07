@@ -327,6 +327,8 @@ SELECT
     t.source_path,
     t.row_revision,
     t.embedded_release_mbid,
+    t.embedded_release_group_mbid,
+    t.embedded_recording_mbid,
     COALESCE((
         SELECT json_group_array(ordered_genre.name)
         FROM (
@@ -3374,6 +3376,30 @@ class NativeLibraryStore(PersistenceBase):
                             (album_identifier,),
                         ).fetchall()
                     ]
+                    if not album_ids:
+                        # #527: a task's own placements have track rows (stamped with
+                        # the release group at import) long before the album gets an
+                        # identity. Without this fallback, coverage, position-dedup and
+                        # the failover's remaining-positions read see nothing and the
+                        # failover re-downloads and collides with its own files.
+                        # Only albums that have no identity at all qualify, so an
+                        # identified album is never re-attributed by its tags.
+                        album_ids = [
+                            str(row["local_album_id"])
+                            for row in connection.execute(
+                                "SELECT DISTINCT track.local_album_id "
+                                "FROM local_tracks track "
+                                "JOIN local_albums album "
+                                "ON album.id = track.local_album_id "
+                                "WHERE LOWER(track.embedded_release_group_mbid) = LOWER(?) "
+                                "AND album.retired_into_album_id IS NULL "
+                                "AND NOT EXISTS (SELECT 1 FROM "
+                                "local_album_external_identities identity "
+                                "WHERE identity.local_album_id = album.id) "
+                                "ORDER BY track.local_album_id",
+                                (album_identifier,),
+                            ).fetchall()
+                        ]
                 else:
                     alias_id = str(alias["id"])
                     alias_visibility = (
