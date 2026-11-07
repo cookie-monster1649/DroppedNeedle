@@ -516,6 +516,9 @@ impl Catalog {
         // No pick while the preferences do not read: a default pick is
         // not the admin's choice.
         let prefs = self.upstream().settings().edition_preferences()?;
+        let common = droppedneedle_library::edition_prefs::common_track_count(
+            ranked.iter().map(|release| release.track_count),
+        );
         ranked
             .iter()
             .enumerate()
@@ -532,6 +535,8 @@ impl Catalog {
                         .map(String::as_str)
                         .collect(),
                     types: Vec::new(),
+                    uncommon_track_count: common
+                        .is_some_and(|common| release.track_count != common),
                 };
                 (prefs.key(&facts), *rank)
             })
