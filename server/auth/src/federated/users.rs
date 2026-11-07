@@ -23,6 +23,41 @@ pub const ROLE_USER: &str = "user";
 /// New-user role for the first user on the instance.
 pub const ROLE_ADMIN: &str = "admin";
 
+/// Fork: role for an account created on first OIDC sign-in when the
+/// instance already has users. `OIDC_NEW_USER_ROLE=trusted` makes their
+/// requests start without approval (the NUC's SSO users are all household);
+/// anything else, or unset, keeps upstream's [`ROLE_USER`]. Jellyfin and
+/// Plex sign-ins are not affected. Read once.
+#[must_use]
+pub fn new_federated_user_role(provider: &str) -> &'static str {
+    static OIDC_ROLE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    if provider != "oidc" {
+        return ROLE_USER;
+    }
+    OIDC_ROLE.get_or_init(|| oidc_role_from(std::env::var("OIDC_NEW_USER_ROLE").ok().as_deref()))
+}
+
+fn oidc_role_from(value: Option<&str>) -> &'static str {
+    match value.map(str::trim) {
+        Some(value) if value.eq_ignore_ascii_case("trusted") => "trusted",
+        _ => ROLE_USER,
+    }
+}
+
+#[cfg(test)]
+mod new_role_tests {
+    use super::*;
+
+    #[test]
+    fn only_trusted_is_accepted_and_admin_never_is() {
+        assert_eq!(oidc_role_from(Some("trusted")), "trusted");
+        assert_eq!(oidc_role_from(Some(" Trusted ")), "trusted");
+        assert_eq!(oidc_role_from(Some("admin")), ROLE_USER);
+        assert_eq!(oidc_role_from(None), ROLE_USER);
+        assert_eq!(new_federated_user_role("plex"), ROLE_USER);
+    }
+}
+
 /// Provider names, v2 `auth_providers.provider` values kept verbatim.
 pub const PROVIDER_OIDC: &str = "oidc";
 /// Provider names, v2 `auth_providers.provider` values kept verbatim.
