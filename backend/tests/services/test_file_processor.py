@@ -3517,3 +3517,58 @@ async def test_folder_occupied_target_attributed_to_other_album_is_collision(
     held = await store.list_held_imports("user-a", "user")
     assert len(held) == 1
     assert held[0].reason == TARGET_OCCUPIED
+
+
+def _manifest_for_target_tag(release_mbid):
+    return DownloadManifest(
+        task_id="t1",
+        release_group_mbid="rg",
+        artist_name="Artist",
+        album_title="Album",
+        naming_template="{albumartist}/{album}/{track:02d} {title}.{ext}",
+        target_files=[],
+        release_mbid=release_mbid,
+    )
+
+
+def test_build_target_tag_drops_release_track_id_from_another_release():
+    """#532: the uploader's release-track ID belongs to the uploader's edition."""
+    file_tag = AudioTag(
+        title="Song",
+        artist="Artist",
+        album="Uploader Album",
+        track_number=3,
+        musicbrainz_release_id="uploader-edition",
+        musicbrainz_release_track_id="uploader-release-track",
+        musicbrainz_recording_id="rec-1",
+    )
+    tag = FileProcessor._build_target_tag(_manifest_for_target_tag("target-edition"), file_tag)
+    assert tag.musicbrainz_release_id == "target-edition"
+    assert tag.musicbrainz_release_track_id is None
+    assert tag.musicbrainz_recording_id == "rec-1"
+
+
+def test_build_target_tag_keeps_release_track_id_of_the_same_release():
+    file_tag = AudioTag(
+        title="Song",
+        artist="Artist",
+        album="Uploader Album",
+        track_number=3,
+        musicbrainz_release_id="Target-Edition",
+        musicbrainz_release_track_id="matching-release-track",
+    )
+    tag = FileProcessor._build_target_tag(_manifest_for_target_tag("target-edition"), file_tag)
+    assert tag.musicbrainz_release_track_id == "matching-release-track"
+
+
+def test_build_target_tag_without_pinned_release_keeps_file_value():
+    file_tag = AudioTag(
+        title="Song",
+        artist="Artist",
+        album="Uploader Album",
+        track_number=3,
+        musicbrainz_release_id="some-edition",
+        musicbrainz_release_track_id="some-release-track",
+    )
+    tag = FileProcessor._build_target_tag(_manifest_for_target_tag(None), file_tag)
+    assert tag.musicbrainz_release_track_id == "some-release-track"

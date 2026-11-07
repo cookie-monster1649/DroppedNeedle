@@ -1035,10 +1035,11 @@ async def test_import_anyway_with_automatic_assignment_publishes_unmanaged(
     destination_tag, _ = legacy_audio_projection(audio.read(destination))
     assert destination_tag.musicbrainz_recording_id == held.recording_mbid
     source_tag, _ = legacy_audio_projection(audio.read(catalog_source))
-    assert (
-        destination_tag.musicbrainz_release_track_id
-        == source_tag.musicbrainz_release_track_id
-    )
+    # #532: the import writes the held release, so the source's release-track ID
+    # (from its own release) must not survive - it would contradict the release.
+    assert source_tag.musicbrainz_release_id != held.release_mbid
+    assert destination_tag.musicbrainz_release_id == held.release_mbid
+    assert destination_tag.musicbrainz_release_track_id is None
     assert destination_tag.title == source_tag.title
     assert destination_tag.artist == source_tag.artist
     assert request.tag.musicbrainz_release_group_id == held.release_group_mbid
@@ -4510,3 +4511,49 @@ async def test_conversion_final_preview_normalizes_null_tag_revision(
 
     assert scenario.row["tag_revision"] is None
     assert await scenario.preview._preview_inputs_moved(scenario.snapshot) is False
+
+
+def test_minimal_import_document_clears_foreign_release_track_id() -> None:
+    """#532: an import that writes a release ID must not leave the uploader's
+    release-track ID (possibly from another edition) in the file."""
+    tag = AudioTag(
+        title="Track",
+        artist="Artist",
+        album="Album",
+        track_number=1,
+        musicbrainz_release_group_id="rg",
+        musicbrainz_release_id="target-release",
+        musicbrainz_release_track_id=None,
+    )
+    document = LibraryManagementPublisher._minimal_import_document(
+        tag, reconcile_release_track_identity=True
+    )
+    field = next(f for f in document.fields if f.name == "musicbrainz_release_track_id")
+    assert field.action == "clear"
+    assert field.value is None
+
+
+def test_minimal_import_document_sets_known_release_track_id() -> None:
+    tag = AudioTag(
+        title="Track",
+        artist="Artist",
+        album="Album",
+        track_number=1,
+        musicbrainz_release_group_id="rg",
+        musicbrainz_release_id="target-release",
+        musicbrainz_release_track_id="target-release-track",
+    )
+    document = LibraryManagementPublisher._minimal_import_document(
+        tag, reconcile_release_track_identity=True
+    )
+    field = next(f for f in document.fields if f.name == "musicbrainz_release_track_id")
+    assert field.action == "set"
+    assert field.value == "target-release-track"
+
+
+def test_minimal_import_document_without_release_leaves_release_track_alone() -> None:
+    tag = AudioTag(title="Track", artist="Artist", album="Album", track_number=1)
+    document = LibraryManagementPublisher._minimal_import_document(
+        tag, reconcile_release_track_identity=True
+    )
+    assert all(f.name != "musicbrainz_release_track_id" for f in document.fields)

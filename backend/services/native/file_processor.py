@@ -2603,7 +2603,15 @@ class FileProcessor:
             musicbrainz_release_group_id=manifest.release_group_mbid,
             musicbrainz_release_id=manifest.release_mbid,
             musicbrainz_recording_id=file_tag.musicbrainz_recording_id,
-            musicbrainz_release_track_id=file_tag.musicbrainz_release_track_id,
+            # #532: the uploader's release-track ID is only valid when the file was
+            # tagged from the same release we are writing; otherwise drop it.
+            musicbrainz_release_track_id=(
+                file_tag.musicbrainz_release_track_id
+                if not manifest.release_mbid
+                or (file_tag.musicbrainz_release_id or "").strip().casefold()
+                == manifest.release_mbid.strip().casefold()
+                else None
+            ),
             musicbrainz_artist_id=file_tag.musicbrainz_artist_id,
             musicbrainz_album_artist_id=manifest.artist_mbid,
             acoustid_id=file_tag.acoustid_id,

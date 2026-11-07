@@ -843,7 +843,10 @@ class LibraryManagementPublisher:
 
     @staticmethod
     def _minimal_import_document(
-        tag, *, reviewed_recording_identity: bool = False
+        tag,
+        *,
+        reviewed_recording_identity: bool = False,
+        reconcile_release_track_identity: bool = False,
     ) -> DesiredAudioDocument:  # noqa: ANN001
         fields = [DesiredAudioField(name="album", action="set", value=tag.album)]
         if tag.album_artist is not None:
@@ -862,6 +865,18 @@ class LibraryManagementPublisher:
         ):
             if value:
                 fields.append(DesiredAudioField(name=name, action="set", value=value))
+        if reconcile_release_track_identity and tag.musicbrainz_release_id:
+            # #532: the release-track ID must describe the release just written.
+            # Set it when the import knows it; otherwise clear the uploader's
+            # value, which may belong to a different edition of the group.
+            release_track_id = (tag.musicbrainz_release_track_id or "").strip()
+            fields.append(
+                DesiredAudioField(
+                    name="musicbrainz_release_track_id",
+                    action="set" if release_track_id else "clear",
+                    value=release_track_id or None,
+                )
+            )
         if reviewed_recording_identity and tag.musicbrainz_recording_id:
             fields.append(
                 DesiredAudioField(
@@ -992,6 +1007,7 @@ class LibraryManagementPublisher:
                 desired = self._minimal_import_document(
                     request.tag,
                     reviewed_recording_identity=request.reviewed_recording_identity,
+                    reconcile_release_track_identity=True,
                 )
             plan = self._write_planner.plan(
                 current=read,
