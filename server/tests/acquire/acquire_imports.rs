@@ -998,8 +998,14 @@ async fn spotify_import_populates_tracks_from_items() {
         Some(format!("/api/v3/covers/release-group/{NEON_MERIDIAN_GROUP}?size=250").as_str())
     );
     assert_eq!(rows[0].duration, Some(183.0));
+    // Fork: the proving ISRC also names the track's recording.
+    assert_eq!(
+        rows[0].recording_mbid.as_deref(),
+        Some("5907a1b0-0000-4000-8000-000000000e01")
+    );
     assert_eq!(rows[1].track_name, "Glass Tides");
     assert_eq!(rows[1].album_id, None);
+    assert_eq!(rows[1].recording_mbid, None);
     assert_eq!(rows[1].duration, Some(201.0));
 
     // The cover persisted best-effort.
@@ -1457,6 +1463,7 @@ async fn spotify_sqlite_stores_persist_and_expire() {
         disc_number: Some(1),
         duration: Some(183),
         cover_url: None,
+        recording_mbid: None,
     };
     for _ in 0..2 {
         bridge

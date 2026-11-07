@@ -78,38 +78,96 @@ export interface BatchRequestResult {
 	skipped: number;
 }
 
-export async function requestMissingTracks(tracks: PlaylistTrack[]): Promise<BatchRequestResult> {
-	// v1 parity (request_missing_tracks): one album row per unresolved
-	// album, deduped by album id, skipping library-resolved and sourced
-	// tracks. Posts to the v3 batch intake, whose response extends this
-	// shape with overflow + status.
-	const seen = new Set<string>();
-	const items: { musicbrainz_id: string; artist_name: string; album_title: string }[] = [];
+type TrackIntakeBody = Schemas['TrackIntake'];
+type BatchItemBody = { musicbrainz_id: string; artist_name: string; album_title: string };
+
+/** What "request missing" would send: per-track where the row names a recording. */
+export interface MissingPlan {
+	tracks: TrackIntakeBody[];
+	albums: BatchItemBody[];
+}
+
+function isMissing(track: PlaylistTrack): boolean {
+	// library_file_id means owned locally; a streaming source counts as available.
+	return (
+		!track.library_file_id && (!track.available_sources || track.available_sources.length === 0)
+	);
+}
+
+/**
+ * Fork (#204, brief §9.3): a missing row whose recording is known (the Spotify
+ * import proves it by ISRC) becomes a track request, so only that track is
+ * wanted. Rows with a release group but no recording fall back to one album
+ * request per album, as upstream does.
+ */
+export function planMissingRequests(tracks: PlaylistTrack[]): MissingPlan {
+	const seenRecordings = new Set<string>();
+	const seenAlbums = new Set<string>();
+	const plan: MissingPlan = { tracks: [], albums: [] };
 	for (const track of tracks) {
+		if (!isMissing(track)) continue;
+		const recording = track.recording_mbid;
+		if (recording) {
+			if (seenRecordings.has(recording)) continue;
+			seenRecordings.add(recording);
+			plan.tracks.push({
+				recording_mbid: recording,
+				artist_name: track.artist_name || 'Unknown',
+				track_title: track.track_name || 'Unknown',
+				album_title: track.album_name || null,
+				duration_seconds: track.duration ? Math.round(track.duration) : null,
+				release_group_mbid: track.album_id || null,
+				artist_mbid: null,
+				release_mbid: null
+			});
+			continue;
+		}
 		const mbid = track.album_id;
-		if (!mbid || seen.has(mbid)) continue;
-		if (track.library_file_id) continue;
-		if (track.available_sources && track.available_sources.length > 0) continue;
-		seen.add(mbid);
-		items.push({
+		if (!mbid || seenAlbums.has(mbid)) continue;
+		seenAlbums.add(mbid);
+		plan.albums.push({
 			musicbrainz_id: mbid,
 			artist_name: track.artist_name || 'Unknown',
 			album_title: track.album_name || 'Unknown'
 		});
 	}
-	if (items.length === 0) {
+	return plan;
+}
+
+export async function requestMissingTracks(tracks: PlaylistTrack[]): Promise<BatchRequestResult> {
+	const plan = planMissingRequests(tracks);
+	if (plan.tracks.length === 0 && plan.albums.length === 0) {
 		return {
 			success: true,
-			message: 'No missing albums found, all tracks already have a source',
+			message: 'Nothing missing: every track is in your library or has a source',
 			requested: 0,
 			skipped: 0
 		};
 	}
-	const data = await api.v3.POST(v3('/api/v3/requests/batches'), { items });
+	let requested = 0;
+	let skipped = 0;
+	for (const body of plan.tracks) {
+		try {
+			await api.v3.POST(v3('/api/v3/requests/tracks'), body);
+			requested += 1;
+		} catch {
+			skipped += 1;
+		}
+	}
+	if (plan.albums.length > 0) {
+		const data = await api.v3.POST(v3('/api/v3/requests/batches'), { items: plan.albums });
+		requested += data.requested;
+		skipped += data.skipped;
+	}
+	const parts: string[] = [];
+	if (plan.tracks.length)
+		parts.push(`${plan.tracks.length} ${plan.tracks.length === 1 ? 'track' : 'tracks'}`);
+	if (plan.albums.length)
+		parts.push(`${plan.albums.length} ${plan.albums.length === 1 ? 'album' : 'albums'}`);
 	return {
-		success: data.success,
-		message: data.message,
-		requested: data.requested,
-		skipped: data.skipped
+		success: skipped === 0,
+		message: `Requested ${parts.join(' and ')}` + (skipped ? ` (${skipped} skipped)` : ''),
+		requested,
+		skipped
 	};
 }

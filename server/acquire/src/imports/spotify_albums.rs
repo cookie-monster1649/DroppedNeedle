@@ -50,6 +50,16 @@ impl SpotifyAlbum {
     }
 }
 
+/// A Spotify album proven to be one release group, with the recording each
+/// of its proving ISRCs names on that group (fork: per-track requests).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ProvenAlbum {
+    /// Release-group MBID.
+    pub group: String,
+    /// Uppercased ISRC -> recording MBID, for the ISRCs the album carried.
+    pub recordings: std::collections::BTreeMap<String, String>,
+}
+
 /// Finds the release group of Spotify albums through MusicBrainz.
 #[derive(Clone)]
 pub struct AlbumResolver {
@@ -75,7 +85,10 @@ impl AlbumResolver {
     ///
     /// A MusicBrainz failure, so the caller can stop asking while the
     /// service is down. Nothing is cached for it.
-    pub async fn resolve(&self, album: &SpotifyAlbum) -> Result<Option<String>, ProviderError> {
+    pub async fn resolve(
+        &self,
+        album: &SpotifyAlbum,
+    ) -> Result<Option<ProvenAlbum>, ProviderError> {
         if album.isrcs.is_empty() || album.title.trim().is_empty() {
             return Ok(None);
         }
@@ -94,7 +107,7 @@ impl AlbumResolver {
         let joined = isrcs.join(",");
         let key = CacheKey::hashed(
             Source::MusicBrainz,
-            "spotify_album",
+            "spotify_album_recordings",
             &[&namespace, &album.title, &album.artist, &joined],
         );
         let album = album.clone();
@@ -118,7 +131,7 @@ impl AlbumResolver {
 async fn prove(
     view: &MusicBrainzView,
     album: &SpotifyAlbum,
-) -> Result<Option<String>, ProviderError> {
+) -> Result<Option<ProvenAlbum>, ProviderError> {
     for title in title_forms(&album.title) {
         let page = view
             .search_releases(
@@ -129,6 +142,8 @@ async fn prove(
             )
             .await?;
         let mut proven: BTreeSet<String> = BTreeSet::new();
+        let mut recordings: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
         for hit in page.items {
             let listed = hit
                 .release_group
@@ -152,20 +167,34 @@ async fn prove(
             else {
                 continue;
             };
-            let carries = release
+            let mut carries = false;
+            for recording in release
                 .media
                 .iter()
                 .flat_map(|medium| &medium.tracks)
                 .filter_map(|track| track.recording.as_ref())
-                .flat_map(|recording| &recording.isrcs)
-                .any(|isrc| album.isrcs.contains(&isrc.trim().to_ascii_uppercase()));
+            {
+                for isrc in &recording.isrcs {
+                    let isrc = isrc.trim().to_ascii_uppercase();
+                    if album.isrcs.contains(&isrc) {
+                        carries = true;
+                        recordings
+                            .entry(isrc)
+                            .or_insert_with(|| normalize_mb_id(&recording.id));
+                    }
+                }
+            }
             if carries {
                 proven.insert(group);
             }
         }
         match proven.len() {
             0 => {}
-            1 => return Ok(proven.pop_first()),
+            1 => {
+                return Ok(proven
+                    .pop_first()
+                    .map(|group| ProvenAlbum { group, recordings }));
+            }
             _ => {
                 tracing::debug!(
                     groups = proven.len(),
