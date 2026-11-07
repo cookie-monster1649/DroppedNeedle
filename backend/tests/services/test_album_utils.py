@@ -144,3 +144,65 @@ def test_audio_tracks_filters_video_duck_typed_and_fail_open():
     ]
 
     assert [t.title for t in audio_tracks(tracks)] == ["a", "c", "d"]
+
+
+def _rel(rid, date, country, tracks, *, status="Official", disambiguation="", fmt="CD"):
+    return {
+        "id": rid,
+        "status": status,
+        "date": date,
+        "country": country,
+        "disambiguation": disambiguation,
+        "media": [{"track-count": tracks, "format": fmt}],
+    }
+
+
+def _ranked_ids(releases):
+    from services.album_utils import get_ranked_releases
+
+    return [r["id"] for r in get_ranked_releases({"releases": releases})]
+
+
+def test_ranking_demotes_expanded_editions():
+    """#638: a 48-track super deluxe must not beat the 12-track album."""
+    releases = [
+        _rel("aaa-deluxe", "1994", "XW", 48, disambiguation="super deluxe edition"),
+        _rel("zzz-std", "1994-03-22", "US", 12),
+    ]
+    assert _ranked_ids(releases)[0] == "zzz-std"
+
+
+def test_ranking_prefers_standard_track_count_over_early_bonus_edition():
+    """An earlier JP +1 bonus edition loses to the standard 12-track album."""
+    releases = [
+        _rel("jp-13", "2010-03-13", "JP", 13),
+        _rel("xw-12", "2010-03-23", "XW", 12, fmt="Digital Media"),
+        _rel("gb-12", "2010-03-29", "GB", 12),
+    ]
+    assert _ranked_ids(releases)[0] == "xw-12"
+
+
+def test_ranking_prefers_original_over_later_reissue():
+    """Same track count: the earliest-dated (original) release wins, not MBID order."""
+    releases = [
+        _rel("0437-de-2007", "2007-06-26", "DE", 11),
+        _rel("340d-au-2005", "2005-04-17", "AU", 11),
+        _rel("3704-us-2007", "2007-02-06", "US", 11),
+    ]
+    assert _ranked_ids(releases)[0] == "340d-au-2005"
+
+
+def test_ranking_prefers_cd_over_vinyl_on_same_date():
+    releases = [
+        _rel("a-vinyl", "2007-05-07", "GB", 11, fmt='12" Vinyl'),
+        _rel("b-cd", "2007-05-07", "GB", 11),
+    ]
+    assert _ranked_ids(releases)[0] == "b-cd"
+
+
+def test_ranking_without_dates_or_counts_keeps_mbid_tiebreak():
+    releases = [
+        {"id": "owned-rel", "status": "Official", "country": "GB"},
+        {"id": "deluxe-rel", "status": "Official", "country": "XW"},
+    ]
+    assert _ranked_ids(releases) == ["deluxe-rel", "owned-rel"]

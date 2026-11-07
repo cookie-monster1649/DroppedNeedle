@@ -14,24 +14,71 @@ def find_primary_release(release_group: dict) -> Optional[dict]:
     return ranked[0] if ranked else None
 
 
+_EXPANDED_EDITION_KEYWORDS = (
+    "deluxe",
+    "box set",
+    "boxset",
+    "expanded",
+    "legacy",
+    "collector",
+    "complete",
+    "ultimate",
+    "anniversary",
+    "special edition",
+)
+_PHYSICAL_EDITION_KEYWORDS = ("vinyl", "cassette", "gatefold")
+
+
+def _is_expanded_edition(release: dict) -> bool:
+    text = f"{release.get('disambiguation') or ''} {release.get('title') or ''}".lower()
+    return any(keyword in text for keyword in _EXPANDED_EDITION_KEYWORDS)
+
+
+def _release_track_count(release: dict) -> int:
+    try:
+        return sum(int(m.get("track-count") or 0) for m in (release.get("media") or []))
+    except (TypeError, ValueError):
+        return 0
+
+
 def get_ranked_releases(release_group: dict) -> list[dict]:
-    """Return official releases sorted so digital/mainstream formats come first."""
+    """Return official releases with the standard original edition first.
+
+    Order: non-expanded editions (no deluxe/box set/anniversary...) first, then
+    releases with the group's standard track count (the most common count across
+    non-expanded editions, ties to the smaller count, so early regional bonus
+    editions lose), then the earliest release date, then CD/digital over
+    vinyl/cassette, with the MBID only as a stable final tie-break (#638).
+    """
+    from repositories.edition_policy import edition_date_key
+
     releases = release_group.get("releases") or release_group.get("release-list", [])
     official = [r for r in releases if r.get("status") == "Official"]
     if not official:
         official = list(releases)
 
-    def _release_sort_key(r: dict) -> tuple[int, str]:
-        country = (r.get("country") or "").upper()
+    counts: dict[int, int] = {}
+    for release in official:
+        track_count = _release_track_count(release)
+        if track_count > 0 and not _is_expanded_edition(release):
+            counts[track_count] = counts.get(track_count, 0) + 1
+    standard = max(counts, key=lambda n: (counts[n], -n)) if counts else None
+
+    def _release_sort_key(r: dict) -> tuple:
         packaging = (r.get("packaging") or "").lower()
-        physical_keywords = {"vinyl", "cassette", "gatefold"}
-        if country == "XW":
-            rank = 0
-        elif any(kw in packaging for kw in physical_keywords):
-            rank = 2
-        else:
-            rank = 1
-        return (rank, r.get("id", ""))
+        formats = " ".join((m.get("format") or "") for m in (r.get("media") or [])).lower()
+        physical = any(
+            keyword in packaging or keyword in formats
+            for keyword in _PHYSICAL_EDITION_KEYWORDS
+        )
+        non_standard = 0 if standard is None or _release_track_count(r) == standard else 1
+        return (
+            1 if _is_expanded_edition(r) else 0,
+            non_standard,
+            edition_date_key(r.get("date")),
+            1 if physical else 0,
+            r.get("id", ""),
+        )
 
     official.sort(key=_release_sort_key)
     return official
