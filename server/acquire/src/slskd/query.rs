@@ -180,17 +180,259 @@ pub fn album_query_ladder(artist: &str, album: &str, year: Option<i32>) -> Vec<S
 }
 
 /// Most-specific-first track queries:
-/// artist+track+album -> artist+track. Keeps the track title at every rung
-/// so the track matcher can match. Wildcard blocked-artist variants
-/// interleave as in [`album_query_ladder`].
+/// artist+track+album -> artist+track -> artist+core title (featured
+/// credits and noise brackets dropped, a distinctive version word kept) ->
+/// each co-credited artist+core title. Keeps the track title at every rung
+/// so the track matcher can match, and never adds a year. Wildcard
+/// blocked-artist variants interleave as in [`album_query_ladder`].
 #[must_use]
 pub fn track_query_ladder(artist: &str, track: &str, album: Option<&str>) -> Vec<String> {
     let primary = primary_artist(artist);
     let wildcard = wildcard_artist(&sanitize_query(primary));
-    dedupe_queries(vec![
+    let mut queries = vec![
         build_track_query(primary, track, album),
         build_track_query(&wildcard, track, album),
         build_track_query(primary, track, None),
         build_track_query(&wildcard, track, None),
-    ])
+    ];
+    let core = core_track_title(track);
+    if !core.is_empty() {
+        queries.push(build_track_query(primary, &core, None));
+        queries.push(build_track_query(&wildcard, &core, None));
+        // A collaboration is often filed under the other artist.
+        for other in co_credited_artists(artist, track) {
+            queries.push(build_track_query(&other, &core, None));
+        }
+    }
+    dedupe_queries(queries)
+}
+
+/// Words that name a different recording than the plain track, worth
+/// keeping in a query: without them the plain version crowds the results.
+/// Remaster and edition words are left out on purpose: they rarely appear
+/// in shared file names and narrow a search to nothing.
+const VERSION_WORDS: [&str; 12] = [
+    "live",
+    "remix",
+    "vip",
+    "acoustic",
+    "instrumental",
+    "demo",
+    "extended",
+    "dub",
+    "reprise",
+    "unplugged",
+    "edit",
+    "mix",
+];
+
+const FEATURE_MARKERS: [&str; 5] = ["feat.", "feat", "ft.", "ft", "featuring"];
+
+/// The track title for a query: featured credits and bracketed noise
+/// removed, a bracket naming a version kept as plain words.
+/// `Song (feat. X) [Live]` -> `Song Live`;
+/// `Song (Skrillex Remix)` -> `Song Skrillex Remix`;
+/// `Song - 2011 Remaster` -> `Song`.
+#[must_use]
+pub fn core_track_title(track: &str) -> String {
+    let mut base = String::new();
+    let mut kept: Vec<String> = Vec::new();
+    let mut depth = 0usize;
+    let mut inner = String::new();
+    for ch in track.chars() {
+        match ch {
+            '(' | '[' => {
+                if depth == 0 {
+                    inner.clear();
+                } else {
+                    inner.push(ch);
+                }
+                depth += 1;
+            }
+            ')' | ']' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(version) = version_phrase(&inner) {
+                        kept.push(version);
+                    }
+                } else {
+                    inner.push(ch);
+                }
+            }
+            _ if depth > 0 => inner.push(ch),
+            _ => base.push(ch),
+        }
+    }
+    // A dashed tail ("Song - Live at X", "Song - 2011 Remaster").
+    let mut base = match base.split_once(" - ") {
+        Some((head, tail)) => {
+            if let Some(version) = version_phrase(tail) {
+                kept.push(version);
+            }
+            head.to_owned()
+        }
+        None => base,
+    };
+    // An unbracketed "feat." tail.
+    let lowered = base.to_lowercase();
+    if let Some(at) = lowered
+        .split_whitespace()
+        .position(|word| FEATURE_MARKERS.contains(&word))
+    {
+        base = base
+            .split_whitespace()
+            .take(at)
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
+    let mut words: Vec<String> = base.split_whitespace().map(str::to_owned).collect();
+    words.extend(kept);
+    words.join(" ")
+}
+
+/// A bracket or dashed tail as query words when it names a version, else
+/// `None`. Featured credits are never a version.
+fn version_phrase(text: &str) -> Option<String> {
+    let lowered = text.to_lowercase();
+    let words: Vec<&str> = lowered
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let first = words.first()?;
+    if FEATURE_MARKERS.contains(first) || *first == "with" {
+        return None;
+    }
+    if !words.iter().any(|word| VERSION_WORDS.contains(word)) {
+        return None;
+    }
+    // "Live at Wembley 1986" -> "Live": a venue or year narrows to nothing.
+    if *first == "live" {
+        return Some("Live".to_owned());
+    }
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Artists credited beside the primary one, from the joined credit and from
+/// a featured credit in the title, in credit order, without repeats.
+/// `Calvin Harris, Rihanna` -> `Rihanna`; `A feat. B & C` -> `B`, `C`;
+/// title `Song (feat. D)` -> `D`. The primary credit itself is never split:
+/// "Simon & Garfunkel" stays one artist.
+#[must_use]
+pub fn co_credited_artists(artist: &str, track: &str) -> Vec<String> {
+    let primary = primary_artist(artist);
+    let mut names: Vec<String> = Vec::new();
+    let mut push_all = |text: &str| {
+        for name in split_credit(text) {
+            if !name.eq_ignore_ascii_case(primary)
+                && !names.iter().any(|seen| seen.eq_ignore_ascii_case(&name))
+            {
+                names.push(name);
+            }
+        }
+    };
+    // Credits after the first comma.
+    if let Some((_, rest)) = artist.split_once(',') {
+        push_all(rest);
+    }
+    // A "feat." inside the artist credit or the title.
+    for text in [artist, track] {
+        if let Some(featured) = featured_part(text) {
+            push_all(&featured);
+        }
+    }
+    names
+}
+
+fn featured_part(text: &str) -> Option<String> {
+    let cleaned: String = text
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '(' | ')' | '[' | ']') {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
+    let at = words
+        .iter()
+        .position(|word| FEATURE_MARKERS.contains(&word.to_lowercase().as_str()))?;
+    let tail: Vec<&str> = words[at + 1..]
+        .iter()
+        .copied()
+        .take_while(|word| !word.starts_with('-'))
+        .collect();
+    (!tail.is_empty()).then(|| tail.join(" "))
+}
+
+fn split_credit(text: &str) -> Vec<String> {
+    let mut parts = vec![text.to_owned()];
+    for separator in [",", " & ", " x ", " X ", " and ", " with "] {
+        parts = parts
+            .iter()
+            .flat_map(|part| part.split(separator).map(str::to_owned).collect::<Vec<_>>())
+            .collect();
+    }
+    parts
+        .into_iter()
+        .map(|part| part.trim().to_owned())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod ladder_tests {
+    use super::*;
+
+    #[test]
+    fn core_title_drops_features_and_noise_but_keeps_versions() {
+        assert_eq!(core_track_title("Song (feat. X) [Live]"), "Song Live");
+        assert_eq!(
+            core_track_title("Song (Skrillex Remix)"),
+            "Song Skrillex Remix"
+        );
+        assert_eq!(core_track_title("Song - 2011 Remaster"), "Song");
+        assert_eq!(core_track_title("Song - Live at Wembley 1986"), "Song Live");
+        assert_eq!(core_track_title("Song feat. Somebody"), "Song");
+        assert_eq!(core_track_title("Song (Deluxe)"), "Song");
+        assert_eq!(core_track_title("Plain Song"), "Plain Song");
+        assert_eq!(core_track_title("Song (Radio Edit)"), "Song Radio Edit");
+    }
+
+    #[test]
+    fn co_credits_come_from_credit_and_title_but_never_split_the_primary() {
+        assert_eq!(
+            co_credited_artists("Calvin Harris, Rihanna", "This Is What"),
+            ["Rihanna"]
+        );
+        assert_eq!(co_credited_artists("A feat. B & C", "Song"), ["B", "C"]);
+        assert_eq!(
+            co_credited_artists("Daft Punk", "Get Lucky (feat. Pharrell Williams)"),
+            ["Pharrell Williams"]
+        );
+        assert!(co_credited_artists("Simon & Garfunkel", "The Boxer").is_empty());
+    }
+
+    #[test]
+    fn track_ladder_escalates_without_a_year() {
+        let ladder = track_query_ladder(
+            "Daft Punk",
+            "Get Lucky (feat. Pharrell Williams)",
+            Some("Random Access Memories"),
+        );
+        assert_eq!(
+            ladder[0],
+            "Daft Punk Get Lucky feat. Pharrell Williams Random Access Memories"
+        );
+        assert!(ladder.contains(&"Daft Punk Get Lucky".to_owned()));
+        assert!(ladder.contains(&"Pharrell Williams Get Lucky".to_owned()));
+        assert!(
+            ladder
+                .iter()
+                .all(|query| !query.chars().any(|ch| ch.is_ascii_digit()))
+        );
+        // A plain title adds no rungs beyond v3's four.
+        assert_eq!(track_query_ladder("Low", "Plain", None).len(), 2);
+    }
 }
