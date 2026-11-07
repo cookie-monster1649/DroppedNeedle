@@ -685,6 +685,9 @@ fn release_facts(release: &Release) -> EditionFacts<'_> {
         date: release.date.as_deref(),
         text: vec![release.title.as_str()],
         types: release.secondary_types.iter().map(String::as_str).collect(),
+        // Identification ranks only editions that fit the files equally
+        // well, so the files have already spoken on the track count.
+        uncommon_track_count: false,
     }
 }
 
