@@ -8,7 +8,8 @@
 //! the library does not hold yet.
 //!
 //! Within the preferences the order is: release types to avoid, status,
-//! media format, country, date, then standard against deluxe.
+//! media format, country, a track count the album's other editions share,
+//! date, then standard against deluxe.
 
 use std::cmp::Reverse;
 
@@ -97,10 +98,31 @@ pub struct EditionFacts<'a> {
     pub text: Vec<&'a str>,
     /// Release-group secondary types (`Live`, `Compilation`).
     pub types: Vec<&'a str>,
+    /// The edition's track count differs from the count most of the
+    /// album's editions share: a bonus-track or cut-down pressing, which an
+    /// earliest-date preference would otherwise pick when it came out first
+    /// (a Japanese release with a bonus track, upstream issue #638).
+    pub uncommon_track_count: bool,
+}
+
+/// The track count most of an album's editions share, the lowest on a tie.
+/// `None` without any counted edition.
+#[must_use]
+pub fn common_track_count(counts: impl IntoIterator<Item = u32>) -> Option<u32> {
+    let mut tally = std::collections::BTreeMap::<u32, usize>::new();
+    for count in counts.into_iter().filter(|count| *count > 0) {
+        *tally.entry(count).or_default() += 1;
+    }
+    tally
+        .into_iter()
+        .max_by(|(left_count, left), (right_count, right)| {
+            left.cmp(right).then_with(|| right_count.cmp(left_count))
+        })
+        .map(|(count, _)| count)
 }
 
 /// Comparable rank: lower is preferred.
-pub type PreferenceKey = (bool, usize, usize, usize, DateRank, usize);
+pub type PreferenceKey = (bool, usize, usize, usize, bool, DateRank, usize);
 
 /// Date part of the rank: known dates first, then earlier or later.
 pub type DateRank = (bool, Reverse<i64>);
@@ -177,6 +199,7 @@ impl Preferences {
             status,
             format,
             country,
+            facts.uncommon_track_count,
             self.date_rank(facts.date),
             version,
         )
@@ -257,5 +280,27 @@ mod tests {
         let mut live = facts("Official", "Digital Media", "GB", "1990");
         live.types = vec!["Live"];
         assert!(prefs.key(&promo_digital) < prefs.key(&live));
+    }
+
+    #[test]
+    fn a_shared_track_count_beats_an_earlier_bonus_pressing() {
+        let prefs = Preferences::from_settings(&EditionPreferences::default(), "gb");
+        let mut japan_bonus = facts("Official", "CD", "GB", "2010-04");
+        japan_bonus.uncommon_track_count = true;
+        let standard = facts("Official", "CD", "GB", "2010-05");
+        assert!(prefs.key(&standard) < prefs.key(&japan_bonus));
+        // Country still outranks it.
+        let mut home_bonus = facts("Official", "CD", "GB", "2010-04");
+        home_bonus.uncommon_track_count = true;
+        let elsewhere = facts("Official", "CD", "DE", "2010-05");
+        assert!(prefs.key(&home_bonus) < prefs.key(&elsewhere));
+    }
+
+    #[test]
+    fn common_track_count_picks_the_mode_and_the_lower_on_a_tie() {
+        assert_eq!(common_track_count([12, 13, 12, 12, 9]), Some(12));
+        assert_eq!(common_track_count([11, 15]), Some(11));
+        assert_eq!(common_track_count([0, 0]), None);
+        assert_eq!(common_track_count([]), None);
     }
 }
