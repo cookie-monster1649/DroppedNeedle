@@ -10,8 +10,10 @@ const mockResolveMutate = vi.fn();
 const mockRenameMutate = vi.fn();
 const mockForgetSources = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
-vi.mock('$lib/api/playlists', () => ({
+vi.mock('$lib/api/playlists', async (importOriginal) => ({
 	isRedactedPlaylist: (p: { is_redacted?: boolean } | null | undefined) => p?.is_redacted === true,
+	planMissingRequests: (await importOriginal<typeof import('$lib/api/playlists')>())
+		.planMissingRequests,
 	requestMissingTracks: vi.fn()
 }));
 
