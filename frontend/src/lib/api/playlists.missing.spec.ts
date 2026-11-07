@@ -1,0 +1,47 @@
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('$lib/api/client', () => ({ api: { v3: { POST: vi.fn(), GET: vi.fn() } } }));
+
+import { planMissingRequests, type PlaylistTrack } from './playlists';
+
+function row(over: Partial<PlaylistTrack>): PlaylistTrack {
+	return {
+		id: 'r',
+		position: 0,
+		track_name: 'Song',
+		artist_name: 'Artist',
+		album_name: 'Album',
+		album_id: null,
+		artist_id: null,
+		track_source_id: null,
+		cover_url: null,
+		source_type: '',
+		available_sources: null,
+		format: null,
+		track_number: null,
+		disc_number: null,
+		duration: 183,
+		plex_rating_key: null,
+		library_file_id: null,
+		recording_mbid: null,
+		created_at: '',
+		...over
+	} as PlaylistTrack;
+}
+
+describe('planMissingRequests', () => {
+	it('asks for a track when the recording is proven, an album otherwise', () => {
+		const plan = planMissingRequests([
+			row({ recording_mbid: 'rec-1', album_id: 'rg-1' }),
+			row({ recording_mbid: 'rec-1', album_id: 'rg-1' }),
+			row({ album_id: 'rg-2', album_name: 'Other' }),
+			row({ album_id: 'rg-2' }),
+			row({ album_id: 'rg-3', library_file_id: 'owned' }),
+			row({ recording_mbid: 'rec-4', available_sources: ['local'] }),
+			row({})
+		]);
+		expect(plan.tracks.map((t) => t.recording_mbid)).toEqual(['rec-1']);
+		expect(plan.tracks[0]).toMatchObject({ release_group_mbid: 'rg-1', duration_seconds: 183 });
+		expect(plan.albums.map((a) => a.musicbrainz_id)).toEqual(['rg-2']);
+	});
+});

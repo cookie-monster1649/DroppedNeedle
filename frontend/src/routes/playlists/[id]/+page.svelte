@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { onDestroy, untrack } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
-	import { requestMissingTracks, type PlaylistDetail } from '$lib/api/playlists';
+	import {
+		planMissingRequests,
+		requestMissingTracks,
+		type PlaylistDetail
+	} from '$lib/api/playlists';
 	import { playlistTrackToQueueItem } from '$lib/features/player/playback/queueHelpers';
 	import { playerStore } from '$lib/features/player/state/player.svelte';
 	import { toastStore } from '$lib/stores/toast';
@@ -62,21 +65,18 @@
 	let isOwner = $derived(playlist?.is_owner ?? false);
 	let canDelete = $derived(playlist?.can_delete ?? false);
 
-	let missingAlbumCount = $derived.by(() => {
-		if (!playlist) return 0;
-		const seen = new SvelteSet<string>();
-		for (const t of playlist.tracks) {
-			// library_file_id means owned locally (request-missing skips these too).
-			if (
-				t.album_id &&
-				!t.library_file_id &&
-				(!t.available_sources || t.available_sources.length === 0)
-			) {
-				seen.add(t.album_id);
-			}
-		}
-		return seen.size;
+	let missingPlan = $derived(
+		playlist ? planMissingRequests(playlist.tracks) : { tracks: [], albums: [] }
+	);
+	let missingLabel = $derived.by(() => {
+		const parts: string[] = [];
+		const t = missingPlan.tracks.length;
+		const a = missingPlan.albums.length;
+		if (t) parts.push(`${t} ${t === 1 ? 'track' : 'tracks'}`);
+		if (a) parts.push(`${a} ${a === 1 ? 'album' : 'albums'}`);
+		return parts.join(' and ');
 	});
+	let missingCount = $derived(missingPlan.tracks.length + missingPlan.albums.length);
 
 	let requesting = $state(false);
 
@@ -303,14 +303,13 @@
 		/>
 
 		<div class="mx-auto max-w-7xl space-y-6 px-4 pb-10 sm:px-6 lg:px-8">
-			{#if isOwner && missingAlbumCount > 0}
+			{#if isOwner && missingCount > 0}
 				<div
 					class="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-box border border-warning/60 bg-warning/8 px-4 py-3"
 				>
 					<Download class="size-5 shrink-0 text-warning" aria-hidden="true" />
 					<p class="min-w-0 flex-1 basis-48 text-sm font-medium">
-						{missingAlbumCount}
-						{missingAlbumCount === 1 ? 'album' : 'albums'} not in your library
+						{missingLabel} not in your library
 					</p>
 					<Button
 						variant="outline"
@@ -319,7 +318,7 @@
 						loading={requesting}
 						onclick={() => void handleRequestMissing()}
 					>
-						Request {missingAlbumCount === 1 ? 'album' : missingAlbumCount + ' albums'}
+						Request {missingLabel}
 					</Button>
 				</div>
 			{/if}
