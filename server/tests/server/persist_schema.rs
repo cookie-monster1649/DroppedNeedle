@@ -16,7 +16,7 @@ use crate::common::sources::workspace_sources;
 
 /// A fresh database from the baseline, in memory.
 fn migrated() -> Connection {
-    migrate(Connection::open_in_memory().unwrap(), &CHAIN).unwrap()
+    droppedneedle_kernel::schema::migrate_all(Connection::open_in_memory().unwrap()).unwrap()
 }
 
 /// One number a statement answers.
@@ -72,7 +72,9 @@ fn schema_rows(connection: &Connection) -> Vec<(String, String, String, Option<S
 fn fresh_migrate_marks_version_and_seeds() {
     let connection = migrated();
     assert_eq!(scalar(&connection, "PRAGMA user_version"), latest_version());
-    assert_eq!(table_names(&connection).len(), 177);
+    // 177 upstream tables, plus the extension ledger and the catalogue
+    // extension's want identities (fork).
+    assert_eq!(table_names(&connection).len(), 179);
     assert_eq!(
         scalar(
             &connection,
@@ -355,8 +357,11 @@ fn migration_files() -> Vec<(String, Vec<u8>)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
     let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&dir)
         .unwrap()
-        .map(|entry| {
-            let path = entry.unwrap().path();
+        .map(|entry| entry.unwrap().path())
+        // Extension chains keep their files in folders of their own
+        // (`kernel::schema::extensions`).
+        .filter(|path| path.is_file())
+        .map(|path| {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             (name, std::fs::read(&path).unwrap())
         })
@@ -2039,6 +2044,12 @@ fn state_columns() -> Vec<StateColumn> {
         // acquire
         state("acquire_discovery_batch_items", "outcome", &BatchOutcome::ALL, BatchOutcome::as_str),
         state("acquire_held_entries", "origin", &EntryOrigin::ALL, EntryOrigin::as_str),
+        state(
+            "acquire_want_identities",
+            "provider",
+            &droppedneedle_acquire::requests::identities::WantIdentityProvider::ALL,
+            droppedneedle_acquire::requests::identities::WantIdentityProvider::as_str,
+        ),
         state("acquire_held_entries", "state", &EntryState::ALL, EntryState::as_str),
         state("acquire_held_files", "reason", &Reason::HELD, Reason::code),
         state("acquire_held_files", "root", &HeldRoot::ALL, HeldRoot::as_str),
@@ -3666,4 +3677,110 @@ fn every_table_is_strict_and_every_time_is_an_integer() {
         [],
     );
     assert!(times.is_empty(), "times that are not integers: {times:?}");
+}
+
+// ---------------------------------------------------------------------------
+// Extension chains (fork): schema beside the upstream chain, counted apart.
+// ---------------------------------------------------------------------------
+
+mod extension_chains {
+    use droppedneedle_kernel::db::extend::{ExtensionChain, apply, count};
+    use droppedneedle_kernel::db::{Migration, SchemaError};
+    use rusqlite::Connection;
+
+    static FIRST: ExtensionChain = ExtensionChain {
+        name: "test",
+        migrations: &[Migration {
+            version: 1,
+            name: "one",
+            sql: "CREATE TABLE test_one (id INTEGER PRIMARY KEY) STRICT;",
+        }],
+    };
+    static SECOND: ExtensionChain = ExtensionChain {
+        name: "test",
+        migrations: &[
+            Migration {
+                version: 1,
+                name: "one",
+                sql: "CREATE TABLE test_one (id INTEGER PRIMARY KEY) STRICT;",
+            },
+            Migration {
+                version: 2,
+                name: "two",
+                sql: "CREATE TABLE test_two (id INTEGER PRIMARY KEY) STRICT;",
+            },
+        ],
+    };
+    static BROKEN: ExtensionChain = ExtensionChain {
+        name: "broken",
+        migrations: &[Migration {
+            version: 1,
+            name: "bad",
+            sql: "CREATE TABLE test_bad (id INTEGER PRIMARY KEY) STRICT; NOT SQL;",
+        }],
+    };
+
+    /// Each file runs once, the count grows with the chain, and the
+    /// upstream stamp is never touched.
+    #[test]
+    fn a_chain_runs_each_file_once_and_never_touches_user_version() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection.pragma_update(None, "user_version", 142).unwrap();
+        apply(&mut connection, &[&FIRST]).unwrap();
+        apply(&mut connection, &[&FIRST]).unwrap();
+        assert_eq!(count(&connection, "test").unwrap(), 1);
+        apply(&mut connection, &[&SECOND]).unwrap();
+        assert_eq!(count(&connection, "test").unwrap(), 2);
+        assert_eq!(super::scalar(&connection, "PRAGMA user_version"), 142);
+    }
+
+    /// A count past the binary refuses to serve; a file that fails leaves
+    /// neither its tables nor its count.
+    #[test]
+    fn a_count_past_the_binary_refuses_and_a_failed_file_leaves_nothing() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        apply(&mut connection, &[&SECOND]).unwrap();
+        assert!(matches!(
+            apply(&mut connection, &[&FIRST]),
+            Err(SchemaError::ExtensionTooNew {
+                found: 2,
+                latest: 1,
+                ..
+            })
+        ));
+        assert!(apply(&mut connection, &[&BROKEN]).is_err());
+        assert_eq!(count(&connection, "broken").unwrap(), 0);
+        assert_eq!(
+            super::scalar(
+                &connection,
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'test_bad'"
+            ),
+            0
+        );
+    }
+
+    /// A shipped extension file never changes, like an upstream one.
+    #[test]
+    fn shipped_extension_files_keep_their_bytes() {
+        use sha2::{Digest, Sha256};
+        let shipped = [(
+            "catalog",
+            "catalog/0001_want_identities.sql",
+            "2a2c94efa770f1f25bf86c93d67a338140d2e1477c20c8e99d0b6da77048b70b",
+        )];
+        for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
+            for migration in chain.migrations {
+                let pinned = shipped
+                    .iter()
+                    .find(|(name, file, _)| *name == chain.name && *file == migration.name)
+                    .unwrap_or_else(|| panic!("pin {} in this test", migration.name));
+                let digest = hex::encode(Sha256::digest(migration.sql.as_bytes()));
+                assert_eq!(
+                    digest, pinned.2,
+                    "{} changed after shipping",
+                    migration.name
+                );
+            }
+        }
+    }
 }

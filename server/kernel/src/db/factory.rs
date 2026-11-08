@@ -37,7 +37,7 @@ use super::{
     error::DbError,
     fs::{reject_remote_filesystem, reject_symlink},
     handle::Db,
-    migrate::{Stamp, migrate},
+    migrate::Stamp,
     read_pool::{ReadActivity, ReadPools},
     sql,
     writer::{CancelFlag, LaneLimits, LaneWatch, ReliefPass, Ticker, WriteLane, open_connection},
@@ -285,7 +285,7 @@ async fn migrate_at_boot(path: &Path, upgrade: bool) -> Result<(), DbError> {
     };
     let connection = opened.map_err(joined)??;
     tokio::task::spawn_blocking(move || -> Result<(), DbError> {
-        let connection = migrate(connection, &crate::schema::CHAIN)?;
+        let connection = crate::schema::migrate_all(connection)?;
         if upgrade {
             connection.execute(sql::FORGET_ANALYZE.text(), [])?;
         }

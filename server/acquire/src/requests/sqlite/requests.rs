@@ -379,6 +379,64 @@ impl RequestStore {
         Self { db }
     }
 
+    /// Fork: keep a want's identities beside it; ones already kept stay.
+    pub async fn add_want_identities(
+        &self,
+        want_key: &str,
+        identities: Vec<crate::requests::identities::WantIdentity>,
+        now: u64,
+    ) -> Result<(), RequestsError> {
+        if identities.is_empty() {
+            return Ok(());
+        }
+        let key = want_key.to_owned();
+        let now = i64::try_from(now).unwrap_or(i64::MAX);
+        self.db
+            .write("requests.want_identities", move |tx| {
+                let mut insert = tx.prepare_cached(sql::INSERT_WANT_IDENTITY.text())?;
+                for identity in &identities {
+                    insert.execute(params![
+                        key,
+                        identity.provider.as_str(),
+                        identity.provider.entity_type(),
+                        identity.external_id,
+                        now
+                    ])?;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|error| lane_error("requests.want_identities", error))
+    }
+
+    /// Fork: a want's identities. A provider this build does not know is
+    /// skipped (a later build may have kept it).
+    pub async fn want_identities(
+        &self,
+        want_key: &str,
+    ) -> Result<Vec<crate::requests::identities::WantIdentity>, RequestsError> {
+        use crate::requests::identities::{WantIdentity, WantIdentityProvider};
+        let key = want_key.to_owned();
+        read(&self.db, "requests.want_identities", move |conn| {
+            let mut statement = conn.prepare_cached(sql::WANT_IDENTITIES.text())?;
+            let rows = statement.query_map(params![key], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut found = Vec::new();
+            for row in rows {
+                let (provider, external_id) = row?;
+                if let Some(provider) = WantIdentityProvider::parse(&provider) {
+                    found.push(WantIdentity {
+                        provider,
+                        external_id,
+                    });
+                }
+            }
+            Ok(found)
+        })
+        .await
+    }
+
     /// Read one row with its listeners.
     pub async fn get(
         &self,

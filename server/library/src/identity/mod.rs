@@ -31,6 +31,7 @@ mod custom;
 mod fold;
 pub(crate) mod follow;
 mod import;
+mod links;
 mod moves;
 mod person;
 pub mod reads;
@@ -54,6 +55,7 @@ pub use fold::{
 };
 pub use import::{ImportedFile, adopt_import, import_album};
 pub(crate) use import::{save_album, save_track};
+pub use links::link_track;
 pub(crate) use moves::{
     Link, LinkedTrack, Spot, clear_chosen_flag, link, move_edition, place_mapping, place_scanned,
     release_track, settle_tracks,

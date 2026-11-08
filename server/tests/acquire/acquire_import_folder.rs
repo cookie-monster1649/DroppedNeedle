@@ -104,6 +104,7 @@ fn release() -> Release {
                 position: index as u32 + 1,
                 absolute_position: index as u32 + 1,
                 length_ms: None,
+                links: Vec::new(),
             })
             .collect(),
         ..Release::default()

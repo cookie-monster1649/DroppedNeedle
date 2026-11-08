@@ -47,8 +47,17 @@ describe('planMissingRequests', () => {
 				artist_name: 'Beyoncé',
 				track_title: 'Halo (Live)',
 				album_title: 'Album',
-				duration_seconds: 183
+				duration_seconds: 183,
+				spotify_track_id: null
 			}
 		]);
+	});
+
+	it("carries a Spotify row's track id with its want", () => {
+		const plan = planMissingRequests([
+			row({ source_type: 'spotify', track_source_id: '4uLU6hMCjMI75M1A2tKUQC' }),
+			row({ source_type: 'youtube', track_source_id: 'dQw4w9WgXcQ', track_name: 'Other' })
+		]);
+		expect(plan.wants.map((w) => w.spotify_track_id)).toEqual(['4uLU6hMCjMI75M1A2tKUQC', null]);
 	});
 });

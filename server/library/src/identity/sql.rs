@@ -320,6 +320,15 @@ pub fn asked_groups(len: droppedneedle_kernel::db::statement::ListLen) -> String
 }
 
 droppedneedle_kernel::sql! {
+    /// Adopt one source link (`?3` provider, `?4` entity type, `?5` id,
+    /// `?6` page) for track `?2` as row `?1`, decided automatically at `?7`;
+    /// one the track already has stays.
+    pub(super) ADOPT_TRACK_SOURCE_LINK = "INSERT INTO local_entity_source_links \
+             (id, local_track_id, provider, external_entity_type, external_id, canonical_url, \
+              decision_source, verified_at, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'automatic', ?7, ?7, ?7) \
+             ON CONFLICT (local_track_id, provider, external_entity_type, external_id) \
+             WHERE local_track_id IS NOT NULL DO NOTHING";
     /// Decision sources automatic work may replace: identification's own
     /// rows and ids the tags carried. Checked against
     /// [`DecisionSource::is_revisable`](super::DecisionSource::is_revisable).

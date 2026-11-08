@@ -24478,6 +24478,10 @@ export interface components {
              * @description Track length in seconds, when known.
              */
             duration_seconds?: number | null;
+            /** @description The recording's ISRC, when known (hyphens and case aside). */
+            isrc?: string | null;
+            /** @description The Spotify track: its id, `spotify:track:` URI or link. */
+            spotify_track_id?: string | null;
             /** @description Track title, version words included ("Halo (Live)"). */
             track_title: string;
         };

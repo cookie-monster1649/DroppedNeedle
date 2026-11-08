@@ -15,6 +15,7 @@ pub mod auth;
 pub mod batches;
 pub mod error;
 pub mod http;
+pub mod identities;
 pub mod intake;
 pub mod ledger;
 pub mod mix;

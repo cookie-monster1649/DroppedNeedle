@@ -230,6 +230,7 @@ pub(super) fn commit_bundle(
         }
         if let Some(adoption) = &track.adopt {
             let joined = adopt_track(conn, track, adoption)?;
+            crate::identity::link_track(conn, &track.track_id, &adoption.links, now)?;
             if let Some(identity) = &track.identity {
                 imported.push(crate::identity::ImportedFile {
                     track_id: &track.track_id,

@@ -229,6 +229,20 @@ pub enum SchemaError {
         /// `PRAGMA user_version` read after it ran.
         stamp: i64,
     },
+    /// An extension chain's count past the newest file this binary carries
+    /// (see [`crate::schema::extensions`]).
+    #[error(
+        "schema extension {chain} is at {found}, newer than this binary's {latest}; restore \
+         the backup taken before the upgrade"
+    )]
+    ExtensionTooNew {
+        /// The chain.
+        chain: &'static str,
+        /// Its count in `schema_extensions`.
+        found: i64,
+        /// Its newest file in this binary.
+        latest: i64,
+    },
     /// Reading the stamp or committing failed.
     #[error("schema check failed: {0}")]
     Sqlite(#[from] rusqlite::Error),

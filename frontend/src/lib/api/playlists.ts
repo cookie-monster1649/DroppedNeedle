@@ -134,7 +134,10 @@ export function planMissingRequests(tracks: PlaylistTrack[]): MissingPlan {
 			artist_name: artist,
 			track_title: title,
 			album_title: track.album_name || null,
-			duration_seconds
+			duration_seconds,
+			// The provider's own id rides with the want onto the placed track
+			// (local_entity_source_links); rows hold no ISRC until Slice B.
+			spotify_track_id: track.source_type === 'spotify' ? track.track_source_id || null : null
 		});
 	}
 	return plan;
