@@ -20,6 +20,10 @@ droppedneedle_kernel::sql! {
              (id, user_id, artist_name, album_title, release_group_mbid, recording_mbid, \
               download_type, origin, retry_count, status, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'track', ?7, ?8, 'queued', ?9, ?9)";
+    /// Fork: the length a track asked for by name was asked with (`?1`:
+    /// its want key), from its request row.
+    pub(super) WANT_DURATION = "SELECT duration_seconds FROM request_history \
+             WHERE musicbrainz_id_lower = 'track:' || ?1";
     /// The newest live task for one album (`?1`).
     pub(super) NEWEST_ACTIVE_FOR_ALBUM = TASK_ROW + " WHERE release_group_mbid = ?1 \
              AND download_type = 'album' AND status IN ('queued', 'downloading', 'processing') \

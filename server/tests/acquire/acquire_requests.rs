@@ -2611,6 +2611,26 @@ async fn a_track_asked_for_by_name_alone_is_a_want() {
     assert_eq!(row.track_title.as_deref(), Some("Halo (Live)"));
     assert_eq!(row.duration_seconds, Some(262));
 
+    // The worker searches for it on its own, judged by the asked length,
+    // and never asks MusicBrainz about the key.
+    let journal = dispatch.dispatch.journal().clone();
+    let task = journal
+        .read_task(&calls[0].id)
+        .await
+        .expect("task reads")
+        .expect("task row");
+    let targets = droppedneedle_acquire::target::Targets::new(
+        journal,
+        Arc::new(crate::common::acquire::FixedAlbums::default()),
+    );
+    let target = targets.target(&task).await.expect("target");
+    assert!(!target.has_album(), "no album to search for");
+    let want = target.track.expect("track want");
+    assert_eq!(want.title, "Halo (Live)");
+    assert_eq!(want.duration_seconds, Some(262.0));
+    assert_eq!(target.tracklist[0].duration_seconds, Some(262.0));
+    assert_eq!(target.tracklist[0].recording_mbid, None);
+
     let (status, blank) = call(
         &state,
         Method::POST,
