@@ -72,6 +72,20 @@ pub struct TrackIntake {
     pub release_mbid: Option<String>,
 }
 
+/// Track-by-name intake body: no MusicBrainz ids. The download searches
+/// by artist and title, and its files wait in review to be placed.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct WantIntake {
+    /// Artist name.
+    pub artist_name: String,
+    /// Track title, version words included ("Halo (Live)").
+    pub track_title: String,
+    /// Album title, when known.
+    pub album_title: Option<String>,
+    /// Track length in seconds, when known.
+    pub duration_seconds: Option<i64>,
+}
+
 /// One batch row.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct BatchItem {
@@ -159,6 +173,19 @@ pub struct IntakeResponse {
 /// Exact-track intake response.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TrackIntakeResponse {
+    /// `queued` or `awaiting_approval`.
+    pub status: RequestStatus,
+    /// Linked download task, when dispatched.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+}
+
+/// Track-by-name intake response.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct WantIntakeResponse {
+    /// The request key (`want-` and 32 hex digits); use it where track
+    /// request routes take a MusicBrainz id.
+    pub key: String,
     /// `queued` or `awaiting_approval`.
     pub status: RequestStatus,
     /// Linked download task, when dispatched.

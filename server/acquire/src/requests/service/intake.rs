@@ -12,15 +12,26 @@ use crate::requests::batches::models::BatchOutcome;
 use crate::requests::batches::store::{BatchWrite, NewBatch};
 use crate::requests::error::RequestsError;
 use crate::requests::ledger::{
-    BeginOutcome, RequestRecord, RequestStatus, meaningful_name, validate_mbid,
+    BeginOutcome, RequestRecord, RequestStatus, meaningful_name, validate_mbid, want_key,
 };
 use crate::requests::models::{
     AlbumIntake, BatchIntake, BatchIntakeResponse, BatchIntakeStatus, IntakeResponse, RequestKind,
-    TrackIntake, TrackIntakeResponse, WaitingReason,
+    TrackIntake, TrackIntakeResponse, WaitingReason, WantIntake, WantIntakeResponse,
 };
 use crate::requests::quota::QuotaLedger;
 use droppedneedle_auth::Principal;
 use droppedneedle_kernel::events::{AutoDownloadEnqueued, UserNotice};
+
+/// The stored fields of one track ask, after validation.
+struct TrackFields {
+    artist_name: String,
+    album_title: String,
+    artist_mbid: Option<String>,
+    release_mbid: Option<String>,
+    track_title: String,
+    duration_seconds: Option<i64>,
+    release_group_mbid: Option<String>,
+}
 
 /// Batch row cap.
 const BATCH_MAX_ITEMS: usize = 500;
@@ -564,7 +575,6 @@ impl RequestsService {
         principal: &Principal,
         body: &TrackIntake,
     ) -> Result<TrackIntakeResponse, RequestsError> {
-        let role = principal.role();
         let mbid = validate_mbid(&body.recording_mbid)?;
         if let Some(rg) = body.release_group_mbid.as_deref() {
             validate_mbid(rg)?;
@@ -584,15 +594,76 @@ impl RequestsService {
         })?;
         let album_title = meaningful_name(body.album_title.as_deref())
             .unwrap_or_else(|| "Single track".to_owned());
+        let fields = TrackFields {
+            artist_name,
+            album_title,
+            artist_mbid: body.artist_mbid.clone(),
+            release_mbid: body.release_mbid.clone(),
+            track_title,
+            duration_seconds: body.duration_seconds,
+            release_group_mbid: body.release_group_mbid.clone(),
+        };
+        self.track_intake(principal, &mbid.to_lowercase(), fields)
+            .await
+    }
+
+    /// Ask for one track by name alone: no recording MBID, so the download
+    /// searches by artist and title, and what it finds waits in review to
+    /// be placed. The key is derived from artist and title, so asking twice
+    /// joins the first ask.
+    pub async fn request_want(
+        &self,
+        principal: &Principal,
+        body: &WantIntake,
+    ) -> Result<WantIntakeResponse, RequestsError> {
+        let artist_name = meaningful_name(Some(body.artist_name.as_str())).ok_or_else(|| {
+            RequestsError::InvalidInput {
+                message: "Artist is required".to_owned(),
+            }
+        })?;
+        let track_title = meaningful_name(Some(body.track_title.as_str())).ok_or_else(|| {
+            RequestsError::InvalidInput {
+                message: "Track title is required".to_owned(),
+            }
+        })?;
+        let album_title = meaningful_name(body.album_title.as_deref())
+            .unwrap_or_else(|| "Single track".to_owned());
+        let key = want_key(&artist_name, &track_title);
+        let fields = TrackFields {
+            artist_name,
+            album_title,
+            artist_mbid: None,
+            release_mbid: None,
+            track_title,
+            duration_seconds: body.duration_seconds.filter(|seconds| *seconds > 0),
+            release_group_mbid: None,
+        };
+        let response = self.track_intake(principal, &key, fields).await?;
+        Ok(WantIntakeResponse {
+            key,
+            status: response.status,
+            task_id: response.task_id,
+        })
+    }
+
+    /// The ledger and dispatch half of a track ask, keyed on a recording
+    /// MBID or a want key.
+    async fn track_intake(
+        &self,
+        principal: &Principal,
+        mbid: &str,
+        fields: TrackFields,
+    ) -> Result<TrackIntakeResponse, RequestsError> {
+        let role = principal.role();
         let now = self.now_epoch();
 
-        if let Some(existing) = self.store.get(RequestKind::Track, &mbid).await?
+        if let Some(existing) = self.store.get(RequestKind::Track, mbid).await?
             && (existing.status.is_active() || existing.status == RequestStatus::Cancelling)
         {
             self.store
                 .attach_requester(
                     RequestKind::Track,
-                    &mbid,
+                    mbid,
                     principal.user_id(),
                     Some(principal.username_display().to_owned()),
                     now,
@@ -608,16 +679,16 @@ impl RequestsService {
 
         let needs_approval = !auto_approves(role);
         let record = RequestRecord {
-            artist_name,
-            album_title,
-            artist_mbid: body.artist_mbid.clone(),
-            release_mbid: body.release_mbid.clone(),
-            track_title: Some(track_title),
-            duration_seconds: body.duration_seconds,
-            track_release_group_mbid: body.release_group_mbid.clone(),
+            artist_name: fields.artist_name,
+            album_title: fields.album_title,
+            artist_mbid: fields.artist_mbid,
+            release_mbid: fields.release_mbid,
+            track_title: Some(fields.track_title),
+            duration_seconds: fields.duration_seconds,
+            track_release_group_mbid: fields.release_group_mbid,
             ..fresh_record(
                 RequestKind::Track,
-                mbid.to_lowercase(),
+                mbid.to_owned(),
                 principal,
                 DispatchOrigin::User,
                 status_for_role(needs_approval),
@@ -636,7 +707,7 @@ impl RequestsService {
                 self.store
                     .attach_requester(
                         RequestKind::Track,
-                        &mbid,
+                        mbid,
                         principal.user_id(),
                         Some(principal.username_display().to_owned()),
                         now,
