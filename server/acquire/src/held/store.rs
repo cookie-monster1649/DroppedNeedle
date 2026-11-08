@@ -719,6 +719,15 @@ impl<'c> HeldRows<'c> {
         Ok(())
     }
 
+    /// Fork: entries asking for a want with files nothing paired yet.
+    pub fn unpaired_wants(&self, limit: i64) -> rusqlite::Result<Vec<i64>> {
+        let mut statement = self.conn.prepare_cached(sql::UNPAIRED_WANTS.text())?;
+        let rows = statement
+            .query_map(params![limit], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
     /// Fork: a want's identities outside MusicBrainz, as the source links
     /// its placed track adopts. A provider this build does not know is
     /// skipped.
