@@ -8050,3 +8050,121 @@ async fn task_now(
         .find(|task| task.row.task.id == id)
         .expect("task")
 }
+
+// Fork (Slice A2): a track asked for by name has no MusicBrainz release.
+// Its held file imports as tagged, on a release made from the ask: it is
+// filed by the naming script, catalogued from its new tags, and gets no
+// MusicBrainz identity, so the album is left to identification.
+#[tokio::test]
+async fn a_held_want_file_imports_as_tagged_with_no_identity() {
+    use droppedneedle_acquire::downloads::store::TaskDetails;
+    const WANT: &str = "want-0123456789abcdef0123456789abcdef";
+    let db = AcquireDb::scratch().expect("scratch db");
+    db.add_user("u-ada", "Ada", "user").await.expect("user");
+    let dir = db.path().parent().expect("scratch dir").to_path_buf();
+    let config = Arc::new(
+        ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+            .expect("config"),
+    );
+    let platform = TestPlatform::on(db.db(), &dir)
+        .settings(config)
+        .build()
+        .await;
+    let (library, _) = library_at(&platform);
+    let music = dir.join("music");
+    std::fs::create_dir_all(&music).expect("music root");
+    library
+        .scans
+        .add_root(
+            Some("music".to_owned()),
+            music.to_string_lossy().into_owned(),
+            EffectivePolicy::Automatic,
+        )
+        .expect("root adds");
+    let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(Vec::new()));
+    let (acquire, _fixed) = acquire_serving(
+        &platform,
+        &library,
+        Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+    );
+    acquire
+        .journal
+        .run("test.seed", |store| {
+            let task = NewTask {
+                artist_name: "Beyoncé".to_owned(),
+                album_title: "Halo (Live)".to_owned(),
+                ..new_task("t-want", "")
+            };
+            store.insert_track_task(&task, WANT, 1.0)?;
+            store.set_task_details(
+                "t-want",
+                &TaskDetails {
+                    track_title: Some("Halo (Live)".to_owned()),
+                    ..TaskDetails::default()
+                },
+                1.0,
+            )
+        })
+        .await
+        .expect("task");
+    let held_dir = acquire.held.folders().held.clone();
+    let held = land_file(
+        &held_dir,
+        "halo.flac",
+        "flac_full_01.flac",
+        "Halo (Live)",
+        1,
+    );
+    let held = held
+        .file_name()
+        .expect("name")
+        .to_string_lossy()
+        .into_owned();
+    let (entry, file): (i64, i64) = acquire
+        .db
+        .write("test.held", move |tx| {
+            tx.execute(
+                "INSERT INTO acquire_held_entries (id, user_id, origin, group_key, \
+                 recording_mbid, artist_name, album_title, state, created_at, expires_at) \
+                 VALUES (1, 'u-ada', 'download', ?1, ?2, 'Beyoncé', 'Single track', 'held', 1, 2)",
+                rusqlite::params![format!("track:{WANT}"), WANT],
+            )?;
+            tx.execute(
+                "INSERT INTO acquire_held_files (entry_id, root, path, original_name, \
+                 recording_mbid, track_number, disc_number, reason, source, source_task_id, \
+                 state, created_at) \
+                 VALUES (1, 'held', ?1, ?1, ?2, 1, 1, 'no_release', 'soulseek', 't-want', \
+                 'held', 1)",
+                rusqlite::params![held, WANT],
+            )?;
+            Ok((1, tx.last_insert_rowid()))
+        })
+        .await
+        .expect("held rows");
+    let ada = &test_principal("u-ada", Role::User, "sess-ada", SessionKind::Standard);
+    let (status, body) = held_call(
+        &acquire,
+        "POST",
+        &format!("/api/v3/held/{entry}/import"),
+        Some(serde_json::json!({ "file_ids": [file] })),
+        ada,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["imported"], 1, "{body}");
+    let placed = files_under(&music, "flac");
+    assert_eq!(placed.len(), 1, "one file in the library: {placed:?}");
+    let titles: Vec<String> = acquire.db.db().column(
+        "SELECT title FROM local_tracks WHERE availability = 'indexed'",
+        [],
+    );
+    assert_eq!(titles, vec!["Halo (Live)".to_owned()]);
+    let identities: Vec<String> = acquire.db.db().column(
+        "SELECT local_track_id FROM local_track_external_identities",
+        [],
+    );
+    assert!(
+        identities.is_empty(),
+        "no MusicBrainz identity: {identities:?}"
+    );
+}
