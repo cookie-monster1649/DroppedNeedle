@@ -115,6 +115,10 @@ struct Rig {
     worker_settings: Arc<WorkerSettings>,
     plugins: Arc<PluginHost>,
     db: Db,
+    /// Fork: the import service and the bridge, for the playlist sync.
+    service: Arc<SpotifyImportService>,
+    bridge: Arc<CollectionsPlaylistBridge>,
+    syncs: imports::spotify_sync::SpotifySyncs,
 }
 
 impl Rig {
@@ -171,7 +175,8 @@ fn rig_with(
         spotify_playlists.clone(),
         resolver.clone(),
     ));
-    let import_jobs = SpotifyImportJobs::new(service, platform.events.clone());
+    let import_jobs = SpotifyImportJobs::new(service.clone(), platform.events.clone());
+    let syncs = imports::spotify_sync::SpotifySyncs::new(db.clone());
     let queue = JobQueue::new(platform.db.clone(), platform.clock.clone());
     let spotify_imports = SpotifyImports::new(platform.db.clone(), queue.clone());
     let journal = Arc::new(Journal::new(db, quiet_ticks()));
@@ -201,9 +206,10 @@ fn rig_with(
         spotify_settings,
         spotify_states,
         spotify_links: spotify_links.clone(),
-        spotify_playlists,
+        spotify_playlists: spotify_playlists.clone(),
         resolver,
         spotify_imports,
+        spotify_syncs: syncs.clone(),
         probes: Arc::new(LiveProbes::bundle(&probes)),
         ids: Arc::new(FixedIdGenerator),
         base_path: String::new(),
@@ -224,6 +230,9 @@ fn rig_with(
         worker_settings,
         plugins,
         db: platform.db.clone(),
+        service,
+        bridge: spotify_playlists,
+        syncs,
     }
 }
 
@@ -1066,6 +1075,132 @@ async fn spotify_import_populates_tracks_from_items() {
             .any(|grant| grant == "authorization_code"),
         "the link used the authorization code grant"
     );
+}
+
+/// Fork (Slice C): asks a sync makes, by title.
+#[derive(Default)]
+struct Asked(std::sync::Mutex<Vec<String>>);
+
+impl imports::spotify_sync::SyncRequests for Asked {
+    fn request<'a>(
+        &'a self,
+        _user_id: &'a str,
+        tracks: Vec<ImportedTrack>,
+    ) -> droppedneedle_kernel::jobs::BoxFuture<'a, usize> {
+        Box::pin(async move {
+            let count = tracks.len();
+            self.0
+                .lock()
+                .unwrap()
+                .extend(tracks.into_iter().map(|track| track.track_name));
+            count
+        })
+    }
+}
+
+/// Fork (Slice C): a synced Spotify playlist is imported again only when
+/// its snapshot changes, and the songs added at Spotify are asked for; the
+/// songs it had are not asked for again. Sync is the owner's to turn on,
+/// for a playlist from Spotify only.
+#[tokio::test]
+async fn a_synced_spotify_playlist_follows_spotify_and_asks_for_new_songs() {
+    use imports::spotify_sync::SpotifySync;
+    let (auth, admin_id, user_id) = seed_rig().await;
+    let (api, accounts, covers, recorder) = serve_spotify().await.expect("mock serves");
+    let _musicbrainz = serve_musicbrainz(&auth).await;
+    let bundle = rig_for(
+        &auth,
+        &api.base_url,
+        &accounts.base_url,
+        Some(&covers.base_url),
+    );
+    seed_spotify_app(bundle.deps.clone(), &admin_id).await;
+    link_spotify(bundle.deps.clone(), &recorder, &user_id).await;
+    let (status, body) = post_json(
+        authed_app(bundle.deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/playlists/sp-playlist-1/import",
+        json!({"name": "Neon Nights"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let playlist_id = body["playlist_id"].as_str().expect("id").to_owned();
+    assert_eq!(
+        poll_job_done(&bundle, &user_id, "sp-playlist-1").await,
+        ImportState::Done
+    );
+
+    let path = format!("/api/v3/acquire/spotify/synced/{playlist_id}");
+    let (status, body) =
+        get_json(authed_app(bundle.deps.clone(), &user_id, Role::User), &path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["enabled"], false);
+    let (status, _) = get_json(
+        authed_app(bundle.deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/synced/not-a-playlist",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = get_json(
+        authed_app(bundle.deps.clone(), &admin_id, Role::Admin),
+        &path,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "another user's playlist");
+    let (status, body) = put_json(
+        authed_app(bundle.deps.clone(), &user_id, Role::User),
+        &path,
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (body["enabled"].clone(), body["auto_request"].clone()),
+        (json!(true), json!(true))
+    );
+
+    let asked = Arc::new(Asked::default());
+    let sync = SpotifySync::new(
+        bundle.service.clone(),
+        bundle.bridge.clone(),
+        bundle.syncs.clone(),
+        asked.clone(),
+    );
+    assert_eq!(sync.run_once().await, 1, "the first check imports");
+    assert!(
+        asked.0.lock().unwrap().is_empty(),
+        "nothing new on the first check"
+    );
+    assert_eq!(
+        sync.run_once().await,
+        0,
+        "an unchanged snapshot imports nothing"
+    );
+
+    recorder.grow_playlist();
+    assert_eq!(sync.run_once().await, 1, "a new snapshot imports");
+    let names: Vec<String> = playlist_rows(&bundle.playlists, &user_id, &playlist_id)
+        .await
+        .into_iter()
+        .map(|row| row.track_name)
+        .collect();
+    assert_eq!(
+        names,
+        vec!["Midnight Drive", "Glass Tides", "Paper Lanterns"]
+    );
+    assert_eq!(*asked.0.lock().unwrap(), vec!["Paper Lanterns".to_owned()]);
+    let (_, body) = get_json(authed_app(bundle.deps.clone(), &user_id, Role::User), &path).await;
+    assert!(body["checked_at"].is_i64(), "{body}");
+    assert_eq!(body["last_error"], Value::Null);
+
+    let (status, body) = put_json(
+        authed_app(bundle.deps.clone(), &user_id, Role::User),
+        &path,
+        json!({"enabled": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["enabled"], false);
+    assert!(bundle.syncs.rows().await.expect("rows").is_empty());
 }
 
 /// Spotify app settings that do not read are never an empty app. Starting

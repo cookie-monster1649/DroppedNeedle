@@ -233,6 +233,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/acquire/spotify/synced/{playlist_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: whether one of the caller's playlists imported from Spotify is
+         *     kept in step with Spotify.
+         */
+        get: operations["get_spotify_sync"];
+        /**
+         * Fork: turn sync with Spotify on or off for one of the caller's
+         *     playlists imported from Spotify.
+         */
+        put: operations["put_spotify_sync"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/admin/app-passwords": {
         parameters: {
             query?: never;
@@ -23257,6 +23281,33 @@ export interface components {
             /** @description Optional absolute origin the OAuth redirect URI is built from. */
             spotify_redirect_origin: string;
         };
+        /** @description Fork: a Spotify playlist's sync with Spotify. */
+        SpotifySyncState: {
+            /**
+             * @description Songs added at Spotify are requested (as the owner, under their
+             *     approval and quota).
+             */
+            auto_request: boolean;
+            /**
+             * Format: int64
+             * @description Epoch milliseconds of the last check.
+             */
+            checked_at?: number | null;
+            /**
+             * @description The playlist is checked against Spotify every 15 minutes and
+             *     imported again when it changed there.
+             */
+            enabled: boolean;
+            /** @description Why the last check failed. */
+            last_error?: string | null;
+        };
+        /** @description Fork: turn a Spotify playlist's sync on or off. */
+        SpotifySyncUpdate: {
+            /** @description Request songs added at Spotify (default on). */
+            auto_request?: boolean;
+            /** @description Keep the playlist in step with Spotify. */
+            enabled: boolean;
+        };
         /**
          * @description A listening-statistics window: the chart pages' `range`, and the
          *     ListenBrainz statistics range.
@@ -25470,6 +25521,83 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpotifySettings"];
+                };
+            };
+        };
+    };
+    get_spotify_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Internal playlist id */
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sync setting */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifySyncState"];
+                };
+            };
+            /** @description Not the caller's playlist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    put_spotify_sync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Internal playlist id */
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpotifySyncUpdate"];
+            };
+        };
+        responses: {
+            /** @description Sync setting */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifySyncState"];
+                };
+            };
+            /** @description Not the caller's playlist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Sync asked for on a playlist not from Spotify */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
