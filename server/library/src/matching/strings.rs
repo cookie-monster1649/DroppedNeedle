@@ -469,3 +469,32 @@ mod tests {
         assert!(artist_subset("!!!", "!!!"));
     }
 }
+
+/// Fork: the want key of a track asked for by name, `want-<32 hex>`: the
+/// same artist and title (case, accents and spacing aside) always give the
+/// same key. The requests area asks under it, and a download for it keeps
+/// it where a recording MBID would be, so a playlist entry can find the
+/// track its request landed as.
+pub fn want_key(artist: &str, title: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+    use unicode_normalization::UnicodeNormalization;
+    let fold = |text: &str| -> String {
+        let lowered: String = text
+            .nfkd()
+            .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+            .collect::<String>()
+            .to_lowercase();
+        lowered.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(fold(artist).as_bytes());
+    hasher.update([0]);
+    hasher.update(fold(title).as_bytes());
+    let digest = hasher.finalize();
+    let mut key = String::from("want-");
+    for byte in &digest[..16] {
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
+}

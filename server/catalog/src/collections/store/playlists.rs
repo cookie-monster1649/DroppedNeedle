@@ -444,7 +444,27 @@ impl PlaylistStore {
     pub async fn link_library(&self) -> Result<usize, StoreError> {
         self.db
             .write("playlists.link_library", move |tx| {
-                let linked = tx.execute(sql::LINK_LIBRARY.text(), [])?;
+                let mut linked = tx.execute(sql::LINK_LIBRARY.text(), [])?;
+                // An entry asked for by name links to the track its want's
+                // download landed as, whatever that file's tags say.
+                let named: Vec<(String, String, String)> = tx
+                    .prepare_cached(sql::UNLINKED_BY_NAME.text())?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<Result<_, _>>()?;
+                let mut track_of = tx.prepare_cached(sql::TRACK_OF_WANT.text())?;
+                for (entry, artist, title) in named {
+                    if artist.trim().is_empty() || title.trim().is_empty() {
+                        continue;
+                    }
+                    let key = droppedneedle_library::matching::strings::want_key(&artist, &title);
+                    let track: Option<String> =
+                        track_of.query_row([key], |row| row.get(0)).optional()?;
+                    if let Some(track) = track {
+                        linked +=
+                            tx.execute(sql::LINK_ENTRY.text(), rusqlite::params![entry, track])?;
+                    }
+                }
+                drop(track_of);
                 tx.execute(sql::MARK_LINKED_LOCAL.text(), [])?;
                 Ok(linked)
             })

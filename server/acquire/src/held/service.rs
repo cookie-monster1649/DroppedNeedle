@@ -1829,6 +1829,11 @@ impl HeldService {
             let Some(key) = entry.recording_mbid.clone() else {
                 continue;
             };
+            // One song is one file: an entry with a paired copy already
+            // waits for nothing more.
+            if entry.files.iter().any(HeldFile::is_paired) {
+                continue;
+            }
             for file in entry
                 .files
                 .iter()
@@ -1878,7 +1883,8 @@ impl HeldService {
                     .await
                 {
                     Ok(()) => {
-                        tracing::info!(entry_id, file_id, "held want file agrees with the ask")
+                        tracing::info!(entry_id, file_id, "held want file agrees with the ask");
+                        break;
                     }
                     Err(error) => {
                         tracing::warn!(entry_id, file_id, %error, "held want file not paired")
