@@ -55,9 +55,12 @@ pub enum HeldFileAction {
 
 /// The actions one held file offers. A file paired with no track offers
 /// no import: picking the album (Match) is the way forward.
-fn actions_for(file: &HeldFile) -> Vec<HeldFileAction> {
+fn actions_for(file: &HeldFile, want: bool) -> Vec<HeldFileAction> {
     let mut actions = Vec::new();
     match file.reason {
+        // Fork: a want's file goes in as tagged on a release made from the
+        // ask, so it imports with no pairing.
+        Reason::NoRelease if want => actions.push(HeldFileAction::Import),
         Reason::AlbumVersionOnly => actions.push(HeldFileAction::GetFromAlbum),
         Reason::VersionLowerQuality => actions.push(HeldFileAction::UseThisVersion),
         Reason::NoBetterThanYours => actions.push(HeldFileAction::UseThisFile),
@@ -124,9 +127,15 @@ pub struct HeldFileResponse {
 
 impl From<HeldFile> for HeldFileResponse {
     fn from(file: HeldFile) -> Self {
+        Self::of(file, false)
+    }
+}
+
+impl HeldFileResponse {
+    fn of(file: HeldFile, want: bool) -> Self {
         let reason_text = reason_text(&file);
         Self {
-            actions: actions_for(&file),
+            actions: actions_for(&file, want),
             id: file.id,
             original_name: file.original_name,
             release_mbid: file.pairing.release_mbid,
@@ -185,6 +194,11 @@ pub struct HeldEntryResponse {
 impl From<Entry> for HeldEntryResponse {
     fn from(entry: Entry) -> Self {
         let retries = entry.files.iter().any(retries_by_itself);
+        let want = entry.origin == EntryOrigin::Download
+            && entry
+                .recording_mbid
+                .as_deref()
+                .is_some_and(crate::requests::ledger::is_want_key);
         Self {
             next_retry_at: entry.retry_at.filter(|_| retries),
             check_album_id: None,
@@ -198,7 +212,11 @@ impl From<Entry> for HeldEntryResponse {
             album_title: entry.album_title,
             created_at: entry.created_at,
             expires_at: entry.expires_at,
-            files: entry.files.into_iter().map(Into::into).collect(),
+            files: entry
+                .files
+                .into_iter()
+                .map(|file| HeldFileResponse::of(file, want))
+                .collect(),
         }
     }
 }

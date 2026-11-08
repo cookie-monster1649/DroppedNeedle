@@ -87,6 +87,15 @@ droppedneedle_kernel::sql! {
              track_number = ?6, track_title = ?7, expected_duration_seconds = ?8 \
              WHERE id = ?1 AND state = 'held'";
     /// Whether download task `?1` still has a file held in an open entry.
+    /// Fork: open download entries asking for a want whose files nothing
+    /// paired yet (held before the landing checked wants against the ask),
+    /// at most `?1`: entry ids.
+    pub(super) UNPAIRED_WANTS = "SELECT DISTINCT e.id FROM acquire_held_entries e \
+             JOIN acquire_held_files f ON f.entry_id = e.id \
+             WHERE e.state = 'held' AND e.origin = 'download' \
+             AND e.recording_mbid LIKE 'want-%' AND f.state = 'held' \
+             AND f.reason = 'no_release' AND COALESCE(f.recording_mbid, '') = '' \
+             AND COALESCE(f.release_track_mbid, '') = '' ORDER BY e.id LIMIT ?1";
     /// Fork: the identities of want `?1` (provider, id), as the requests
     /// area kept them.
     pub(super) WANT_IDENTITIES = "SELECT provider, external_id FROM acquire_want_identities \
