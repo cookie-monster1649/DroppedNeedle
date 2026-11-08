@@ -420,15 +420,44 @@ impl HeldService {
         asker: Asker,
     ) -> Result<Acted, HeldError> {
         let entry = self.claim(viewer, entry_id).await?;
+        let want = is_want_entry(&entry);
         let result = match Self::chosen(&entry, file_ids.as_deref()) {
+            // Fork: a song asked for by name goes in once: the paired copy
+            // (the one that agreed with the ask), else the first picked.
+            Ok(mut files) if want && files.len() > 1 => {
+                let keep = files.iter().position(HeldFile::is_paired).unwrap_or(0);
+                let one = files.swap_remove(keep);
+                self.place(&entry, vec![one], actor, asker).await
+            }
             Ok(files) => self.place(&entry, files, actor, asker).await,
             Err(error) => Err(error),
         };
         self.release(entry_id).await;
         let acted = result?;
+        if want && acted.imported > 0 {
+            self.discard_leftovers(viewer, entry_id).await;
+        }
         match acted.held.first() {
             Some(reason) if acted.imported == 0 => Err(refused(*reason)),
             _ => Ok(acted),
+        }
+    }
+
+    /// Fork: once a song asked for by name went in, its other held copies
+    /// (other peers' downloads of the same song) are discarded: one song,
+    /// one copy. A failure leaves them listed.
+    async fn discard_leftovers(&self, viewer: &Viewer, entry_id: i64) {
+        let left = match self.get(viewer, entry_id).await {
+            Ok(entry) if !entry.files.is_empty() => {
+                entry.files.iter().map(|file| file.id).collect::<Vec<_>>()
+            }
+            _ => return,
+        };
+        match self.discard(viewer, entry_id, Some(left)).await {
+            Ok(_) => tracing::info!(entry_id, "other copies of the filed song discarded"),
+            Err(error) => {
+                tracing::warn!(entry_id, %error, "other copies of the filed song left held");
+            }
         }
     }
 
@@ -554,6 +583,9 @@ impl HeldService {
             Err(error) => Err(error),
         };
         self.release(entry_id).await;
+        if result.as_ref().is_ok_and(|acted| acted.imported > 0) && is_want_entry(&current) {
+            self.discard_leftovers(viewer, entry_id).await;
+        }
         result
     }
 
@@ -2343,6 +2375,15 @@ fn track_on(release: &Release, pairing: &Pairing) -> Option<usize> {
                 .iter()
                 .position(|track| same(&track.recording_id, pairing.recording_mbid.as_deref()))
         })
+}
+
+/// Fork: whether an entry holds a download of a song asked for by name.
+fn is_want_entry(entry: &Entry) -> bool {
+    entry.origin == EntryOrigin::Download
+        && entry
+            .recording_mbid
+            .as_deref()
+            .is_some_and(crate::requests::ledger::is_want_key)
 }
 
 /// Whether a reason's hold is retried as it is ("Retry") rather than
