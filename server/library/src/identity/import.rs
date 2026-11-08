@@ -83,6 +83,16 @@ pub fn adopt_import(
             offer_album(tx, other, now_ms)?;
         }
     }
+    // Fork: files placed as tagged (a track asked for by name, which no
+    // release accounts for) carry no MusicBrainz identity. Nothing is
+    // sealed; the album is offered to identification like any scanned one.
+    if files
+        .iter()
+        .all(|file| file.identity.release_mbid.trim().is_empty())
+    {
+        offer_album(tx, &album, now_ms)?;
+        return Ok(());
+    }
     let on_album: Vec<bool> = albums
         .iter()
         .map(|on| on.as_deref() == Some(album.as_str()))

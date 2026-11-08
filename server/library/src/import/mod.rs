@@ -598,16 +598,19 @@ impl Imports {
         }
 
         // The commit seals the match against this document and makes no
-        // outside call, so it is kept first.
-        self.identify_store
-            .save_release(&import.release, Lane::Background)
-            .map_err(|error| match error {
-                StoreError::Busy(cause) => ImportError::Busy(cause),
-                StoreError::Closed => ImportError::Busy(error.to_string()),
-                StoreError::Failed(_) => {
-                    fault(format!("the release document was not kept: {error}"))
-                }
-            })?;
+        // outside call, so it is kept first. Files placed as tagged (fork:
+        // no release id) have no document to keep.
+        if !import.release.id.trim().is_empty() {
+            self.identify_store
+                .save_release(&import.release, Lane::Background)
+                .map_err(|error| match error {
+                    StoreError::Busy(cause) => ImportError::Busy(cause),
+                    StoreError::Closed => ImportError::Busy(error.to_string()),
+                    StoreError::Failed(_) => {
+                        fault(format!("the release document was not kept: {error}"))
+                    }
+                })?;
+        }
 
         let mut cell = self
             .core
