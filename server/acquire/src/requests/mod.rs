@@ -42,6 +42,7 @@ pub fn routes() -> Routes<RequestsState> {
     Routes::new()
         .user(routes!(request_album_handler))
         .user(routes!(request_track_handler))
+        .user(routes!(request_want_handler))
         .user(routes!(request_batch_handler))
         .user(routes!(cancel_batch_handler))
         .user(routes!(active_handler))

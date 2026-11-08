@@ -30,18 +30,25 @@ function row(over: Partial<PlaylistTrack>): PlaylistTrack {
 }
 
 describe('planMissingRequests', () => {
-	it('asks for a track when the recording is proven, an album otherwise', () => {
+	it('asks for a track when the recording is proven, by name otherwise', () => {
 		const plan = planMissingRequests([
 			row({ recording_mbid: 'rec-1', album_id: 'rg-1' }),
 			row({ recording_mbid: 'rec-1', album_id: 'rg-1' }),
-			row({ album_id: 'rg-2', album_name: 'Other' }),
-			row({ album_id: 'rg-2' }),
+			row({ album_id: 'rg-2', track_name: 'Halo (Live)', artist_name: 'Beyoncé' }),
+			row({ track_name: 'halo (live)', artist_name: 'beyoncé' }),
 			row({ album_id: 'rg-3', library_file_id: 'owned' }),
 			row({ recording_mbid: 'rec-4', available_sources: ['local'] }),
-			row({})
+			row({ track_name: '' })
 		]);
 		expect(plan.tracks.map((t) => t.recording_mbid)).toEqual(['rec-1']);
 		expect(plan.tracks[0]).toMatchObject({ release_group_mbid: 'rg-1', duration_seconds: 183 });
-		expect(plan.albums.map((a) => a.musicbrainz_id)).toEqual(['rg-2']);
+		expect(plan.wants).toEqual([
+			{
+				artist_name: 'Beyoncé',
+				track_title: 'Halo (Live)',
+				album_title: 'Album',
+				duration_seconds: 183
+			}
+		]);
 	});
 });

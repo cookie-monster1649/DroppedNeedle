@@ -2557,3 +2557,71 @@ async fn a_link_won_by_another_linker_of_the_same_task_stands() {
     let row = state.store.get(RequestKind::Album, MBID_A).await.unwrap();
     assert_eq!(row.unwrap().task_id.as_deref(), Some(task.as_str()));
 }
+
+// Fork: a track asked for by name alone (no MusicBrainz id) is a track
+// request under a want key derived from artist and title. Asking again,
+// in other case and spacing, joins the first ask; the task carries the key
+// where a recording MBID would be, and the track routes take the key.
+#[tokio::test]
+async fn a_track_asked_for_by_name_alone_is_a_want() {
+    let (state, _db, dispatch) = setup().await;
+    let (status, first) = call(
+        &state,
+        Method::POST,
+        "/api/v3/requests/wants",
+        Some(TRUSTED),
+        Some(json!({
+            "artist_name": "Beyoncé",
+            "track_title": "Halo (Live)",
+            "duration_seconds": 262,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{first}");
+    assert_eq!(first["status"], "queued");
+    let key = first["key"].as_str().expect("key").to_owned();
+    assert!(key.starts_with("want-") && key.len() == 37, "{key}");
+
+    let (status, again) = call(
+        &state,
+        Method::POST,
+        "/api/v3/requests/wants",
+        Some(BOB),
+        Some(json!({"artist_name": " beyonce ", "track_title": "HALO (live)"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{again}");
+    assert_eq!(again["key"], key.as_str());
+
+    let calls = dispatch.take_calls().await;
+    assert_eq!(calls.len(), 1, "one task for both asks");
+    let recording: Vec<String> = dispatch
+        .dispatch
+        .journal()
+        .db()
+        .db()
+        .column("SELECT recording_mbid FROM download_tasks", []);
+    assert_eq!(recording, vec![key.clone()]);
+    let row = state
+        .store
+        .get(RequestKind::Track, &key)
+        .await
+        .unwrap()
+        .expect("want row");
+    assert_eq!(row.track_title.as_deref(), Some("Halo (Live)"));
+    assert_eq!(row.duration_seconds, Some(262));
+
+    let (status, blank) = call(
+        &state,
+        Method::POST,
+        "/api/v3/requests/wants",
+        Some(TRUSTED),
+        Some(json!({"artist_name": "Unknown", "track_title": "Song"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{blank}");
+
+    let uri = format!("/api/v3/requests/active/{key}?kind=track");
+    let (_, cancelled) = call(&state, Method::DELETE, &uri, Some(TRUSTED), None).await;
+    assert_eq!(cancelled["success"], true, "{cancelled}");
+}

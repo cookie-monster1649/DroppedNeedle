@@ -521,6 +521,47 @@ fn invalid_mbid() -> RequestsError {
     }
 }
 
+/// Prefix of a want key: a track asked for by name, with no recording MBID.
+pub const WANT_PREFIX: &str = "want-";
+
+/// Whether `key` is a want key (`want-` and 32 hex digits).
+pub fn is_want_key(key: &str) -> bool {
+    key.strip_prefix(WANT_PREFIX)
+        .is_some_and(|hex| hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The want key for a track asked for by name: the same artist and title
+/// (case, accents and spacing aside) always give the same key, so asking
+/// twice finds the first ask.
+pub fn want_key(artist: &str, title: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use unicode_normalization::UnicodeNormalization;
+    let fold = |text: &str| -> String {
+        let lowered: String = text
+            .nfkd()
+            .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+            .collect::<String>()
+            .to_lowercase();
+        lowered.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(fold(artist).as_bytes());
+    hasher.update([0]);
+    hasher.update(fold(title).as_bytes());
+    let digest = hasher.finalize();
+    format!("{WANT_PREFIX}{}", hex::encode(&digest[..16]))
+}
+
+/// Validate a request key for `kind`: an MBID, or for a track a want key
+/// (lowercased).
+pub fn validate_request_key(value: &str, kind: RequestKind) -> Result<String, RequestsError> {
+    let trimmed = value.trim();
+    if kind == RequestKind::Track && is_want_key(&trimmed.to_ascii_lowercase()) {
+        return Ok(trimmed.to_ascii_lowercase());
+    }
+    validate_mbid(trimmed)
+}
+
 /// None for absent, blank, or literal-"Unknown" names; else the stripped
 /// value (older callers send placeholders that must not become stored names).
 pub fn meaningful_name(value: Option<&str>) -> Option<String> {
@@ -535,8 +576,37 @@ pub fn meaningful_name(value: Option<&str>) -> Option<String> {
 mod tests {
     use super::{
         ApprovalState, RequestStatus, WatchState, can_approval_transition, can_request_transition,
-        can_watch_transition,
+        can_watch_transition, is_want_key, validate_request_key, want_key,
     };
+    use crate::requests::models::RequestKind;
+
+    #[test]
+    fn want_keys_fold_case_accents_and_spacing() {
+        let a = want_key("Beyoncé", "Halo");
+        assert_eq!(a, want_key("  BEYONCE ", "halo"));
+        assert_ne!(a, want_key("Beyonce", "Halo (Live)"));
+        assert!(is_want_key(&a));
+        assert_eq!(a.len(), 5 + 32);
+    }
+
+    #[test]
+    fn request_keys_take_want_keys_only_for_tracks() {
+        let key = want_key("A", "B");
+        assert_eq!(
+            validate_request_key(
+                &key.to_uppercase().replace("WANT-", "want-"),
+                RequestKind::Track
+            )
+            .unwrap(),
+            key
+        );
+        assert!(validate_request_key(&key, RequestKind::Album).is_err());
+        assert!(validate_request_key("want-xyz", RequestKind::Track).is_err());
+        assert!(
+            validate_request_key("0d4a8bd3-2b2b-4f6c-9d4b-2a4c6b1d2e3f", RequestKind::Album)
+                .is_ok()
+        );
+    }
 
     /// Every request status, watch state and approval state pair: exactly
     /// the listed moves are allowed.

@@ -6,7 +6,9 @@ use super::{
 use crate::dispatch::{DispatchError, DispatchOrigin, DispatchTarget};
 use crate::requests::auth::auto_approves;
 use crate::requests::error::RequestsError;
-use crate::requests::ledger::{CancelDecision, RequestRecord, RequestStatus, validate_mbid};
+use crate::requests::ledger::{
+    CancelDecision, RequestRecord, RequestStatus, validate_mbid, validate_request_key,
+};
 use crate::requests::models::{ClearHistoryResponse, RequestKind};
 use droppedneedle_auth::{Admin, Principal};
 
@@ -180,7 +182,7 @@ impl RequestsService {
             if !seen.insert(raw.clone()) {
                 continue;
             }
-            let Ok(mbid) = validate_mbid(raw) else {
+            let Ok(mbid) = validate_request_key(raw, kind) else {
                 failed = failed.saturating_add(1);
                 continue;
             };
@@ -213,7 +215,7 @@ impl RequestsService {
         mbid: &str,
         kind: RequestKind,
     ) -> Result<Decided, RequestsError> {
-        let mbid = validate_mbid(mbid)?;
+        let mbid = validate_request_key(mbid, kind)?;
         let now = self.now_epoch();
         let Some(record) = self.store.get(kind, &mbid).await? else {
             return Ok(Decided::NotFound);
@@ -294,7 +296,7 @@ impl RequestsService {
         mbid: &str,
         kind: RequestKind,
     ) -> Result<Decided, RequestsError> {
-        let mbid = validate_mbid(mbid)?;
+        let mbid = validate_request_key(mbid, kind)?;
         let now = self.now_epoch();
         let Some(record) = self.store.get(kind, &mbid).await? else {
             return Ok(Decided::NotFound);
@@ -336,7 +338,7 @@ impl RequestsService {
         mbid: &str,
         kind: RequestKind,
     ) -> Result<Decided, RequestsError> {
-        let mbid = validate_mbid(mbid)?;
+        let mbid = validate_request_key(mbid, kind)?;
         self.require_member(principal, kind, &mbid).await?;
         let now = self.now_epoch();
         let Some(record) = self.store.get(kind, &mbid).await? else {
@@ -425,7 +427,7 @@ impl RequestsService {
         mbid: &str,
         kind: RequestKind,
     ) -> Result<Decided, RequestsError> {
-        let mbid = validate_mbid(mbid)?;
+        let mbid = validate_request_key(mbid, kind)?;
         self.require_member(principal, kind, &mbid).await?;
         self.retry_with(principal, &mbid, kind, false).await
     }
@@ -589,7 +591,7 @@ impl RequestsService {
         mbid: &str,
         kind: RequestKind,
     ) -> Result<ClearHistoryResponse, RequestsError> {
-        let mbid = validate_mbid(mbid)?;
+        let mbid = validate_request_key(mbid, kind)?;
         self.require_member(principal, kind, &mbid).await?;
         let Some(record) = self.store.get(kind, &mbid).await? else {
             return Err(RequestsError::NotFound);
