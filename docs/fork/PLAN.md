@@ -53,10 +53,14 @@ search; with no release group, landing holds the files (`no_release`).
 Playlist "request missing" now sends wants for rows with no recording
 instead of whole-album requests.
 
-A2 (next): held review action "place as its own track" for a want's held
-files: write a custom edition (`library_custom_edition_*`) and settle the
-want as imported. Pass the asked duration into the task (no column today
-for a lone track's duration; `TaskDetails` carries it through the plan).
+A2 (done): the held queue's Import on a want's files places them as
+tagged. `held::service::want_release` builds a release from the ask (no
+MusicBrainz ids; a lone track with no album is its own single), and the
+existing intake/publisher path files it by the naming script and catalogues
+it. The library import skips keeping a release document when the release
+has no id, and `identity::adopt_import` seals nothing for id-less files and
+offers the album to identification instead. Still to do: pass the asked
+duration into the lone-track search.
 
 A3: carry ISRC / Spotify track ID onto the placed track via
 `local_entity_source_links` (no CHECK change).
