@@ -198,3 +198,16 @@ export async function setSpotifySync(
 		{ enabled, auto_request: autoRequest }
 	);
 }
+
+/** Fork: where a playlist song stands for its owner (in the library, missing, fetching, held...). */
+export type PlaylistRowState = components['schemas']['PlaylistRowState'];
+
+/** Fork: each entry's state, keyed by playlist track id. */
+export async function fetchPlaylistRows(
+	playlistId: string
+): Promise<Map<string, PlaylistRowState>> {
+	const response = await api.v3.GET(
+		v3('/api/v3/acquire/playlists/{playlist_id}/rows', { path: { playlist_id: playlistId } })
+	);
+	return new Map(response.rows.map((row) => [row.track_id, row.state]));
+}

@@ -126,8 +126,16 @@ once playlist rows store them (Slice B).
   has none), and an unpaired want file offers Import.
 - B4 (next): request status for wants: a want filed from the held list
   should show as imported, not "failed".
-- Per-row status (owned / requested / held / missing / unresolved) and
-  counters on the playlist page.
+- Per-row status (done): `GET /api/v3/acquire/playlists/{id}/rows`
+  (`imports::playlist_rows`) answers each entry's state for its owner
+  (owned, missing, requested, fetching, held, failed, imported), keyed as a
+  playlist request asks (recording, else want key). The page shows a row
+  nothing plays with the album page's vocabulary (`PlaylistRowStatus`:
+  Missing/Fetching/Failed badges, the "held" button, the download icon)
+  instead of an "Unknown" source, dimmed. Upstream files touched: the track
+  list (two optional props, one branch) and the page (one fetch); all else
+  lives in fork files, so an upstream change to either merges as a small
+  conflict at most.
 - "Request missing" sends **track** requests (request_kind `track` exists),
   falling back to Slice A wants when the album isn't proven by ISRC.
 - Liked songs (`/me/tracks`) and saved albums as pseudo-playlists.

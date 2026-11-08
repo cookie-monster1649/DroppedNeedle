@@ -79,6 +79,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/acquire/playlists/{playlist_id}/rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: where each entry of one of the caller's playlists stands (in the
+         *     library, missing, requested, fetching, held, failed), for the playlist
+         *     page's per-row status.
+         */
+        get: operations["get_playlist_rows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/acquire/sabnzbd/status": {
         parameters: {
             query?: never;
@@ -19392,6 +19413,20 @@ export interface components {
              */
             track_count?: number;
         };
+        /**
+         * @description Where one playlist entry stands.
+         * @enum {string}
+         */
+        PlaylistRowState: "owned" | "missing" | "requested" | "fetching" | "held" | "failed" | "imported";
+        /** @description One entry's state. */
+        PlaylistRowStatus: {
+            state: components["schemas"]["PlaylistRowState"];
+            track_id: string;
+        };
+        /** @description Every entry's state, in playlist order. */
+        PlaylistRowsResponse: {
+            rows: components["schemas"]["PlaylistRowStatus"][];
+        };
         /** @description Body requesting playlist suggestions. */
         PlaylistSuggestionsRequest: {
             /**
@@ -25347,6 +25382,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LidarrTestResponse"];
+                };
+            };
+        };
+    };
+    get_playlist_rows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Internal playlist id */
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entry states */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaylistRowsResponse"];
+                };
+            };
+            /** @description Not the caller's playlist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

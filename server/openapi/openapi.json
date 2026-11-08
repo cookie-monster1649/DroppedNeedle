@@ -178,6 +178,55 @@
         ]
       }
     },
+    "/api/v3/acquire/playlists/{playlist_id}/rows": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: where each entry of one of the caller's playlists stands (in the\nlibrary, missing, requested, fetching, held, failed), for the playlist\npage's per-row status.",
+        "operationId": "get_playlist_rows",
+        "parameters": [
+          {
+            "name": "playlist_id",
+            "in": "path",
+            "description": "Internal playlist id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entry states",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaylistRowsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's playlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/acquire/sabnzbd/status": {
       "get": {
         "tags": [
@@ -56798,6 +56847,50 @@
             "type": "integer",
             "format": "int64",
             "description": "Playlist track count."
+          }
+        }
+      },
+      "PlaylistRowState": {
+        "type": "string",
+        "description": "Where one playlist entry stands.",
+        "enum": [
+          "owned",
+          "missing",
+          "requested",
+          "fetching",
+          "held",
+          "failed",
+          "imported"
+        ]
+      },
+      "PlaylistRowStatus": {
+        "type": "object",
+        "description": "One entry's state.",
+        "required": [
+          "track_id",
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/PlaylistRowState"
+          },
+          "track_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PlaylistRowsResponse": {
+        "type": "object",
+        "description": "Every entry's state, in playlist order.",
+        "required": [
+          "rows"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlaylistRowStatus"
+            }
           }
         }
       },

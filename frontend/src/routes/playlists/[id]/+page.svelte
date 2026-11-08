@@ -2,9 +2,12 @@
 	import { goto } from '$app/navigation';
 	import { onDestroy, untrack } from 'svelte';
 	import {
+		fetchPlaylistRows,
 		planMissingRequests,
 		requestMissingTracks,
-		type PlaylistDetail
+		type PlaylistDetail,
+		type PlaylistRowState,
+		type PlaylistTrack
 	} from '$lib/api/playlists';
 	import { playlistTrackToQueueItem } from '$lib/features/player/playback/queueHelpers';
 	import { playerStore } from '$lib/features/player/state/player.svelte';
@@ -73,12 +76,47 @@
 
 	let requesting = $state(false);
 
+	// Fork: per-row status for the owner (Missing / Fetching / Held / Failed),
+	// refreshed every 15 s while anything is on its way.
+	let rowStates = $state<Map<string, PlaylistRowState> | undefined>(undefined);
+	const ROW_POLL_MS = 15_000;
+	async function loadRowStates(playlistId: string) {
+		try {
+			rowStates = await fetchPlaylistRows(playlistId);
+		} catch {
+			// Status is extra: the list still works without it.
+		}
+	}
+	let rowsFor = $derived(isOwner ? (playlist?.id ?? null) : null);
+	$effect(() => {
+		const id = rowsFor;
+		if (!id) return;
+		void loadRowStates(id);
+		const timer = setInterval(() => {
+			const moving = [...(rowStates?.values() ?? [])].some(
+				(state) => state === 'requested' || state === 'fetching' || state === 'imported'
+			);
+			if (moving) void loadRowStates(id);
+		}, ROW_POLL_MS);
+		return () => clearInterval(timer);
+	});
+
+	async function handleRequestTrack(track: PlaylistTrack) {
+		const result = await requestMissingTracks([track]);
+		toastStore.show({
+			message: result.requested ? `Requested ${track.track_name}` : result.message,
+			type: result.success ? 'success' : 'error'
+		});
+		if (playlist) await loadRowStates(playlist.id);
+	}
+
 	async function handleRequestMissing() {
 		if (requesting || !playlist) return;
 		requesting = true;
 		try {
 			const result = await requestMissingTracks(playlist.tracks);
 			toastStore.show({ message: result.message, type: 'success' });
+			void loadRowStates(playlist.id);
 		} catch {
 			toastStore.show({ message: "Couldn't submit requests", type: 'error' });
 		} finally {
@@ -323,6 +361,8 @@
 				ontrackchange={() => {}}
 				onsourcechange={handleSourceChange}
 				onplaytrack={playFromTrack}
+				{rowStates}
+				onrequesttrack={handleRequestTrack}
 			/>
 		</div>
 

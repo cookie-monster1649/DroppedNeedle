@@ -128,6 +128,7 @@ pub fn routes() -> Routes<ImportsDeps> {
         .user(routes!(list_spotify_playlists))
         .user(routes!(import_spotify_playlist))
         .user(routes!(get_spotify_sync, put_spotify_sync))
+        .user(routes!(get_playlist_rows))
         .user(routes!(disconnect_spotify))
         .user(routes!(get_slskd_status))
         .admin(routes!(get_sabnzbd_status))
@@ -682,4 +683,35 @@ fn fresh_state(deps: &ImportsDeps) -> String {
         return deps.ids.new_id();
     }
     URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Fork: where each entry of one of the caller's playlists stands (in the
+/// library, missing, requested, fetching, held, failed), for the playlist
+/// page's per-row status.
+#[utoipa::path(get, tag = "imports", path = "/api/v3/acquire/playlists/{playlist_id}/rows",
+    params(("playlist_id" = String, Path, description = "Internal playlist id")),
+    responses(
+        (status = 200, description = "Entry states", body = super::playlist_rows::PlaylistRowsResponse),
+        (status = 404, description = "Not the caller's playlist"),
+    ))]
+pub async fn get_playlist_rows(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+    Path(playlist_id): Path<String>,
+) -> Result<Json<super::playlist_rows::PlaylistRowsResponse>, ApiError> {
+    let rows = super::playlist_rows::playlist_rows(
+        deps.spotify_syncs.db(),
+        principal.user_id(),
+        &playlist_id,
+    )
+    .await
+    .map_err(|error| match error {
+        error @ (droppedneedle_kernel::db::DbError::Busy { .. }
+        | droppedneedle_kernel::db::DbError::LaneClosed) => ImportsError::Busy {
+            cause: error.to_string(),
+        },
+        error => ImportsError::internal(&error),
+    })?
+    .ok_or(ImportsError::NotFound)?;
+    Ok(Json(super::playlist_rows::PlaylistRowsResponse { rows }))
 }
