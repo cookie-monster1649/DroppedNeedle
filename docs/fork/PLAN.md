@@ -59,8 +59,9 @@ MusicBrainz ids; a lone track with no album is its own single), and the
 existing intake/publisher path files it by the naming script and catalogues
 it. The library import skips keeping a release document when the release
 has no id, and `identity::adopt_import` seals nothing for id-less files and
-offers the album to identification instead. Still to do: pass the asked
-duration into the lone-track search.
+offers the album to identification instead. The asked length is read from
+the want's request row into the lone-track target, so Soulseek candidates
+are judged against it.
 
 A3: carry ISRC / Spotify track ID onto the placed track via
 `local_entity_source_links` (no CHECK change).

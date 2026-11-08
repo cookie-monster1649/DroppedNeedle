@@ -327,7 +327,25 @@ impl Targets {
         // Asked for by name (fork): no recording to look up, so the track
         // is searched for on its own and its files wait in review.
         if crate::requests::ledger::is_want_key(&recording) {
-            return Ok(lone(TrackReason::RecordingUnknown));
+            let key = recording.clone();
+            let duration = self
+                .journal
+                .read("downloads.target.want_duration", move |store| {
+                    store.want_duration(&key)
+                })
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(task_id = %task.id, %error, "asked length unreadable");
+                    None
+                });
+            let mut target = lone(TrackReason::RecordingUnknown);
+            if let Some(track) = target.track.as_mut() {
+                track.duration_seconds = duration;
+            }
+            if let Some(expected) = target.tracklist.first_mut() {
+                expected.duration_seconds = duration;
+            }
+            return Ok(target);
         }
         let candidates = match lookup
             .recording_releases(&recording)
