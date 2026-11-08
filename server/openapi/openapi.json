@@ -29148,6 +29148,44 @@
         ]
       }
     },
+    "/api/v3/requests/wants": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Ask for one track by name, with no MusicBrainz id.\n`POST /api/v3/requests/wants`. Same approval gate as tracks. Answers 202\nwith the request key.",
+        "operationId": "request_want_handler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WantIntake"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WantIntakeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/scrobble/now-playing": {
       "post": {
         "tags": [
@@ -68455,6 +68493,64 @@
           "storage_full",
           "waiting_to_start"
         ]
+      },
+      "WantIntake": {
+        "type": "object",
+        "description": "Track-by-name intake body: no MusicBrainz ids. The download searches\nby artist and title, and its files wait in review to be placed.",
+        "required": [
+          "artist_name",
+          "track_title"
+        ],
+        "properties": {
+          "album_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Album title, when known."
+          },
+          "artist_name": {
+            "type": "string",
+            "description": "Artist name."
+          },
+          "duration_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Track length in seconds, when known."
+          },
+          "track_title": {
+            "type": "string",
+            "description": "Track title, version words included (\"Halo (Live)\")."
+          }
+        }
+      },
+      "WantIntakeResponse": {
+        "type": "object",
+        "description": "Track-by-name intake response.",
+        "required": [
+          "key",
+          "status"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The request key (`want-` and 32 hex digits); use it where track\nrequest routes take a MusicBrainz id."
+          },
+          "status": {
+            "$ref": "#/components/schemas/RequestStatus",
+            "description": "`queued` or `awaiting_approval`."
+          },
+          "task_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Linked download task, when dispatched."
+          }
+        }
       },
       "WantedActionResponse": {
         "type": "object",

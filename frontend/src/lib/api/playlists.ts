@@ -79,12 +79,12 @@ export interface BatchRequestResult {
 }
 
 type TrackIntakeBody = Schemas['TrackIntake'];
-type BatchItemBody = { musicbrainz_id: string; artist_name: string; album_title: string };
+type WantIntakeBody = Schemas['WantIntake'];
 
-/** What "request missing" would send: per-track where the row names a recording. */
+/** What "request missing" would send: one request per missing track. */
 export interface MissingPlan {
 	tracks: TrackIntakeBody[];
-	albums: BatchItemBody[];
+	wants: WantIntakeBody[];
 }
 
 function isMissing(track: PlaylistTrack): boolean {
@@ -97,15 +97,17 @@ function isMissing(track: PlaylistTrack): boolean {
 /**
  * Fork (#204, brief §9.3): a missing row whose recording is known (the Spotify
  * import proves it by ISRC) becomes a track request, so only that track is
- * wanted. Rows with a release group but no recording fall back to one album
- * request per album, as upstream does.
+ * wanted. Rows with no recording are asked for by name (brief §6.1, Slice A):
+ * the download searches by artist and title and its files wait in review,
+ * so a playlist row never pulls in its whole album.
  */
 export function planMissingRequests(tracks: PlaylistTrack[]): MissingPlan {
 	const seenRecordings = new Set<string>();
-	const seenAlbums = new Set<string>();
-	const plan: MissingPlan = { tracks: [], albums: [] };
+	const seenNames = new Set<string>();
+	const plan: MissingPlan = { tracks: [], wants: [] };
 	for (const track of tracks) {
 		if (!isMissing(track)) continue;
+		const duration_seconds = track.duration ? Math.round(track.duration) : null;
 		const recording = track.recording_mbid;
 		if (recording) {
 			if (seenRecordings.has(recording)) continue;
@@ -115,20 +117,24 @@ export function planMissingRequests(tracks: PlaylistTrack[]): MissingPlan {
 				artist_name: track.artist_name || 'Unknown',
 				track_title: track.track_name || 'Unknown',
 				album_title: track.album_name || null,
-				duration_seconds: track.duration ? Math.round(track.duration) : null,
+				duration_seconds,
 				release_group_mbid: track.album_id || null,
 				artist_mbid: null,
 				release_mbid: null
 			});
 			continue;
 		}
-		const mbid = track.album_id;
-		if (!mbid || seenAlbums.has(mbid)) continue;
-		seenAlbums.add(mbid);
-		plan.albums.push({
-			musicbrainz_id: mbid,
-			artist_name: track.artist_name || 'Unknown',
-			album_title: track.album_name || 'Unknown'
+		const artist = track.artist_name?.trim();
+		const title = track.track_name?.trim();
+		if (!artist || !title) continue;
+		const name = `${artist.toLowerCase()}\u0000${title.toLowerCase()}`;
+		if (seenNames.has(name)) continue;
+		seenNames.add(name);
+		plan.wants.push({
+			artist_name: artist,
+			track_title: title,
+			album_title: track.album_name || null,
+			duration_seconds
 		});
 	}
 	return plan;
@@ -136,7 +142,8 @@ export function planMissingRequests(tracks: PlaylistTrack[]): MissingPlan {
 
 export async function requestMissingTracks(tracks: PlaylistTrack[]): Promise<BatchRequestResult> {
 	const plan = planMissingRequests(tracks);
-	if (plan.tracks.length === 0 && plan.albums.length === 0) {
+	const total = plan.tracks.length + plan.wants.length;
+	if (total === 0) {
 		return {
 			success: true,
 			message: 'Nothing missing: every track is in your library or has a source',
@@ -146,27 +153,21 @@ export async function requestMissingTracks(tracks: PlaylistTrack[]): Promise<Bat
 	}
 	let requested = 0;
 	let skipped = 0;
-	for (const body of plan.tracks) {
+	const tally = async (asked: Promise<unknown>) => {
 		try {
-			await api.v3.POST(v3('/api/v3/requests/tracks'), body);
+			await asked;
 			requested += 1;
 		} catch {
 			skipped += 1;
 		}
-	}
-	if (plan.albums.length > 0) {
-		const data = await api.v3.POST(v3('/api/v3/requests/batches'), { items: plan.albums });
-		requested += data.requested;
-		skipped += data.skipped;
-	}
-	const parts: string[] = [];
-	if (plan.tracks.length)
-		parts.push(`${plan.tracks.length} ${plan.tracks.length === 1 ? 'track' : 'tracks'}`);
-	if (plan.albums.length)
-		parts.push(`${plan.albums.length} ${plan.albums.length === 1 ? 'album' : 'albums'}`);
+	};
+	for (const body of plan.tracks) await tally(api.v3.POST(v3('/api/v3/requests/tracks'), body));
+	for (const body of plan.wants) await tally(api.v3.POST(v3('/api/v3/requests/wants'), body));
 	return {
 		success: skipped === 0,
-		message: `Requested ${parts.join(' and ')}` + (skipped ? ` (${skipped} skipped)` : ''),
+		message:
+			`Requested ${total} ${total === 1 ? 'track' : 'tracks'}` +
+			(skipped ? ` (${skipped} skipped)` : ''),
 		requested,
 		skipped
 	};

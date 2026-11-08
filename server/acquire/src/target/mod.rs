@@ -307,7 +307,8 @@ impl Targets {
                 track_number: 0,
                 disc_number: 1,
                 duration_seconds: None,
-                recording_mbid: Some(recording.clone()),
+                recording_mbid: Some(recording.clone())
+                    .filter(|id| !crate::requests::ledger::is_want_key(id)),
                 title: Some(title.clone()),
                 release_track_mbid: None,
             }],
@@ -323,6 +324,11 @@ impl Targets {
             tracing::warn!(task_id = %task.id, %error, "track album lookup failed");
             TargetError::Unavailable(TrackReason::AlbumLookupUnavailable)
         };
+        // Asked for by name (fork): no recording to look up, so the track
+        // is searched for on its own and its files wait in review.
+        if crate::requests::ledger::is_want_key(&recording) {
+            return Ok(lone(TrackReason::RecordingUnknown));
+        }
         let candidates = match lookup
             .recording_releases(&recording)
             .await
