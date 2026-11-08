@@ -1466,6 +1466,8 @@ async fn spotify_sqlite_stores_persist_and_expire() {
         duration: Some(183),
         cover_url: None,
         recording_mbid: None,
+        spotify_track_id: Some("4uLU6hMCjMI75M1A2tKUQC".to_owned()),
+        isrc: Some("USUM71703861".to_owned()),
     };
     for _ in 0..2 {
         bridge
@@ -1478,6 +1480,14 @@ async fn spotify_sqlite_stores_persist_and_expire() {
         rusqlite::params![&id],
     );
     assert_eq!(rows, 2);
+    // Fork: each entry keeps the provider's ids; replaced entries take
+    // theirs with them.
+    let ids: (i64, i64) = db.db().row(
+        "SELECT COUNT(*), SUM(spotify_track_id = '4uLU6hMCjMI75M1A2tKUQC' \
+         AND isrc = 'USUM71703861') FROM catalog_playlist_entry_identities",
+        [],
+    );
+    assert_eq!(ids, (2, 2));
     assert_eq!(
         bridge.source_refs_for("u1").await.expect("reads"),
         vec![("spotify:p1".to_owned(), id)]

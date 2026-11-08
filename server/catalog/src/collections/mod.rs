@@ -10,6 +10,7 @@ pub mod db;
 pub mod error;
 pub mod handlers;
 pub mod http;
+pub mod linker;
 pub mod models;
 pub mod remote_import;
 pub mod service;

@@ -116,6 +116,10 @@ pub struct NewEntry {
     /// The recording `source_type` gave for this entry, lowercase, when
     /// known.
     pub recording_mbid: Option<String>,
+    /// Fork: the provider's track id, when the entry came from Spotify.
+    pub spotify_track_id: Option<String>,
+    /// Fork: the track's ISRC, upper case, when the provider gave one.
+    pub isrc: Option<String>,
 }
 
 /// Uploaded cover bytes.
@@ -239,6 +243,8 @@ fn track_from_row(row: &Row<'_>) -> rusqlite::Result<PlaylistTrack> {
         plex_rating_key: row.get(16)?,
         library_file_id: row.get(17)?,
         recording_mbid: row.get(18)?,
+        spotify_track_id: row.get(19)?,
+        isrc: row.get(20)?,
     })
 }
 
@@ -410,6 +416,12 @@ fn insert_entries(
             entry.library_file_id,
             entry.recording_mbid,
         ])?;
+        if entry.spotify_track_id.is_some() || entry.isrc.is_some() {
+            tx.execute(
+                sql::INSERT_ENTRY_IDENTITY.text(),
+                params![id, entry.spotify_track_id, entry.isrc],
+            )?;
+        }
         added.push(id);
     }
     drop(stmt);
@@ -422,6 +434,19 @@ impl PlaylistStore {
     /// Store over one database.
     pub fn new(db: CollectionsDb) -> Self {
         Self { db }
+    }
+
+    /// Fork: link every entry the library can now play to its track
+    /// ([`sql::LINK_LIBRARY`]), across all playlists. Answers how many
+    /// entries were linked. Runs on the linker loop and after an import
+    /// fills a playlist, so a download that lands shows on its playlists
+    /// without anyone adding it by hand.
+    pub async fn link_library(&self) -> Result<usize, StoreError> {
+        self.db
+            .write("playlists.link_library", move |tx| {
+                Ok(tx.execute(sql::LINK_LIBRARY.text(), [])?)
+            })
+            .await
     }
 
     /// One user's own playlists, to read and change.

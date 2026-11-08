@@ -808,10 +808,12 @@ impl ImportSpec for PinnedEdition {
         };
         // The album copy of a single the person chose to take from its
         // album names the album's release, not another edition.
+        // Fork: so does a sibling edition's copy set aside to pair with the
+        // pin (`matching::take_sibling_copies`); the album gates judge it.
         let album_copy = |index: &usize| {
-            subject
-                .matched
-                .is_some_and(|matched| matched.album_copies.contains_key(index))
+            subject.matched.is_some_and(|matched| {
+                matched.album_copies.contains_key(index) || matched.sibling_copies.contains(index)
+            })
         };
         let tagged: Vec<&str> = subject
             .landing

@@ -8201,3 +8201,94 @@ async fn a_held_want_file_imports_as_tagged_with_no_identity() {
         "{fields:?}"
     );
 }
+
+/// Fork: with a pinned edition, a copy tagged as a sibling edition of the
+/// same group (its own recordings in MusicBrainz, as a digital and a CD
+/// release often have) whose tracks line up is placed as the pin instead of
+/// held as contradicting it. A copy tagged as another group's release is
+/// still held.
+#[tokio::test]
+async fn a_sibling_edition_copy_lands_as_the_pinned_edition() {
+    let lengths = fixture_lengths();
+    let e = editions(31, &lengths);
+    let pinned = e.old.clone();
+    let mut sibling = e.new2.clone();
+    for (n, track) in sibling.tracks.iter_mut().enumerate() {
+        track.recording_id = mb(31, 5, n as u16);
+    }
+    let mut other = e.other.clone();
+    for (n, track) in other.tracks.iter_mut().enumerate() {
+        track.recording_id = mb(31, 6, n as u16);
+    }
+    let rig = join_rig(vec![pinned.clone(), sibling.clone(), other.clone()]).await;
+    let tag_as = |path: &Path, release: &Release, index: usize| {
+        let track = &release.tracks[index];
+        let tag = |field, value: &str| TagEdit::new(field, vec![value.to_owned()]);
+        save_tags(
+            path,
+            &[
+                tag(TagField::MusicBrainzReleaseId, &release.id),
+                tag(
+                    TagField::MusicBrainzReleaseGroupId,
+                    &release.release_group_id,
+                ),
+                tag(TagField::MusicBrainzRecordingId, &track.recording_id),
+                tag(TagField::MusicBrainzReleaseTrackId, &track.id),
+            ],
+        )
+        .expect("ids tagged");
+    };
+    let copy = |task: &str, release: &Release| -> Vec<PathBuf> {
+        (0..2)
+            .map(|index| {
+                let path = rig.landed(task, &pinned, index, FIXTURES[index]);
+                tag_as(&path, release, index);
+                path
+            })
+            .collect()
+    };
+
+    rig.ask(
+        "t-sib",
+        &e.group,
+        &pinned.title,
+        "user",
+        Some(&pinned.id),
+        None,
+        &[],
+    )
+    .await;
+    rig.land(copy("t-sib", &sibling)).await;
+    assert_eq!(
+        decisions(&rig.acquire, "t-sib"),
+        vec![("imported".to_owned(), None)]
+    );
+
+    rig.ask(
+        "t-other",
+        &e.group,
+        &pinned.title,
+        "user",
+        Some(&pinned.id),
+        None,
+        &[],
+    )
+    .await;
+    let held = rig.acquire.landing.clone();
+    let paths = copy("t-other", &other);
+    let row = rig.task("t-other").await;
+    held.land(
+        &row,
+        None,
+        Landed {
+            mounts: vec![rig.downloads.clone().into()],
+            files: paths.into_iter().map(Reported::path).collect(),
+        },
+        false,
+    )
+    .await;
+    assert_ne!(
+        decisions(&rig.acquire, "t-other"),
+        vec![("imported".to_owned(), None)]
+    );
+}

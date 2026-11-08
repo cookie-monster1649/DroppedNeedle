@@ -273,6 +273,12 @@ impl DownloadWorker {
                 // the person decides. The source is not blamed.
                 self.settle_short(task, attempt, &report.result, now).await;
             }
+            LandingResult::Held { .. } if report.whole_copy => {
+                // Fork: the whole album came in and was held only on names
+                // or ids. Another source would most likely bring the same
+                // album again, so the task stops here for the person.
+                self.settle_short(task, attempt, &report.result, now).await;
+            }
             LandingResult::Held {
                 code: Reason::FormatNotListed,
                 detail,

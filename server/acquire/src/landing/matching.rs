@@ -69,6 +69,11 @@ pub struct MatchSummary {
     /// as a track of another group's release, by file index, with the
     /// recording their tags name. Matched without their ids.
     pub album_copies: HashMap<usize, String>,
+    /// Fork: with a pinned edition, files tagged as another edition of the
+    /// same group with the same track count, by file index. Matched
+    /// against the pin without their ids, so a copy of a sibling edition
+    /// is placed as the pinned one when its tracks line up.
+    pub sibling_copies: Vec<usize>,
 }
 
 impl MatchSummary {
@@ -221,10 +226,11 @@ pub async fn find(
     let recalled = async {
         let releases = recall(library, target, &local).await?;
         let album_copies = take_album_copies(library, target, &mut local, &releases).await?;
+        let sibling_copies = take_sibling_copies(library, target, &mut local, &releases).await?;
         let aliases = merged_recordings(library, &local, &releases, PRIORITY).await?;
-        Ok::<_, String>((releases, aliases, album_copies))
+        Ok::<_, String>((releases, aliases, album_copies, sibling_copies))
     };
-    let (releases, aliases, album_copies) = match recalled.await {
+    let (releases, aliases, album_copies, sibling_copies) = match recalled.await {
         Ok(recalled) => recalled,
         Err(detail) => {
             return MatchSummary {
@@ -233,13 +239,75 @@ pub async fn find(
                 considered: Vec::new(),
                 owned,
                 album_copies: HashMap::new(),
+                sibling_copies: Vec::new(),
             };
         }
     };
     let mut summary = choose(&local, releases, &aliases, target);
     summary.owned = owned;
     summary.album_copies = album_copies;
+    summary.sibling_copies = sibling_copies;
     summary
+}
+
+/// Fork: with a pinned edition, files whose tags name another edition of
+/// the same release group with as many tracks are that edition's copy of
+/// the album (a digital and a CD release, say, each with its own
+/// recordings in MusicBrainz). Their MusicBrainz ids are set aside so they
+/// pair with the pin by title and length, and the album's usual gates
+/// (distance, names, every track) decide. Another group, or a tracklist of
+/// another length (a deluxe pressing), keeps its ids and contradicts the
+/// pin as before. Answers the file indexes set aside.
+async fn take_sibling_copies(
+    library: &dyn LandingLibrary,
+    target: &Target,
+    local: &mut LocalAlbum,
+    releases: &[Release],
+) -> Result<Vec<usize>, String> {
+    let mut copies = Vec::new();
+    if target.is_track || target.release_group_mbid.is_empty() {
+        return Ok(copies);
+    }
+    let Some(pin) = target.release_mbid.as_deref() else {
+        return Ok(copies);
+    };
+    let Some(pinned) = releases.iter().find(|release| release.answers_to(pin)) else {
+        return Ok(copies);
+    };
+    let Some(tagged) = local.tagged_release() else {
+        return Ok(copies);
+    };
+    if pinned.answers_to(&tagged) {
+        return Ok(copies);
+    }
+    let Some(sibling) = library
+        .release(&tagged, PRIORITY)
+        .await
+        .map_err(|error| error.0)?
+    else {
+        return Ok(copies);
+    };
+    if !sibling
+        .release_group_id
+        .eq_ignore_ascii_case(&target.release_group_mbid)
+        || sibling.tracks.len() != pinned.tracks.len()
+    {
+        return Ok(copies);
+    }
+    for (index, track) in local.tracks.iter_mut().enumerate() {
+        if !track
+            .release_mbid
+            .as_deref()
+            .is_some_and(|id| sibling.answers_to(id))
+        {
+            continue;
+        }
+        track.recording_mbid = None;
+        track.release_track_mbid = None;
+        track.release_mbid = None;
+        copies.push(index);
+    }
+    Ok(copies)
 }
 
 /// For a single the person chose to take from its album: files tagged as
@@ -605,6 +673,7 @@ pub fn choose(
             considered: Vec::new(),
             owned: OwnedTracks::default(),
             album_copies: HashMap::new(),
+            sibling_copies: Vec::new(),
         };
     }
     let scored: Vec<ReleaseMatch> = releases
@@ -630,6 +699,7 @@ pub fn choose(
             considered,
             owned: OwnedTracks::default(),
             album_copies: HashMap::new(),
+            sibling_copies: Vec::new(),
         };
     };
     let tagged = local.tagged_release();
@@ -663,6 +733,7 @@ pub fn choose(
             considered,
             owned: OwnedTracks::default(),
             album_copies: HashMap::new(),
+            sibling_copies: Vec::new(),
         };
     };
     let mut releases = releases;
@@ -676,6 +747,7 @@ pub fn choose(
         considered,
         owned: OwnedTracks::default(),
         album_copies: HashMap::new(),
+        sibling_copies: Vec::new(),
     }
 }
 
