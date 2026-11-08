@@ -19512,6 +19512,8 @@ export interface components {
             format?: string | null;
             /** @description Track row id. */
             id: string;
+            /** @description Fork: the track's ISRC, when the provider gave one. */
+            isrc?: string | null;
             /** @description Local library file id, when the track resolved locally. */
             library_file_id?: string | null;
             /** @description Plex rating key, when the track came from Plex. */
@@ -19525,6 +19527,8 @@ export interface components {
             recording_mbid?: string | null;
             /** @description Preferred source type, empty when unresolved. */
             source_type: string;
+            /** @description Fork: the Spotify track id, when the entry came from Spotify. */
+            spotify_track_id?: string | null;
             /** @description Track title. */
             track_name: string;
             /**

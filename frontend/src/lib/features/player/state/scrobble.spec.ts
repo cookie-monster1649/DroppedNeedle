@@ -131,7 +131,9 @@ describe('a queue item reaches the scrobble', () => {
 				created_at: '2026-01-01T00:00:00Z',
 				plex_rating_key: null,
 				library_file_id: 'track-1',
-				recording_mbid: RECORDING
+				recording_mbid: RECORDING,
+				spotify_track_id: null,
+				isrc: null
 			};
 			const local = playlistTrackToQueueItem(entry);
 			expect(local && submitted(local)).toMatchObject({ source: 'local', track_id: 'track-1' });

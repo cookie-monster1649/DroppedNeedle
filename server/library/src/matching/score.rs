@@ -448,16 +448,21 @@ fn names_agree(local: &LocalAlbum, release: &Release, various: bool, pairs: &[Tr
                 .iter()
                 .any(|pair| pair.local == index && pair.support == Support::EmbeddedId)
         });
-    let title_ok = string_dist(
+    let title_named = string_dist(
         &strip_edition_words(&local.title),
         &strip_edition_words(&release.title),
-    ) <= NAME_GATE
-        || proven;
+    ) <= NAME_GATE;
+    let title_ok = title_named || proven;
+    // Fork: a joint album ("Anderson .Paak & Cordae") whose files credit
+    // one of its artists agrees when the album title does and every file
+    // pairs with a track, as it does when embedded ids prove the files.
+    let whole = !local.tracks.is_empty()
+        && (0..local.tracks.len()).all(|index| pairs.iter().any(|pair| pair.local == index));
     let release_artist = release.artist_text();
     let artist_ok = various
         || local.artist.trim().is_empty()
         || artist_dist(&local.artist, &release_artist) <= NAME_GATE
-        || (proven && artist_subset(&local.artist, &release_artist));
+        || ((proven || (title_named && whole)) && artist_subset(&local.artist, &release_artist));
     title_ok && artist_ok
 }
 
@@ -813,5 +818,49 @@ mod tests {
         };
         assert!(!match_release(&album(None), &release, &HashMap::new()).names_agree);
         assert!(match_release(&album(Some("recording-1")), &release, &HashMap::new()).names_agree);
+    }
+
+    /// Fork: a joint album whose files credit one of its artists agrees
+    /// when the title agrees and every file pairs; a file the release does
+    /// not carry, or another album title, still disagrees.
+    #[test]
+    fn a_joint_album_agrees_with_one_credited_artist() {
+        let credit = |name: &str, join: &str| crate::matching::CreditedArtist {
+            name: name.to_owned(),
+            join: join.to_owned(),
+            ..crate::matching::CreditedArtist::default()
+        };
+        let release = Release {
+            title: "Heavy Is the Crown".to_owned(),
+            artists: vec![credit("Anderson .Paak", " & "), credit("Cordae", "")],
+            ..release_of(&[("58th Floor", 175), ("Airbender", 89)])
+        };
+        let file = |n: u32, title: &str, secs: f64| LocalTrack {
+            id: format!("t{n}"),
+            title: title.to_owned(),
+            track_number: n,
+            disc_number: 1,
+            duration_secs: Some(secs),
+            ..LocalTrack::default()
+        };
+        let album = |title: &str, tracks: Vec<LocalTrack>| LocalAlbum {
+            title: title.to_owned(),
+            artist: "Anderson .Paak".to_owned(),
+            tracks,
+            ..LocalAlbum::default()
+        };
+        let both = || vec![file(1, "58th Floor", 175.0), file(2, "Airbender", 89.0)];
+        let agree =
+            |local: &LocalAlbum| match_release(local, &release, &HashMap::new()).names_agree;
+        assert!(agree(&album("Heavy Is the Crown", both())));
+        assert!(!agree(&album("Malibu", both())));
+        let mut extra = both();
+        extra.push(file(3, "Come Down", 175.0 + 60.0));
+        assert!(!agree(&album("Heavy Is the Crown", extra)));
+        let other = LocalAlbum {
+            artist: "Cordae Tribute Band".to_owned(),
+            ..album("Heavy Is the Crown", both())
+        };
+        assert!(!agree(&other));
     }
 }

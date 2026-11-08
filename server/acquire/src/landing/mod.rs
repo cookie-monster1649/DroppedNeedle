@@ -157,6 +157,11 @@ pub struct LandingReport {
     /// Files the recipe does not list were not copied because the album
     /// already holds a set of them.
     pub format_set_held: bool,
+    /// Fork: the files were held only on names or ids, though they pair
+    /// with every track of the release and carry nothing else. Another
+    /// source would most likely be the same album again, so the task stops
+    /// for the person instead of fetching another copy.
+    pub whole_copy: bool,
 }
 
 /// What an import that discarded the album's held set of unlisted files says.
@@ -188,6 +193,8 @@ struct Acted {
     imported_sources: Vec<PathBuf>,
     /// See [`LandingReport::format_set_held`].
     format_set_held: bool,
+    /// See [`LandingReport::whole_copy`].
+    whole_copy: bool,
     /// What a person reads about a clean import.
     note: Option<String>,
 }
@@ -202,6 +209,7 @@ impl Acted {
             local_only: false,
             imported_sources: Vec::new(),
             format_set_held: false,
+            whole_copy: false,
             note: None,
         }
     }
@@ -469,8 +477,12 @@ impl LandingService {
                         .await
                     }
                     _ => {
+                        let whole_copy = whole_copy(&decision, &matched);
                         let held = self.hold_decided(task, &target, &landing, &decision).await;
-                        Acted::holding(decision, held)
+                        Acted {
+                            whole_copy,
+                            ..Acted::holding(decision, held)
+                        }
                     }
                 }
             }
@@ -723,6 +735,7 @@ impl LandingService {
             // Short with nothing left to ask a source for: local holds.
             local_only: !complete && last.missing_positions.trim() == "[]",
             format_set_held: false,
+            whole_copy: false,
         }))
     }
 
@@ -990,6 +1003,7 @@ impl LandingService {
             local_only,
             imported_sources,
             format_set_held: false,
+            whole_copy: false,
             note: None,
         }
     }
@@ -1098,6 +1112,7 @@ impl LandingService {
             local_only,
             imported_sources,
             format_set_held,
+            whole_copy,
             note,
         } = acted;
         let result = match &decision.outcome {
@@ -1195,8 +1210,30 @@ impl LandingService {
             files_held: held,
             local_only,
             format_set_held,
+            whole_copy,
         }
     }
+}
+
+/// Fork: a weak-match hold on the album's names alone. The files pair with
+/// every track of the matched release, carry nothing beyond it, and are
+/// close enough as a whole to import but for the album title or artist.
+/// Files that name other tracks are far from the release and are not this.
+fn whole_copy(decision: &Decision, matched: &MatchSummary) -> bool {
+    matches!(
+        &decision.outcome,
+        Outcome::Hold {
+            code: Reason::WeakMatch,
+            ..
+        }
+    ) && matched.best().is_some_and(|found| {
+        !found.scored.names_agree
+            && !found.scored.pairs.is_empty()
+            && found.scored.missing.is_empty()
+            && found.scored.unmatched.is_empty()
+            && found.scored.library_distance()
+                <= droppedneedle_library::matching::decide::ACCEPT_ALBUM
+    })
 }
 
 /// What the task asked for, from its row, details, and plan.

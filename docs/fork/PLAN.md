@@ -25,6 +25,22 @@ Provider-independent catalogue and Spotify-to-collection pipeline" v0.1
    `feat.` and noise brackets but with distinctive version words kept
    (Live, Remix, VIP, Edit…); rungs per co-credited artist. Never a year.
 
+3. Landing match (Heavy Is the Crown, Nov 2026: one album fetched three
+   times, each good copy held and the next source tried):
+   - `matching::score::names_agree`: a joint album ("Anderson .Paak &
+     Cordae") agrees with files crediting one of its artists when the album
+     title agrees and every file pairs with a track (before, only when
+     embedded ids proved the files).
+   - `landing::matching::take_sibling_copies`: with a pinned edition, files
+     tagged as another edition of the same group with as many tracks have
+     their MusicBrainz ids set aside and are judged against the pin by title
+     and length; `PinnedEdition` skips them. Another group, or another track
+     count, still contradicts.
+   - `LandingReport::whole_copy`: a weak-match hold on the album's names
+     alone (every track paired, nothing extra, distance within
+     `ACCEPT_ALBUM`) stops the task for a person instead of fetching another
+     copy. Files that name other tracks still fail over.
+
 Not ported from v2 (`nuc/v2.15.0-fixes`): 9550f0b2c (#532) and 485731878
 (#527). v3's importer places files against a chosen release with explicit
 track assignment (`acquire/src/intake/place.rs`), so the v2 root causes
@@ -86,8 +102,18 @@ any future provider (Deezer, Tidal, Bandcamp): add a variant to
 once playlist rows store them (Slice B).
 
 ### Slice B – Phase 1b: playlist reconciliation (#204)
-- Link `catalog_playlist_tracks` to `local_tracks` (existing
-  `library_file_id`, `recording_mbid`) and store the Spotify track ID + ISRC.
+- B1 (done): the playlist linker (`catalog::collections::linker`, every two
+  minutes, and after each Spotify import) sets `library_file_id` on entries
+  the library can play: same MusicBrainz recording, or the same Spotify
+  track / ISRC among the track's `local_entity_source_links`. v3 only
+  linked entries added by hand, so landed downloads never showed on their
+  playlist (nor in Subsonic/Jellyfin playlists).
+- B2 (done): `catalog_playlist_entry_identities` (chain `catalog` 0002)
+  keeps each imported entry's Spotify track ID and ISRC; the API returns
+  them and playlist wants send them.
+- B3 (next): a want whose download matches the ask by name and length
+  imports by itself (the ask is the release checked against), instead of
+  waiting in To Decide; a weak one is held and the task stops.
 - Per-row status (owned / requested / held / missing / unresolved) and
   counters on the playlist page.
 - "Request missing" sends **track** requests (request_kind `track` exists),

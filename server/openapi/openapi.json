@@ -56991,6 +56991,13 @@
             "type": "string",
             "description": "Track row id."
           },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fork: the track's ISRC, when the provider gave one."
+          },
           "library_file_id": {
             "type": [
               "string",
@@ -57020,6 +57027,13 @@
           "source_type": {
             "type": "string",
             "description": "Preferred source type, empty when unresolved."
+          },
+          "spotify_track_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fork: the Spotify track id, when the entry came from Spotify."
           },
           "track_name": {
             "type": "string",

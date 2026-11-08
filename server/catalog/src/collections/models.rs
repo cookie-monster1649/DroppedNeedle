@@ -52,6 +52,12 @@ pub struct PlaylistTrack {
     /// The MusicBrainz recording `source_type` gave for this entry, when
     /// known.
     pub recording_mbid: Option<String>,
+    /// Fork: the Spotify track id, when the entry came from Spotify.
+    #[serde(default)]
+    pub spotify_track_id: Option<String>,
+    /// Fork: the track's ISRC, when the provider gave one.
+    #[serde(default)]
+    pub isrc: Option<String>,
 }
 
 /// Playlist summary for lists and visibility answers.

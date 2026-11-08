@@ -188,6 +188,8 @@ fn to_entry(input: &TrackInput) -> Result<NewEntry, CollectionsError> {
         plex_rating_key: input.plex_rating_key.clone(),
         library_file_id,
         recording_mbid: input.recording_mbid.as_deref().and_then(clean_recording),
+        spotify_track_id: None,
+        isrc: None,
     })
 }
 

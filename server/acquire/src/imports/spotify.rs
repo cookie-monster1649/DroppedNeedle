@@ -44,6 +44,10 @@ pub struct ImportedTrack {
     /// The recording the track's ISRC names on the proven release group,
     /// lowercase, when there is one: what a per-track request asks for.
     pub recording_mbid: Option<String>,
+    /// Fork: the Spotify track id, when Spotify gave a valid one.
+    pub spotify_track_id: Option<String>,
+    /// Fork: the track's ISRC, normalised, when Spotify gave a valid one.
+    pub isrc: Option<String>,
 }
 
 /// What a Spotify import step fails with.
@@ -291,6 +295,15 @@ impl SpotifyImportService {
                     duration: track.duration_ms.map(|ms| ms / 1000),
                     cover_url,
                     recording_mbid,
+                    spotify_track_id: track
+                        .id
+                        .as_deref()
+                        .and_then(crate::requests::identities::normalize_spotify_track),
+                    isrc: track
+                        .external_ids
+                        .as_ref()
+                        .and_then(|ids| ids.isrc.as_deref())
+                        .and_then(crate::requests::identities::normalize_isrc),
                 }
             })
             .collect();
