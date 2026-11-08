@@ -1111,9 +1111,19 @@ impl HeldService {
         }
         let first = &files[0];
         let (task, target) = self.task_target(first).await?;
-        let (release, join) = self
-            .release_for(&library, entry, first, target.as_ref(), asker.priority())
-            .await?;
+        // Fork: a track asked for by name has no release to place it on;
+        // its files go in as tagged, on a release made from the ask.
+        let want = entry.origin == EntryOrigin::Download
+            && entry
+                .recording_mbid
+                .as_deref()
+                .is_some_and(crate::requests::ledger::is_want_key);
+        let (release, join) = if want {
+            (want_release(entry, target.as_ref(), files.len()), None)
+        } else {
+            self.release_for(&library, entry, first, target.as_ref(), asker.priority())
+                .await?
+        };
         let mut batch_files = Vec::with_capacity(files.len());
         let mut pairing = intake::Pairing::default();
         for (index, (file, path)) in files.iter().zip(&paths).enumerate() {
@@ -1126,7 +1136,12 @@ impl HeldService {
                         .to_owned(),
                 ));
             };
-            let track = track_on(&release, &file.pairing).ok_or_else(|| {
+            let track = if want {
+                Some(index)
+            } else {
+                track_on(&release, &file.pairing)
+            };
+            let track = track.ok_or_else(|| {
                 HeldError::Refused(
                     "This track is not on the edition chosen for the album. Choose the edition \
                      it belongs to on the album page, or discard the file."
@@ -2059,6 +2074,53 @@ async fn probe_held(path: &Path) -> Option<LandedFile> {
 
 /// The track of `release` a held file was paired to: by release track,
 /// else by recording.
+/// The release a want's files are placed on (fork): no MusicBrainz ids, so
+/// no identity is sealed and the album is offered to identification. One
+/// track per file, titled from the ask; a lone track with no album named
+/// is its own single.
+fn want_release(entry: &Entry, target: Option<&specs::Target>, files: usize) -> Release {
+    use droppedneedle_library::matching::{CreditedArtist, ReleaseTrack};
+    let artist = entry
+        .artist_name
+        .clone()
+        .or_else(|| target.map(|target| target.artist_name.clone()))
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "Unknown Artist".to_owned());
+    let title = target
+        .and_then(|target| target.track_title.clone())
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| "Unknown Track".to_owned());
+    let album = entry
+        .album_title
+        .clone()
+        .filter(|album| !album.trim().is_empty() && album != "Single track");
+    let single = album.is_none();
+    let credit = vec![CreditedArtist {
+        name: artist,
+        ..CreditedArtist::default()
+    }];
+    let tracks = (0..files)
+        .map(|index| {
+            let position = u32::try_from(index + 1).unwrap_or(u32::MAX);
+            ReleaseTrack {
+                title: title.clone(),
+                artists: credit.clone(),
+                disc: 1,
+                position,
+                absolute_position: position,
+                ..ReleaseTrack::default()
+            }
+        })
+        .collect();
+    Release {
+        title: album.unwrap_or_else(|| title.clone()),
+        artists: credit,
+        primary_type: Some(if single { "Single" } else { "Album" }.to_owned()),
+        tracks,
+        ..Release::default()
+    }
+}
+
 fn track_on(release: &Release, pairing: &Pairing) -> Option<usize> {
     let same = |left: &str, right: Option<&str>| {
         right.is_some_and(|right| !right.is_empty() && left.eq_ignore_ascii_case(right))
