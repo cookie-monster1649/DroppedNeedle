@@ -24,6 +24,7 @@
 
 pub mod http;
 pub mod service;
+pub mod spotify_match;
 pub mod sql;
 pub mod store;
 

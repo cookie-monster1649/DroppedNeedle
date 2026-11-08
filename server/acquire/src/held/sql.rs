@@ -96,6 +96,28 @@ droppedneedle_kernel::sql! {
              AND e.recording_mbid LIKE 'want-%' AND f.state = 'held' \
              AND f.reason = 'no_release' AND COALESCE(f.recording_mbid, '') = '' \
              AND COALESCE(f.release_track_mbid, '') = '' ORDER BY e.id LIMIT ?1";
+    /// Fork: songs of user `?1`'s playlists imported from Spotify whose
+    /// title or artist holds `?2` (lowercased, `%`-wrapped), one per song,
+    /// at most `?3`: entry id, title, artist, album, length (ms), cover,
+    /// Spotify track id, ISRC.
+    pub(super) SPOTIFY_CANDIDATES = "SELECT t.id, t.track_name, t.artist_name, t.album_name, \
+             t.duration_ms, t.cover_url, i.spotify_track_id, i.isrc \
+             FROM catalog_playlist_tracks t \
+             JOIN catalog_playlists p ON p.id = t.playlist_id \
+             LEFT JOIN catalog_playlist_entry_identities i ON i.entry_id = t.id \
+             WHERE p.user_id = ?1 AND p.source_ref LIKE 'spotify:%' \
+             AND (lower(t.track_name) LIKE ?2 OR lower(t.artist_name) LIKE ?2 \
+                  OR lower(t.artist_name || ' ' || t.track_name) LIKE ?2) \
+             GROUP BY lower(t.track_name), lower(t.artist_name) \
+             ORDER BY lower(t.track_name) LIMIT ?3";
+    /// Fork: one song of user `?1`'s Spotify playlists, by entry id `?2`,
+    /// as [`SPOTIFY_CANDIDATES`] answers it.
+    pub(super) SPOTIFY_CANDIDATE = "SELECT t.id, t.track_name, t.artist_name, t.album_name, \
+             t.duration_ms, t.cover_url, i.spotify_track_id, i.isrc \
+             FROM catalog_playlist_tracks t \
+             JOIN catalog_playlists p ON p.id = t.playlist_id \
+             LEFT JOIN catalog_playlist_entry_identities i ON i.entry_id = t.id \
+             WHERE p.user_id = ?1 AND p.source_ref LIKE 'spotify:%' AND t.id = ?2";
     /// Fork: the identities of want `?1` (provider, id), as the requests
     /// area kept them.
     pub(super) WANT_IDENTITIES = "SELECT provider, external_id FROM acquire_want_identities \

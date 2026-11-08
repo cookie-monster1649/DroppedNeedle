@@ -2777,6 +2777,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/held/{entry_id}/match-spotify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork: import a held entry's files as a song from the owner's Spotify
+         *     playlists, tagged from Spotify's metadata with its Spotify id and ISRC.
+         *     `POST /api/v3/held/{entry_id}/match-spotify`.
+         */
+        post: operations["match_spotify_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/held/{entry_id}/recheck": {
         parameters: {
             query?: never;
@@ -2792,6 +2813,27 @@ export interface paths {
          *     `POST /api/v3/held/{entry_id}/recheck`.
          */
         post: operations["recheck_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/held/{entry_id}/spotify-candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: songs from the owner's playlists imported from Spotify that a held
+         *     entry's files could be matched to.
+         *     `GET /api/v3/held/{entry_id}/spotify-candidates`.
+         */
+        get: operations["spotify_candidates_handler"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -15344,6 +15386,12 @@ export interface components {
          * @enum {string}
          */
         HeldRecheckStatus: "imported" | "still_held" | "error";
+        /** @description Fork: the Spotify song picked, and the files it takes (all when left out). */
+        HeldSpotifyMatchRequest: {
+            /** @description The playlist entry the song was read from. */
+            entry_id: string;
+            file_ids?: number[] | null;
+        };
         /**
          * @description How much of one release group the library holds, over every album that
          *     owns it: their tracks add up, to the edition's count at most.
@@ -23653,6 +23701,23 @@ export interface components {
             /** @description `accounts.spotify.com/authorize` URL with state. */
             auth_url: string;
         };
+        /** @description A song from the owner's Spotify playlists a held file can be matched to. */
+        SpotifyCandidate: {
+            album?: string | null;
+            artist: string;
+            cover_url?: string | null;
+            /** Format: double */
+            duration_seconds?: number | null;
+            /** @description The playlist entry it was read from (what a match names). */
+            entry_id: string;
+            isrc?: string | null;
+            spotify_track_id?: string | null;
+            title: string;
+        };
+        /** @description Fork: Spotify songs a held entry's files could be matched to. */
+        SpotifyCandidatesResponse: {
+            candidates: components["schemas"]["SpotifyCandidate"][];
+        };
         /** @description Import start. */
         SpotifyImportRequest: {
             /** @description Name for the internal playlist record. */
@@ -31337,6 +31402,32 @@ export interface operations {
             };
         };
     };
+    match_spotify_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Held entry id */
+                entry_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HeldSpotifyMatchRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HeldActionResponse"];
+                };
+            };
+        };
+    };
     recheck_handler: {
         parameters: {
             query?: never;
@@ -31359,6 +31450,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HeldActionResponse"];
+                };
+            };
+        };
+    };
+    spotify_candidates_handler: {
+        parameters: {
+            query?: {
+                /** @description Words of the title or artist; the held file's title when left out. */
+                q?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Held entry id */
+                entry_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifyCandidatesResponse"];
                 };
             };
         };

@@ -1,3 +1,13 @@
+> [!WARNING]
+> **This is an AI vibe-coded fork** of [DroppedNeedle](https://github.com/DroppedNeedle/DroppedNeedle), built with AI coding tools rather than written by hand, and not affiliated with or supported by the upstream project. It adds deeper Spotify integration:
+>
+> - **Spotify metadata:** songs from Spotify import with Spotify's title, artist, album, ISRC and Spotify link, even when MusicBrainz doesn't know them. A download that agrees with Spotify's details imports by itself, and held files can be matched to a Spotify song by hand.
+> - **Playlist syncing:** playlists imported from Spotify are labelled as such, can follow Spotify, and new songs added there are requested automatically.
+> - **Playlist status:** each song shows whether it's in your library, missing, fetching, waiting for a decision or failed, with a request button per row.
+> - **And more:** track requests without a MusicBrainz ID, playlist songs linking to library copies as they land, and fixes to edition and match handling.
+>
+> The fork's plan and notes are in [docs/fork/PLAN.md](docs/fork/PLAN.md). Report problems with this fork here, not upstream.
+
 <div align="center">
 
 <img src="Images/logo_wide.png" alt="DroppedNeedle" width="400" />
