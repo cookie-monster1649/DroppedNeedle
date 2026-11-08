@@ -89,6 +89,11 @@ impl SpotifySyncs {
         Self { db }
     }
 
+    /// The database the settings live in (the playlist row states read it).
+    pub fn db(&self) -> &AcquireDb {
+        &self.db
+    }
+
     /// The setting of `user_id`'s playlist `playlist_id`; `Ok(None)` when it
     /// is not synced (a playlist not from Spotify never is), `Err` with
     /// [`SyncSettingError::NotFound`] when it is not their playlist.

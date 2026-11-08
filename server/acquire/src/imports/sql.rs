@@ -46,4 +46,19 @@ droppedneedle_kernel::sql! {
     /// Fork: a playlist owner's role and the name their requests show.
     pub(super) SYNC_OWNER = "SELECT role, COALESCE(username_display, username) \
              FROM auth_users WHERE id = ?1";
+    /// Fork: the entries of playlist `?1`, user `?2`'s: id, recording,
+    /// artist, title, and whether the library plays it.
+    pub(super) ROW_ENTRIES = "SELECT t.id, t.recording_mbid, t.artist_name, t.track_name, \
+             t.library_file_id IS NOT NULL FROM catalog_playlist_tracks t \
+             JOIN catalog_playlists p ON p.id = t.playlist_id \
+             WHERE t.playlist_id = ?1 AND p.user_id = ?2 ORDER BY t.position";
+    /// Fork: whether user `?1` has a file of track key `?2` (recording or
+    /// want key) waiting in the held list.
+    pub(super) ROW_HELD = "SELECT EXISTS (SELECT 1 FROM acquire_held_entries e \
+             JOIN acquire_held_files f ON f.entry_id = e.id \
+             WHERE e.user_id = ?1 AND e.state = 'held' AND f.state = 'held' \
+             AND (lower(e.recording_mbid) = ?2 OR lower(f.recording_mbid) = ?2))";
+    /// Fork: the request status of track key `?1`.
+    pub(super) ROW_REQUEST = "SELECT status FROM request_history \
+             WHERE musicbrainz_id_lower = 'track:' || ?1";
 }
