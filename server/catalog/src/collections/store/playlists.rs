@@ -126,6 +126,10 @@ pub struct NewEntry {
     /// The recording `source_type` gave for this entry, lowercase, when
     /// known.
     pub recording_mbid: Option<String>,
+    /// Fork: the provider's track id, when the entry came from Spotify.
+    pub spotify_track_id: Option<String>,
+    /// Fork: the track's ISRC, upper case, when the provider gave one.
+    pub isrc: Option<String>,
 }
 
 /// Uploaded cover bytes.
@@ -268,6 +272,8 @@ fn track_from_row(row: &Row<'_>) -> rusqlite::Result<PlaylistTrack> {
         plex_rating_key: row.get(16)?,
         library_file_id: row.get(17)?,
         recording_mbid: row.get(18)?,
+        spotify_track_id: row.get(19)?,
+        isrc: row.get(20)?,
     })
 }
 
@@ -551,6 +557,12 @@ fn insert_entries(
             entry.library_file_id,
             entry.recording_mbid,
         ])?;
+        if entry.spotify_track_id.is_some() || entry.isrc.is_some() {
+            tx.execute(
+                sql::INSERT_ENTRY_IDENTITY.text(),
+                params![id, entry.spotify_track_id, entry.isrc],
+            )?;
+        }
         added.push(id);
     }
     drop(stmt);

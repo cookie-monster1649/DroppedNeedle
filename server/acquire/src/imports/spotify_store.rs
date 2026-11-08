@@ -404,6 +404,8 @@ fn entry_for(track: &ImportedTrack) -> NewEntry {
             .and_then(|number| i32::try_from(number).ok()),
         duration: track.duration.map(|secs| secs as f64),
         recording_mbid: track.recording_mbid.clone(),
+        spotify_track_id: track.spotify_track_id.clone(),
+        isrc: track.isrc.clone(),
         ..NewEntry::default()
     }
 }

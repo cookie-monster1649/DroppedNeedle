@@ -239,7 +239,9 @@ describe('playlistTrackToQueueItem', () => {
 		created_at: '2026-01-01T00:00:00Z',
 		plex_rating_key: null,
 		library_file_id: null,
-		recording_mbid: null
+		recording_mbid: null,
+		spotify_track_id: null,
+		isrc: null
 	};
 
 	it('maps playlist rows to queue items, preferring a local copy, and skips rows with nothing to play', () => {

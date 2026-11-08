@@ -38,7 +38,10 @@ macro_rules! extension {
 /// library holds it, and the identities (ISRC, Spotify) it carries.
 pub static CATALOG: ExtensionChain = ExtensionChain {
     name: "catalog",
-    migrations: &[extension!(1, "catalog/0001_want_identities.sql")],
+    migrations: &[
+        extension!(1, "catalog/0001_want_identities.sql"),
+        extension!(2, "catalog/0002_playlist_entry_identities.sql"),
+    ],
 };
 
 /// Every extension chain, in the order they run.

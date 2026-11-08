@@ -4182,11 +4182,18 @@ mod extension_chains {
     #[test]
     fn shipped_extension_files_keep_their_bytes() {
         use sha2::{Digest, Sha256};
-        let shipped = [(
-            "catalog",
-            "catalog/0001_want_identities.sql",
-            "2a2c94efa770f1f25bf86c93d67a338140d2e1477c20c8e99d0b6da77048b70b",
-        )];
+        let shipped = [
+            (
+                "catalog",
+                "catalog/0001_want_identities.sql",
+                "2a2c94efa770f1f25bf86c93d67a338140d2e1477c20c8e99d0b6da77048b70b",
+            ),
+            (
+                "catalog",
+                "catalog/0002_playlist_entry_identities.sql",
+                "b402f82f51857771b8a5e0340f421b0112643b1b14bd6292565d4038dde11218",
+            ),
+        ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {
                 let pinned = shipped
