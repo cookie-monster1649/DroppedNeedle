@@ -8236,6 +8236,20 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
         vec![format!("t-right {WANT} -"), "t-wrong - -".to_owned()]
     );
 
+    // Held before the landing compared wants with the ask: nothing paired.
+    // The held loop checks it against the ask and pairs it.
+    acquire
+        .db
+        .write("test.unpair", |tx| {
+            tx.execute(
+                "UPDATE acquire_held_files SET recording_mbid = NULL, track_title = NULL",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("unpair");
+
     acquire.held.tend().await;
     let placed = files_under(&music, "flac");
     assert_eq!(

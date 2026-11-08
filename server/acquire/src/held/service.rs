@@ -1692,8 +1692,96 @@ impl HeldService {
     pub async fn tend(&self) -> usize {
         self.finish_cut_off().await;
         let expired = self.expire_due().await;
+        self.pair_wants().await;
         self.retry_due().await;
         expired
+    }
+
+    /// Fork: check a want's files nothing paired yet (held before the
+    /// landing compared them with the ask) against the ask, as the landing
+    /// now does (`landing::want::agrees`): the provider's title, artist and
+    /// length. A file that agrees is paired to the ask, and the retry
+    /// below files it; one that does not stays for a person.
+    async fn pair_wants(&self) {
+        let entries = match self
+            .read("held.unpaired_wants", |rows| {
+                rows.unpaired_wants(RETRY_BATCH)
+            })
+            .await
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(%error, "held wants to check unreadable");
+                return;
+            }
+        };
+        for entry_id in entries {
+            let Ok(Some(entry)) = self
+                .read("held.want_entry", move |rows| rows.entry(entry_id))
+                .await
+            else {
+                continue;
+            };
+            let Some(key) = entry.recording_mbid.clone() else {
+                continue;
+            };
+            for file in entry
+                .files
+                .iter()
+                .filter(|file| file.reason == Reason::NoRelease && !file.is_paired())
+            {
+                let Ok((_, Some(mut target))) = self.task_target(file).await else {
+                    continue;
+                };
+                // A task made before plans kept the asked length: read it
+                // from the want's request row.
+                if target.want_seconds.is_none() {
+                    let asked = key.clone();
+                    target.want_seconds = self
+                        .journal
+                        .read("held.want_duration", move |store| {
+                            store.want_duration(&asked)
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                }
+                if crate::landing::want::want_key(&target) != Some(key.as_str()) {
+                    continue;
+                }
+                let Ok(Some(path)) = self.on_disk(&entry, file).await else {
+                    continue;
+                };
+                let Some(landed) = probe_held(&path).await else {
+                    continue;
+                };
+                if !crate::landing::want::agrees(&target, &landed) {
+                    continue;
+                }
+                let pairing = Pairing {
+                    recording_mbid: Some(key.clone()),
+                    track_number: Some(1),
+                    disc_number: Some(1),
+                    track_title: target.track_title.clone(),
+                    expected_duration_seconds: target.want_seconds,
+                    ..Pairing::default()
+                };
+                let file_id = file.id;
+                match self
+                    .write("held.pair_want", move |rows, _| {
+                        Ok(rows.pair(file_id, &pairing)?)
+                    })
+                    .await
+                {
+                    Ok(()) => {
+                        tracing::info!(entry_id, file_id, "held want file agrees with the ask")
+                    }
+                    Err(error) => {
+                        tracing::warn!(entry_id, file_id, %error, "held want file not paired")
+                    }
+                }
+            }
+        }
     }
 
     /// Retry each due entry's files held for a library reason, exactly as
