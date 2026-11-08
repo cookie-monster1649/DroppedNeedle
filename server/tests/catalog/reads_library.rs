@@ -1621,4 +1621,27 @@ async fn playlist_entries_link_to_the_library_tracks_they_name() {
             ("Single".to_owned(), local()),
         ]
     );
+
+    // An entry asked for by name links to the track its want's download
+    // landed as, though that file's tags name it otherwise.
+    let key = droppedneedle_library::matching::strings::want_key("aurora", "UNKNOWN");
+    seed(
+        &fixture,
+        String::leak(format!(
+            "INSERT INTO download_tasks (id, user_id, download_type, release_group_mbid, \
+             recording_mbid, artist_name, album_title, status, created_at, updated_at) \
+             VALUES ('dl-1', 'u1', 'track', '', '{key}', 'Aurora', '', 'completed', 1, 1); \
+             UPDATE local_tracks SET download_task_id = 'dl-1' WHERE id = 't2'"
+        )),
+    )
+    .await;
+    assert_eq!(store.link_library().await.unwrap(), 1);
+    let unknown = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|track| track.track_name == "Unknown")
+        .and_then(|track| track.library_file_id);
+    assert_eq!(unknown.as_deref(), Some("t2"));
 }
