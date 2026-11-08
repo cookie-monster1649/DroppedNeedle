@@ -1,10 +1,10 @@
-# Fork only: build the NUC image from nuc/v3-fixes and publish it to this
+# Fork only: build the NUC image from nuc/v3.0.0-beta.4 and publish it to this
 # fork's GHCR. amd64 only (the NUC). Upstream's workflows are untouched.
 name: nuc-image
 
 on:
   push:
-    branches: ['nuc/v3-fixes']
+    branches: ['nuc/v3.0.0-beta.4']
   workflow_dispatch:
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
             COMMIT_TAG=nuc-${{ env.SHORT }}
             BUILD_DATE=${{ env.BUILD_DATE }}
           tags: |
-            ghcr.io/cookie-monster1649/droppedneedle:nuc-v3
+            ghcr.io/cookie-monster1649/droppedneedle:nuc-v3.0.0-beta.4
             ghcr.io/cookie-monster1649/droppedneedle:nuc-${{ env.SHORT }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
