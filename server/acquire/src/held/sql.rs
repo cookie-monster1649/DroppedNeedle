@@ -87,6 +87,10 @@ droppedneedle_kernel::sql! {
              track_number = ?6, track_title = ?7, expected_duration_seconds = ?8 \
              WHERE id = ?1 AND state = 'held'";
     /// Whether download task `?1` still has a file held in an open entry.
+    /// Fork: the identities of want `?1` (provider, id), as the requests
+    /// area kept them.
+    pub(super) WANT_IDENTITIES = "SELECT provider, external_id FROM acquire_want_identities \
+             WHERE want_key = ?1 ORDER BY provider, external_id";
     pub(super) TASK_HOLDS = "SELECT EXISTS (SELECT 1 FROM acquire_held_files f \
              JOIN acquire_held_entries e ON e.id = f.entry_id \
              WHERE f.source_task_id = ?1 AND f.state = 'held' AND e.state IN " + OPEN + ")";

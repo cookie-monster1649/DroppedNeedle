@@ -11,6 +11,7 @@ use crate::requests::batches::BatchFiling;
 use crate::requests::batches::models::BatchOutcome;
 use crate::requests::batches::store::{BatchWrite, NewBatch};
 use crate::requests::error::RequestsError;
+use crate::requests::identities::{WantIdentity, WantIdentityProvider};
 use crate::requests::ledger::{
     BeginOutcome, RequestRecord, RequestStatus, meaningful_name, validate_mbid, want_key,
 };
@@ -628,7 +629,34 @@ impl RequestsService {
         })?;
         let album_title = meaningful_name(body.album_title.as_deref())
             .unwrap_or_else(|| "Single track".to_owned());
+        let mut identities = Vec::new();
+        for (provider, raw) in [
+            (WantIdentityProvider::Isrc, body.isrc.as_deref()),
+            (
+                WantIdentityProvider::Spotify,
+                body.spotify_track_id.as_deref(),
+            ),
+        ] {
+            let Some(raw) = raw.filter(|raw| !raw.trim().is_empty()) else {
+                continue;
+            };
+            let external_id =
+                provider
+                    .normalize(raw)
+                    .ok_or_else(|| RequestsError::InvalidInput {
+                        message: format!("Not a valid {} id", provider.as_str()),
+                    })?;
+            identities.push(WantIdentity {
+                provider,
+                external_id,
+            });
+        }
         let key = want_key(&artist_name, &track_title);
+        // Kept first: identities are facts about the song, whatever becomes
+        // of this ask (approval, quota), and a repeat ask adds to them.
+        self.store
+            .add_want_identities(&key, identities, self.now_epoch())
+            .await?;
         let fields = TrackFields {
             artist_name,
             album_title,

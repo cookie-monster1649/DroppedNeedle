@@ -167,6 +167,7 @@ fn release(titles: &[&str], lengths: &[Option<u64>]) -> Release {
                 position: index as u32 + 1,
                 absolute_position: index as u32 + 1,
                 length_ms: *length,
+                links: Vec::new(),
             })
             .collect(),
         ..Release::default()

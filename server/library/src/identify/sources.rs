@@ -932,6 +932,7 @@ pub fn release_from_wire(wire: MbRelease, old_ids: Vec<String>) -> Result<Releas
                     .filter(|isrc| !isrc.is_empty())
                     .collect(),
                 genres: wire_genres(&recording.genres),
+                links: Vec::new(),
             });
         }
     }

@@ -6,7 +6,9 @@
 //! the next number, added here in order; a file on `v3` is never edited,
 //! renumbered or removed.
 
-use crate::db::migrate::{Chain, Migration};
+pub mod extensions;
+
+use crate::db::migrate::{Chain, Migration, SchemaError};
 
 macro_rules! migration {
     ($version:literal, $file:literal) => {
@@ -48,4 +50,10 @@ pub static CHAIN: Chain<'static> = Chain::new(MIGRATIONS, Some(BRIDGE_FROM));
 #[must_use]
 pub fn latest_version() -> i64 {
     CHAIN.latest()
+}
+
+/// Bring a database to this binary's schema: the upstream chain, then every
+/// extension chain ([`extensions`]). Hands the connection back.
+pub fn migrate_all(connection: rusqlite::Connection) -> Result<rusqlite::Connection, SchemaError> {
+    crate::db::extend::migrate_extended(connection, &CHAIN, extensions::EXTENSIONS)
 }

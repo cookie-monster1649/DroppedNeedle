@@ -84,6 +84,12 @@ pub struct WantIntake {
     pub album_title: Option<String>,
     /// Track length in seconds, when known.
     pub duration_seconds: Option<i64>,
+    /// The recording's ISRC, when known (hyphens and case aside).
+    #[serde(default)]
+    pub isrc: Option<String>,
+    /// The Spotify track: its id, `spotify:track:` URI or link.
+    #[serde(default)]
+    pub spotify_track_id: Option<String>,
 }
 
 /// One batch row.

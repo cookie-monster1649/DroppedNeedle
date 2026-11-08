@@ -452,6 +452,7 @@ fn ambiguous_from(facts: &LocalAlbumFacts) -> RecallResult {
                 position: track.track_number,
                 absolute_position: index as u32 + 1,
                 length_ms: track.duration_secs.map(|seconds| seconds * 1000),
+                links: Vec::new(),
             })
             .collect(),
         old_ids: tagged.clone(),
@@ -3825,6 +3826,7 @@ fn tagged_from(facts: &LocalAlbumFacts) -> Release {
                 position: track.track_number,
                 absolute_position: index as u32 + 1,
                 length_ms: track.duration_secs.map(|seconds| seconds * 1000),
+                links: Vec::new(),
             })
             .collect(),
         ..Release::default()
@@ -18580,6 +18582,7 @@ fn one_track_per_title(facts: &LocalAlbumFacts) -> RecallResult {
             position: track.track_number,
             absolute_position: index as u32 + 1,
             length_ms: track.duration_secs.map(|seconds| seconds * 1000),
+            links: Vec::new(),
         })
         .collect();
     RecallResult {
@@ -23710,6 +23713,7 @@ fn sibling_editions(n: u32, title: &str) -> (Release, Release) {
                 position: index as u32 + 1,
                 absolute_position: index as u32 + 1,
                 length_ms: None,
+                links: Vec::new(),
             })
             .collect(),
         ..Release::default()
@@ -28224,6 +28228,7 @@ fn junk_release(
                     position: index as u32 + 1,
                     absolute_position: index as u32 + 1,
                     length_ms: file.duration_secs.map(|seconds| seconds * 1000),
+                    links: Vec::new(),
                 }
             })
             .collect(),

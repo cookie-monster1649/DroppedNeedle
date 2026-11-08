@@ -1119,7 +1119,14 @@ impl HeldService {
                 .as_deref()
                 .is_some_and(crate::requests::ledger::is_want_key);
         let (release, join) = if want {
-            (want_release(entry, target.as_ref(), files.len()), None)
+            let key = entry.recording_mbid.clone().unwrap_or_default();
+            let links = self
+                .read("held.want_links", move |rows| rows.want_links(&key))
+                .await?;
+            (
+                want_release(entry, target.as_ref(), files.len(), &links),
+                None,
+            )
         } else {
             self.release_for(&library, entry, first, target.as_ref(), asker)
                 .await?
@@ -2103,8 +2110,20 @@ async fn probe_held(path: &Path) -> Option<LandedFile> {
 /// no identity is sealed and the album is offered to identification. One
 /// track per file, titled from the ask; a lone track with no album named
 /// is its own single.
-fn want_release(entry: &Entry, target: Option<&specs::Target>, files: usize) -> Release {
+fn want_release(
+    entry: &Entry,
+    target: Option<&specs::Target>,
+    files: usize,
+    links: &[droppedneedle_library::matching::SourceLink],
+) -> Release {
     use droppedneedle_library::matching::{CreditedArtist, ReleaseTrack};
+    // The ISRC is also written to the file's tags, where every player and
+    // tagger reads it.
+    let isrcs: Vec<String> = links
+        .iter()
+        .filter(|link| link.provider == "isrc")
+        .map(|link| link.external_id.clone())
+        .collect();
     let artist = entry
         .artist_name
         .clone()
@@ -2133,6 +2152,8 @@ fn want_release(entry: &Entry, target: Option<&specs::Target>, files: usize) -> 
                 disc: 1,
                 position,
                 absolute_position: position,
+                isrcs: isrcs.clone(),
+                links: links.to_vec(),
                 ..ReleaseTrack::default()
             }
         })

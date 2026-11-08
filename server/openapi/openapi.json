@@ -68521,6 +68521,20 @@
             "format": "int64",
             "description": "Track length in seconds, when known."
           },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The recording's ISRC, when known (hyphens and case aside)."
+          },
+          "spotify_track_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Spotify track: its id, `spotify:track:` URI or link."
+          },
           "track_title": {
             "type": "string",
             "description": "Track title, version words included (\"Halo (Live)\")."
