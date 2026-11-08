@@ -27,14 +27,14 @@ pub const ROLE_ADMIN: &str = "admin";
 /// instance already has users. `OIDC_NEW_USER_ROLE=trusted` makes their
 /// requests start without approval (the NUC's SSO users are all household);
 /// anything else, or unset, keeps upstream's [`ROLE_USER`]. Jellyfin and
-/// Plex sign-ins are not affected. Read once.
+/// Plex sign-ins are not affected. Read at each account creation (rare),
+/// so no process-wide state is held.
 #[must_use]
 pub fn new_federated_user_role(provider: &str) -> &'static str {
-    static OIDC_ROLE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
     if provider != "oidc" {
         return ROLE_USER;
     }
-    OIDC_ROLE.get_or_init(|| oidc_role_from(std::env::var("OIDC_NEW_USER_ROLE").ok().as_deref()))
+    oidc_role_from(std::env::var("OIDC_NEW_USER_ROLE").ok().as_deref())
 }
 
 fn oidc_role_from(value: Option<&str>) -> &'static str {
