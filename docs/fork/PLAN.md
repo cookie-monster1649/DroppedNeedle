@@ -121,6 +121,9 @@ once playlist rows store them (Slice B).
   through the want Import (A2/A3) within five minutes, with its Spotify
   id/ISRC as source links. A file that disagrees (another song, another
   length) is held unpaired for a person and the next source is tried.
+  Files held before B3 are checked the same way by the held loop
+  (`pair_wants`, asked length from the request row when the task's plan
+  has none), and an unpaired want file offers Import.
 - B4 (next): request status for wants: a want filed from the held list
   should show as imported, not "failed".
 - Per-row status (owned / requested / held / missing / unresolved) and
