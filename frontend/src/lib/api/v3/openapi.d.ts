@@ -7700,6 +7700,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/requests/wants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask for one track by name, with no MusicBrainz id.
+         *     `POST /api/v3/requests/wants`. Same approval gate as tracks. Answers 202
+         *     with the request key.
+         */
+        post: operations["request_want_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/scrobble/now-playing": {
         parameters: {
             query?: never;
@@ -24492,6 +24513,35 @@ export interface components {
          * @enum {string}
          */
         WaitingReason: "no_download_source" | "request_quota_full" | "storage_full" | "waiting_to_start";
+        /**
+         * @description Track-by-name intake body: no MusicBrainz ids. The download searches
+         *     by artist and title, and its files wait in review to be placed.
+         */
+        WantIntake: {
+            /** @description Album title, when known. */
+            album_title?: string | null;
+            /** @description Artist name. */
+            artist_name: string;
+            /**
+             * Format: int64
+             * @description Track length in seconds, when known.
+             */
+            duration_seconds?: number | null;
+            /** @description Track title, version words included ("Halo (Live)"). */
+            track_title: string;
+        };
+        /** @description Track-by-name intake response. */
+        WantIntakeResponse: {
+            /**
+             * @description The request key (`want-` and 32 hex digits); use it where track
+             *     request routes take a MusicBrainz id.
+             */
+            key: string;
+            /** @description `queued` or `awaiting_approval`. */
+            status: components["schemas"]["RequestStatus"];
+            /** @description Linked download task, when dispatched. */
+            task_id?: string | null;
+        };
         /** @description Wanted mutation outcome. */
         WantedActionResponse: {
             /** @description Watch state after this call. */
@@ -44930,6 +44980,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WantedActionResponse"];
+                };
+            };
+        };
+    };
+    request_want_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WantIntake"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WantIntakeResponse"];
                 };
             };
         };

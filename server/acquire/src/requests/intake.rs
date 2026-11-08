@@ -21,6 +21,7 @@ use super::models::{
     ActionResponse, AlbumIntake, BatchCancelBody, BatchCancelResponse, BatchIntake,
     BatchIntakeResponse, ClearHistoryResponse, EditionAcquireQuery, EditionAcquireResponse,
     EditionFetchResponse, IntakeResponse, KindQuery, RequestKind, TrackIntake, TrackIntakeResponse,
+    WantIntake, WantIntakeResponse,
 };
 use super::service::RequestsService;
 use super::state::RequestsState;
@@ -72,6 +73,27 @@ pub async fn request_track_handler(
 ) -> Result<impl IntoResponse, ApiError> {
     let response = RequestsService::new(&state)
         .request_track(&principal, &body)
+        .await?;
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+/// Ask for one track by name, with no MusicBrainz id.
+/// `POST /api/v3/requests/wants`. Same approval gate as tracks. Answers 202
+/// with the request key.
+#[utoipa::path(
+    post,
+    tag = "requests",
+    path = "/api/v3/requests/wants",
+    request_body = WantIntake,
+    responses((status = 202, body = WantIntakeResponse))
+)]
+pub async fn request_want_handler(
+    State(state): State<RequestsState>,
+    User(principal): User,
+    ValidJson(body): ValidJson<WantIntake>,
+) -> Result<impl IntoResponse, ApiError> {
+    let response = RequestsService::new(&state)
+        .request_want(&principal, &body)
         .await?;
     Ok((StatusCode::ACCEPTED, Json(response)))
 }

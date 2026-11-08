@@ -35,22 +35,31 @@ Re-test both scenarios on v3; port only with a reproduction.
 ## Next slices, in order
 
 ### Slice A – Phase 0 core: requests without a MusicBrainz ID
-The blocker for G1/#201. Today `download_tasks.release_group_mbid` is
-`NOT NULL`, `request_history` is keyed by `musicbrainz_id_lower`, and
-`wanted_watches`, `download_quarantine`, follows and approvals key on MBIDs.
+The blocker for G1/#201.
 
-- New migration: `catalog_wants` (internal ULID PK; kind track|release;
-  artist, title, version_label, album, duration_ms, year, hint; nullable
-  `release_group_mbid` / `recording_mbid`; `source` user|spotify|musicbrainz).
-- `request_history`/`download_tasks`: add `want_id`; relax MBID `NOT NULL`
-  via table rebuild; key new rows on `want_id`, keep MBID rows as they are.
-- Acquire: a want with no MBID runs the track ladder + matcher with its own
-  title/duration as the target, and lands in held review (`no_release`
-  today) with a new "place as your own track list" action that writes a
-  custom edition (`library_custom_edition_*`) instead of discarding.
-- Identities: drop the `provider = 'musicbrainz'` CHECK on track identities
-  (or store ISRC/Spotify in `local_entity_source_links`) so a placed track
-  carries its ISRC/Spotify ID.
+**No fork migrations.** v3 stamps the database with one sequential
+migration number (`kernel/src/schema/mod.rs`). A fork `0145` would collide
+with upstream's next migration and strand the NUC's database off the
+upstream chain. Everything below reuses existing columns.
+
+A1 (done): `POST /api/v3/requests/wants {artist_name, track_title,
+album_title?, duration_seconds?}`. A want is a `track` request whose key is
+`want-<32 hex>` = sha256(folded artist, folded title), so asking twice joins
+the first ask. The key sits where a recording MBID would (request ledger
+`track:want-…`, `download_tasks.recording_mbid`), so cancel, approve,
+reject, retry and history work unchanged (`validate_request_key`). The
+worker skips MusicBrainz for a want key and runs the existing lone-track
+search; with no release group, landing holds the files (`no_release`).
+Playlist "request missing" now sends wants for rows with no recording
+instead of whole-album requests.
+
+A2 (next): held review action "place as its own track" for a want's held
+files: write a custom edition (`library_custom_edition_*`) and settle the
+want as imported. Pass the asked duration into the task (no column today
+for a lone track's duration; `TaskDetails` carries it through the plan).
+
+A3: carry ISRC / Spotify track ID onto the placed track via
+`local_entity_source_links` (no CHECK change).
 
 ### Slice B – Phase 1b: playlist reconciliation (#204)
 - Link `catalog_playlist_tracks` to `local_tracks` (existing

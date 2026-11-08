@@ -66,17 +66,10 @@
 	let canDelete = $derived(playlist?.can_delete ?? false);
 
 	let missingPlan = $derived(
-		playlist ? planMissingRequests(playlist.tracks) : { tracks: [], albums: [] }
+		playlist ? planMissingRequests(playlist.tracks) : { tracks: [], wants: [] }
 	);
-	let missingLabel = $derived.by(() => {
-		const parts: string[] = [];
-		const t = missingPlan.tracks.length;
-		const a = missingPlan.albums.length;
-		if (t) parts.push(`${t} ${t === 1 ? 'track' : 'tracks'}`);
-		if (a) parts.push(`${a} ${a === 1 ? 'album' : 'albums'}`);
-		return parts.join(' and ');
-	});
-	let missingCount = $derived(missingPlan.tracks.length + missingPlan.albums.length);
+	let missingCount = $derived(missingPlan.tracks.length + missingPlan.wants.length);
+	let missingLabel = $derived(`${missingCount} ${missingCount === 1 ? 'track' : 'tracks'}`);
 
 	let requesting = $state(false);
 
