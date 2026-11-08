@@ -15,6 +15,7 @@ vi.mock('$lib/api/playlists', async (importOriginal) => ({
 	planMissingRequests: (await importOriginal<typeof import('$lib/api/playlists')>())
 		.planMissingRequests,
 	requestMissingTracks: vi.fn(),
+	fetchPlaylistRows: vi.fn(() => Promise.resolve(new Map())),
 	fetchSpotifySync: vi.fn(() =>
 		Promise.resolve({ enabled: false, auto_request: false, checked_at: null, last_error: null })
 	),

@@ -19,6 +19,8 @@
 	import ContextMenu from '$lib/ui/ContextMenu.svelte';
 	import type { MenuItem } from '$lib/ui/ContextMenu.svelte';
 	import SourcePickerDropdown from '$lib/features/playlists/components/SourcePickerDropdown.svelte';
+	import PlaylistRowStatus from '$lib/features/playlists/components/PlaylistRowStatus.svelte';
+	import type { PlaylistRowState } from '$lib/api/playlists';
 	import NowPlayingIndicator from '$lib/features/player/components/NowPlayingIndicator.svelte';
 	import { Trash2, ListPlus, ListStart, GripVertical, Play, X } from 'lucide-svelte';
 	import Button from '$lib/ui/Button.svelte';
@@ -32,9 +34,26 @@
 		onsourcechange?: () => void;
 		onplaytrack?: (index: number) => void;
 		readonly?: boolean;
+		/** Fork: where each song the library doesn't play stands (by track id). */
+		rowStates?: Map<string, PlaylistRowState>;
+		/** Fork: request one song. */
+		onrequesttrack?: (track: PlaylistTrack) => Promise<void>;
 	}
 
-	let { playlist, ontrackchange, onsourcechange, onplaytrack, readonly = false }: Props = $props();
+	let {
+		playlist,
+		ontrackchange,
+		onsourcechange,
+		onplaytrack,
+		readonly = false,
+		rowStates,
+		onrequesttrack
+	}: Props = $props();
+
+	// Fork: a row nothing can play shows its state instead of an "Unknown" source.
+	function unplayable(track: PlaylistTrack): boolean {
+		return !track.library_file_id && !(track.available_sources ?? []).some(Boolean);
+	}
 
 	let dragIndex = $state<number | null>(null);
 	let dragOverIndex = $state<number | null>(null);
@@ -402,6 +421,7 @@
 						: playerStore.currentQueueItem?.trackSourceId === track.track_source_id &&
 							playerStore.currentQueueItem?.sourceType === track.source_type)}
 				{@const albumLinked = isValidMbid(track.album_id)}
+				{@const rowState = unplayable(track) ? rowStates?.get(track.id) : undefined}
 				<li
 					transition:slide={{ duration: 200 }}
 					class="pl-row group {selectedIds.has(track.id)
@@ -410,6 +430,7 @@
 							? 'pl-row--playing'
 							: ''}"
 					class:opacity-50={dragIndex === i}
+					class:pl-row--absent={unplayable(track) && dragIndex !== i}
 					class:pl-row--drop={dragOverIndex === i && dragIndex !== null && dragIndex !== i}
 					draggable={!selectionMode && !readonly}
 					ondragstart={(e) => handleDragStart(e, i)}
@@ -507,7 +528,15 @@
 						</span>
 					</span>
 
-					{#if !readonly}
+					{#if !readonly && rowState && rowState !== 'owned'}
+						<span class="pl-row__source">
+							<PlaylistRowStatus
+								status={rowState}
+								title={track.track_name}
+								onrequest={onrequesttrack ? () => onrequesttrack(track) : undefined}
+							/>
+						</span>
+					{:else if !readonly}
 						<span class="pl-row__source">
 							<SourcePickerDropdown
 								currentSource={track.source_type}
@@ -803,5 +832,10 @@
 		font-weight: 600;
 		letter-spacing: 0.12em;
 		text-transform: uppercase;
+	}
+	/* Fork: a song the library doesn't play reads quieter, as on the album page. */
+	.pl-row--absent .pl-row__art,
+	.pl-row--absent .pl-row__title {
+		opacity: 0.6;
 	}
 </style>
