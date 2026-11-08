@@ -444,7 +444,9 @@ impl PlaylistStore {
     pub async fn link_library(&self) -> Result<usize, StoreError> {
         self.db
             .write("playlists.link_library", move |tx| {
-                Ok(tx.execute(sql::LINK_LIBRARY.text(), [])?)
+                let linked = tx.execute(sql::LINK_LIBRARY.text(), [])?;
+                tx.execute(sql::MARK_LINKED_LOCAL.text(), [])?;
+                Ok(linked)
             })
             .await
     }

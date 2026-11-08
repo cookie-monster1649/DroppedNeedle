@@ -1642,4 +1642,23 @@ async fn playlist_entries_link_to_the_library_tracks_they_name() {
         0,
         "nothing left to link"
     );
+    // Linked entries list the library as a source (what the player reads),
+    // once each; unlinked ones are untouched.
+    let sources: Vec<(String, Option<Vec<String>>)> = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|track| (track.track_name, track.available_sources))
+        .collect();
+    let local = || Some(vec!["local".to_owned()]);
+    assert_eq!(
+        sources,
+        vec![
+            ("Opener".to_owned(), local()),
+            ("Gone".to_owned(), None),
+            ("Unknown".to_owned(), None),
+            ("Single".to_owned(), local()),
+        ]
+    );
 }
