@@ -222,6 +222,11 @@ pub struct Adoption {
     /// has none and finishes.
     #[serde(skip)]
     pub copy_seal: Option<CopySeal>,
+    /// The file's identities outside MusicBrainz, adopted as its track's
+    /// source links in the commit. They ride in the provenance record, so
+    /// a commit resumed after a crash adopts them too.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<crate::matching::SourceLink>,
 }
 
 /// The joined copy's folder as a placement read it.
@@ -292,6 +297,9 @@ impl Adoption {
             track: journaled.and_then(|adopt| adopt.track.clone()).or(track),
             set_aside: journaled.is_some_and(|adopt| adopt.set_aside) || set_aside,
             copy_seal: None,
+            links: journaled
+                .map(|adopt| adopt.links.clone())
+                .unwrap_or_default(),
         }
     }
 

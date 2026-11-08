@@ -1065,6 +1065,7 @@ impl Imports {
             track: None,
             set_aside: false,
             copy_seal: None,
+            links: Vec::new(),
         };
         let result = (|| {
             let mut items = Vec::with_capacity(placements.len());

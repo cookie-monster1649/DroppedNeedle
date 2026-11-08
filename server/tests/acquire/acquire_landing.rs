@@ -173,6 +173,7 @@ pub(crate) fn release(id: &str, group: &str, titles: &[&str], lengths: &[Option<
             .map(|(index, (title, length))| ReleaseTrack {
                 isrcs: Vec::new(),
                 genres: Vec::new(),
+                links: Vec::new(),
                 id: format!("{}{:x}", &id[..id.len() - 1], 8 + index),
                 recording_id: format!("{}{:x}", &group[..group.len() - 1], 8 + index),
                 title: (*title).to_owned(),
@@ -3987,6 +3988,7 @@ fn edition(
                 position: at as u32 + 1,
                 absolute_position: tracks.len() as u32 + 1,
                 length_ms: lengths[index],
+                links: Vec::new(),
             });
         }
     }
@@ -9312,5 +9314,28 @@ async fn untagged_files_that_make_up_the_preferred_edition_read_no_listing() {
         rig.listed.load(std::sync::atomic::Ordering::SeqCst),
         0,
         "no listing or search is read"
+    );
+    // The want's identities became the track's source links, and the ISRC
+    // is in the file's tags.
+    let links: Vec<String> = acquire.db.db().column(
+        "SELECT provider || ':' || external_entity_type || ':' || external_id || ' ' || \
+         canonical_url FROM local_entity_source_links WHERE local_track_id IS NOT NULL \
+         ORDER BY provider",
+        [],
+    );
+    assert_eq!(
+        links,
+        vec![
+            "isrc:recording:USSM10812345 https://musicbrainz.org/isrc/USSM10812345".to_owned(),
+            "spotify:track:4uLU6hMCjMI75M1A2tKUQC https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC"
+                .to_owned(),
+        ]
+    );
+    let fields =
+        droppedneedle_library::tags::save::read_fields(track_file(&placed[0])).expect("tags read");
+    assert_eq!(
+        fields.get(&TagField::Isrc),
+        Some(&vec!["USSM10812345".to_owned()]),
+        "{fields:?}"
     );
 }

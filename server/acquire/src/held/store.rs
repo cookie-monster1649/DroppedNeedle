@@ -719,6 +719,34 @@ impl<'c> HeldRows<'c> {
         Ok(())
     }
 
+    /// Fork: a want's identities outside MusicBrainz, as the source links
+    /// its placed track adopts. A provider this build does not know is
+    /// skipped.
+    pub fn want_links(
+        &self,
+        want_key: &str,
+    ) -> rusqlite::Result<Vec<droppedneedle_library::matching::SourceLink>> {
+        use crate::requests::identities::WantIdentityProvider;
+        let mut statement = self.conn.prepare_cached(sql::WANT_IDENTITIES.text())?;
+        let rows = statement.query_map(params![want_key], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut links = Vec::new();
+        for row in rows {
+            let (provider, external_id) = row?;
+            let Some(provider) = WantIdentityProvider::parse(&provider) else {
+                continue;
+            };
+            links.push(droppedneedle_library::matching::SourceLink {
+                provider: provider.as_str().to_owned(),
+                entity_type: provider.entity_type().to_owned(),
+                canonical_url: provider.canonical_url(&external_id),
+                external_id,
+            });
+        }
+        Ok(links)
+    }
+
     /// Whether a download task still has a file held in an open entry: its
     /// automatic retry waits while it does.
     pub fn task_holds(&self, task_id: &str) -> rusqlite::Result<bool> {

@@ -25,7 +25,7 @@ pub mod strings;
 
 pub use model::{
     CreditedArtist, EditionHints, Genre, LocalAlbum, LocalTrack, Release, ReleaseMedium,
-    ReleaseTrack,
+    ReleaseTrack, SourceLink,
 };
 
 /// The MusicBrainz id a file's tag gives the matcher: trimmed and lowercased

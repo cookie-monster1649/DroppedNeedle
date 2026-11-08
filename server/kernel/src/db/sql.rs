@@ -5,6 +5,21 @@
 use super::time::Millis;
 
 crate::sql! {
+    /// The extension chains' counts, one row per chain.
+    pub(super) CREATE_EXTENSION_LEDGER = "CREATE TABLE IF NOT EXISTS schema_extensions ( \
+             chain TEXT PRIMARY KEY, \
+             version INTEGER NOT NULL CHECK(version > 0), \
+             applied_at INTEGER NOT NULL) STRICT";
+    /// Whether the extension ledger exists yet.
+    pub(super) EXTENSION_LEDGER_PRESENT = "SELECT EXISTS (SELECT 1 FROM sqlite_schema \
+             WHERE type = 'table' AND name = 'schema_extensions')";
+    /// One chain's count (`?1`).
+    pub(super) READ_EXTENSION_COUNT = "SELECT version FROM schema_extensions WHERE chain = ?1";
+    /// Record chain `?1` at count `?2`.
+    pub(super) WRITE_EXTENSION_COUNT = "INSERT INTO schema_extensions (chain, version, applied_at) \
+             VALUES (?1, ?2, CAST(strftime('%s','now') AS INTEGER)) \
+             ON CONFLICT(chain) DO UPDATE SET version = excluded.version, \
+             applied_at = excluded.applied_at";
     /// Forget every loop row: the supervisor rebuilds them at each start.
     pub(super) CLEAR_LOOPS = "DELETE FROM durable_loops";
     /// Write one loop's row as it stands now.

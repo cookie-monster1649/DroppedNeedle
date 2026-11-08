@@ -195,6 +195,22 @@ pub struct ReleaseTrack {
     /// The recording's MusicBrainz genres with their votes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub genres: Vec<Genre>,
+    /// The track's identities outside MusicBrainz (an ISRC, a Spotify
+    /// track). An import adopts them as the placed track's source links.
+    /// Empty on a MusicBrainz release, so its stored document is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<SourceLink>,
+}
+
+/// A track's identity with a provider other than MusicBrainz, in
+/// `local_entity_source_links`' shape: who issued it, what kind of thing it
+/// names, the id, and a page for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceLink {
+    pub provider: String,
+    pub entity_type: String,
+    pub external_id: String,
+    pub canonical_url: String,
 }
 
 /// A MusicBrainz genre and its vote count (`None` when not given).
