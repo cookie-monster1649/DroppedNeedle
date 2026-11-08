@@ -9458,6 +9458,13 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
             acquire.landing.land(&task, None, landed, false).await
         }
     };
+    let again = land_file(
+        &mount.join("c"),
+        "sour-again.flac",
+        "flac_full_01.flac",
+        "Sour Times",
+        1,
+    );
     let report = land("t-right", right).await;
     assert!(
         matches!(
@@ -9488,6 +9495,8 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
         vec![format!("t-right {WANT} -"), "t-wrong - -".to_owned()]
     );
 
+    // Another peer's copy of the same song lands on the same entry.
+    land("t-right", again).await;
     // Held before the landing compared wants with the ask: nothing paired.
     // The held loop checks it against the ask and pairs it.
     acquire
@@ -9518,7 +9527,16 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
         "SELECT source_task_id FROM acquire_held_files WHERE state = 'held'",
         [],
     );
-    assert_eq!(waiting, vec!["t-wrong".to_owned()], "the other song waits");
+    assert_eq!(
+        waiting,
+        vec!["t-wrong".to_owned()],
+        "the other song waits; the second copy of the filed song is discarded"
+    );
+    let discarded: Vec<String> = acquire.db.db().column(
+        "SELECT source_task_id FROM acquire_held_files WHERE state = 'discarded'",
+        [],
+    );
+    assert_eq!(discarded, vec!["t-right".to_owned()]);
 
     // Fork: the person matches the other song to a song of their Spotify
     // playlist; it goes in tagged from Spotify, with its Spotify id.
