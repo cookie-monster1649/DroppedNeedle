@@ -88,9 +88,20 @@ pub const SPOTIFY_REGISTERED_REDIRECT: &str =
 pub struct MockRecorder {
     inner: Arc<Mutex<RecordedCalls>>,
     limit_playlists: Arc<std::sync::atomic::AtomicBool>,
+    grown: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MockRecorder {
+    /// Fork: from now on `sp-playlist-1` has a third song ("Paper
+    /// Lanterns", no proving ISRC) and a new snapshot id.
+    pub fn grow_playlist(&self) {
+        self.grown.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn is_grown(&self) -> bool {
+        self.grown.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Answer `/me/playlists` with a 429 asking for seven seconds from now on.
     pub fn limit_playlists(&self) {
         self.limit_playlists
@@ -381,7 +392,8 @@ async fn spotify_playlist(
             {"url": format!("{}/covers/neon-small.jpg", state.cover_base), "width": 60},
             {"url": format!("{}/covers/neon.jpg", state.cover_base), "width": 640},
         ],
-        "tracks": {"total": 2},
+        "tracks": {"total": if state.recorder.is_grown() { 3 } else { 2 }},
+        "snapshot_id": if state.recorder.is_grown() { "snap-2" } else { "snap-1" },
     }))
     .into_response()
 }
@@ -412,8 +424,18 @@ async fn spotify_items(
         return StatusCode::NOT_FOUND.into_response();
     }
     // One entry under the legacy `track` alias, one under the new `item`
-    // key, plus an `is_local` row the client must skip.
-    Json(json!({
+    // key, plus an `is_local` row the client must skip. A grown playlist
+    // (fork) has a third song.
+    let grown = state.recorder.is_grown().then(|| {
+        json!({"track": {
+            "id": "sp-track-3", "type": "track", "name": "Paper Lanterns",
+            "artists": [{"name": "Boreal Static"}],
+            "album": {"id": "sp-album-4", "name": "Paper Lanterns", "images": []},
+            "external_ids": {"isrc": "USRC17607841"},
+            "track_number": 1, "disc_number": 1, "duration_ms": 222000,
+        }})
+    });
+    let mut body = json!({
         "items": [
             {"track": {
                 "id": "sp-track-1", "type": "track", "name": "Midnight Drive",
@@ -436,8 +458,11 @@ async fn spotify_items(
             }},
         ],
         "next": null,
-    }))
-    .into_response()
+    });
+    if let (Some(extra), Some(items)) = (grown, body["items"].as_array_mut()) {
+        items.insert(2, extra);
+    }
+    Json(body).into_response()
 }
 
 /// The deprecated `/tracks` path: 403, as live Spotify answers dev-mode

@@ -4193,6 +4193,11 @@ mod extension_chains {
                 "catalog/0002_playlist_entry_identities.sql",
                 "b402f82f51857771b8a5e0340f421b0112643b1b14bd6292565d4038dde11218",
             ),
+            (
+                "catalog",
+                "catalog/0003_spotify_playlist_syncs.sql",
+                "3f2a909f68a965f9283ef3363815d82f085534c926d2c1488884a424e3820bc7",
+            ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {
