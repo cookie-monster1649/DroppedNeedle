@@ -1,6 +1,6 @@
 # Fork plan: provider-independent catalogue on v3
 
-Branch `nuc/v3-fixes`, based on `v3.0.0-beta.3`. Source brief: "DroppedNeedle –
+Branch `nuc/v3.0.0-beta.4`, based on `v3.0.0-beta.4` (rebased from beta.3). Source brief: "DroppedNeedle –
 Provider-independent catalogue and Spotify-to-collection pipeline" v0.1
 (7 Nov 2026). This file maps that brief onto the v3 Rust code as it actually is.
 
