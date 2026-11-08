@@ -92,6 +92,7 @@ pub const ACQUIRE_LOOPS: &[&str] = &[
     crate::downloads::worker::DOWNLOAD_WORKER_JOB,
     crate::probes::PROBE_JOB,
     crate::readiness::SOURCE_WATCH_JOB,
+    crate::imports::spotify_sync::SYNC_JOB,
 ];
 
 /// The sections the acquisition clients are built from.
@@ -239,6 +240,8 @@ pub struct AcquireSetup {
     pub import_folder: Arc<ImportFolders>,
     /// Runs the Spotify import jobs; registered on the jobs table.
     pub spotify_import_jobs: Arc<SpotifyImportJobs>,
+    /// Fork: keeps synced Spotify playlists in step with Spotify.
+    pub spotify_sync: Arc<crate::imports::spotify_sync::SpotifySync>,
 }
 
 /// The drop-import service over the landing's library port, a staging
@@ -656,6 +659,15 @@ impl AcquireSetup {
             spotify_playlists.clone(),
             resolver.clone(),
         ));
+        let spotify_syncs = crate::imports::spotify_sync::SpotifySyncs::new(db.clone());
+        let spotify_sync = Arc::new(crate::imports::spotify_sync::SpotifySync::new(
+            spotify_service.clone(),
+            spotify_playlists.clone(),
+            spotify_syncs.clone(),
+            Arc::new(crate::imports::spotify_sync::RequestsSync::new(
+                core.requests.clone(),
+            )),
+        ));
         let spotify_import_jobs = Arc::new(SpotifyImportJobs::new(spotify_service, events.clone()));
         let spotify_imports = SpotifyImports::new(platform.db.clone(), queue);
         let probes = Arc::new(LiveProbes::new(probe_cache.clone()));
@@ -670,6 +682,7 @@ impl AcquireSetup {
             spotify_playlists,
             resolver,
             spotify_imports,
+            spotify_syncs,
             probes: Arc::new(LiveProbes::bundle(&probes)),
             ids: ids.clone(),
             base_path: config.base_path.clone(),
@@ -771,6 +784,7 @@ impl AcquireSetup {
             held,
             import_folder,
             spotify_import_jobs,
+            spotify_sync,
         })
     }
 
@@ -849,6 +863,7 @@ impl AcquireSetup {
         crate::downloads::worker::spawn_download_worker(self.worker.clone(), supervisor)?;
         crate::held::spawn_held_prune(supervisor, self.held.clone())?;
         crate::import_folder::spawn_import_folder(supervisor, self.import_folder.clone())?;
+        crate::imports::spotify_sync::spawn_spotify_sync(supervisor, self.spotify_sync.clone())?;
         crate::probes::spawn_probe_loop(
             supervisor,
             self.probe_cache.clone(),

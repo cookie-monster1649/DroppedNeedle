@@ -176,3 +176,25 @@ export async function requestMissingTracks(tracks: PlaylistTrack[]): Promise<Bat
 		skipped
 	};
 }
+
+/** Fork: a Spotify playlist's sync with Spotify. */
+export type SpotifySyncState = components['schemas']['SpotifySyncState'];
+
+/** Fork: whether one of the caller's Spotify playlists follows Spotify. */
+export async function fetchSpotifySync(playlistId: string): Promise<SpotifySyncState> {
+	return api.v3.GET(
+		v3('/api/v3/acquire/spotify/synced/{playlist_id}', { path: { playlist_id: playlistId } })
+	);
+}
+
+/** Fork: turn sync with Spotify (and requesting new songs) on or off. */
+export async function setSpotifySync(
+	playlistId: string,
+	enabled: boolean,
+	autoRequest: boolean
+): Promise<SpotifySyncState> {
+	return api.v3.PUT(
+		v3('/api/v3/acquire/spotify/synced/{playlist_id}', { path: { playlist_id: playlistId } }),
+		{ enabled, auto_request: autoRequest }
+	);
+}

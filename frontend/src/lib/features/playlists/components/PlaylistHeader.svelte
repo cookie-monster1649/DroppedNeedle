@@ -39,6 +39,7 @@
 	import NavidromeIcon from '$lib/media/icons/NavidromeIcon.svelte';
 	import PlexIcon from '$lib/media/icons/PlexIcon.svelte';
 	import SpotifyIcon from '$lib/media/icons/SpotifyIcon.svelte';
+	import SpotifySyncControl from './SpotifySyncControl.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import IconButton from '$lib/ui/IconButton.svelte';
 	import Input from '$lib/ui/Input.svelte';
@@ -377,6 +378,9 @@
 							<span>Created {formatRelativeTime(new Date(playlist.created_at))}</span>
 						{/if}
 					</p>
+					{#if sourceType === 'spotify' && playlist.is_owner}
+						<SpotifySyncControl playlistId={playlist.id} />
+					{/if}
 					{#if !playlist.is_owner && playlist.owner_name}
 						<p class="pl-hero__fact">
 							<span class="pl-hero__initials" aria-hidden="true">{ownerInitials}</span>
