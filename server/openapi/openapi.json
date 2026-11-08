@@ -43740,6 +43740,13 @@
           "id": {
             "type": "string"
           },
+          "library_album_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fork: the library album this task's files landed in, so a task with\nno release group (a want) still links to its album."
+          },
           "maybe_have": {
             "oneOf": [
               {

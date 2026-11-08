@@ -13549,6 +13549,11 @@ export interface components {
             held_for_review: boolean;
             id: string;
             /**
+             * @description Fork: the library album this task's files landed in, so a task with
+             *     no release group (a want) still links to its album.
+             */
+            library_album_id?: string | null;
+            /**
              * @description A library album whose edition is a guess of this album, though its
              *     files name another: "You may have this".
              */

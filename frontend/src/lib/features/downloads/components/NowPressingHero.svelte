@@ -11,7 +11,8 @@
 	import { createDownloadStream } from '$lib/features/downloads/queries/DownloadSSE.svelte';
 	import { canCancel, derivedDownloadStatus } from '$lib/features/downloads/queries/downloadStatus';
 	import type { DownloadTask } from '$lib/features/downloads/queries/types';
-	import { albumHref, artistHref } from '$lib/utils/entityRoutes';
+	import { artistHref } from '$lib/utils/entityRoutes';
+	import { taskAlbumHref } from '../taskAlbumHref';
 	import Button from '$lib/ui/Button.svelte';
 	import PaperPanel from '$lib/ui/PaperPanel.svelte';
 
@@ -68,7 +69,7 @@
 			<div class="hero__main">
 				<div class="hero__heading">
 					<h3 class="hero__title">
-						<a href={albumHref(task.release_group_mbid)} class="hero__link">{task.album_title}</a>
+						<a href={taskAlbumHref(task)} class="hero__link">{task.album_title}</a>
 					</h3>
 					<DownloadStatusBadge {task} />
 				</div>

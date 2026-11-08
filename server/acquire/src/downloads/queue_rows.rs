@@ -412,6 +412,8 @@ pub struct TaskFacts {
     /// A library album, id and title, whose guess is this task's album
     /// but whose files name another: the person may have it already.
     pub doubted_guess: Option<(String, String)>,
+    /// Fork: the library album the task's newest imported track sits in.
+    pub landed_album: Option<String>,
 }
 
 /// The newest import decision of a task.
@@ -510,6 +512,17 @@ impl DownloadStore<'_> {
                 && entry.doubted_guess.is_none()
             {
                 entry.doubted_guess = Some((row.get(1)?, row.get(2)?));
+            }
+        }
+
+        let mut stmt = self.conn.prepare_cached(&sql::landed_album_facts(len))?;
+        let mut rows = stmt.query(ids())?;
+        while let Some(row) = rows.next()? {
+            let task_id: String = row.get(0)?;
+            if let Some(entry) = facts.get_mut(&task_id)
+                && entry.landed_album.is_none()
+            {
+                entry.landed_album = Some(row.get(1)?);
             }
         }
 

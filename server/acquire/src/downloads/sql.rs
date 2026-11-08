@@ -302,6 +302,8 @@ droppedneedle_kernel::sql! {
     family DECISION_FACTS = decision_facts;
     /// Library albums holding a doubted guess on each task's release group.
     family DOUBTED_GUESS_FACTS = doubted_guess_facts;
+    /// Fork: the library album each task's files landed in.
+    family LANDED_ALBUM_FACTS = landed_album_facts;
     /// The admins' activity revision.
     pub(super) GLOBAL_REVISION = "SELECT revision FROM download_activity_global_revision \
              WHERE singleton = 1";
@@ -449,6 +451,19 @@ pub(super) fn doubted_guess_facts(tasks: ListLen) -> String {
          JOIN ({}) d ON d.group_mbid = lower(t.release_group_mbid) \
          WHERE t.id IN ({}) ORDER BY t.id, d.album_id",
         droppedneedle_library::doubted_guesses!("IS NOT NULL"),
+        marks(tasks)
+    )
+}
+
+/// Fork: the library album of the newest track each task in the list
+/// imported, for tasks with no release group (wants) to link to.
+pub(super) fn landed_album_facts(tasks: ListLen) -> String {
+    format!(
+        "SELECT t.id, lt.local_album_id FROM download_tasks t \
+         CROSS JOIN local_tracks lt ON lt.download_task_id = t.id \
+         WHERE t.id IN ({}) AND lt.download_task_id IS NOT NULL \
+           AND +lt.availability = 'indexed' AND lt.local_album_id IS NOT NULL \
+         ORDER BY t.id, lt.imported_at DESC, lt.id",
         marks(tasks)
     )
 }

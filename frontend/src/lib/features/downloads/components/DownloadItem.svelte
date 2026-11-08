@@ -34,7 +34,8 @@
 	import Button from '$lib/ui/Button.svelte';
 	import Card from '$lib/ui/Card.svelte';
 	import StatusChip from '$lib/ui/StatusChip.svelte';
-	import { albumHref, artistHref } from '$lib/utils/entityRoutes';
+	import { artistHref } from '$lib/utils/entityRoutes';
+	import { taskAlbumHref } from '../taskAlbumHref';
 	import {
 		EMPTY_STATE_COPY,
 		classifyEmptyState
@@ -158,7 +159,7 @@
 
 		<div class="row__main">
 			<h3 class="row__title">
-				<a href={albumHref(task.release_group_mbid)} class="row__link">{task.album_title}</a>
+				<a href={taskAlbumHref(task)} class="row__link">{task.album_title}</a>
 			</h3>
 			<p class="row__by">
 				{#if task.artist_mbid}
@@ -332,7 +333,7 @@
 					variant="ghost"
 					size="sm"
 					icon={ExternalLink}
-					href={albumHref(task.release_group_mbid)}
+					href={taskAlbumHref(task)}
 					aria-label="View in library"
 				>
 					View in Library
