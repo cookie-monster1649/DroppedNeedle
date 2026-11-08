@@ -212,6 +212,7 @@ fn matching_release(verified: &MusicBrainzVerifiedRelease) -> Release {
                     .map(|seconds| (seconds * 1000.0).round() as u64),
                 isrcs: Vec::new(),
                 genres: Vec::new(),
+                links: Vec::new(),
             })
             .collect(),
         ..Release::default()

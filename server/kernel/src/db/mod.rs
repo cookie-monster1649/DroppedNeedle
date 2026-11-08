@@ -84,6 +84,7 @@ pub mod checkpoint;
 pub mod datalock;
 pub mod durable;
 pub mod error;
+pub mod extend;
 pub mod factory;
 pub mod fold;
 pub mod fs;

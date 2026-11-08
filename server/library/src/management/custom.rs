@@ -85,6 +85,7 @@ pub fn active(conn: &Connection, album_id: &str) -> rusqlite::Result<Option<Rele
                 })
                 .into_iter()
                 .collect(),
+            links: Vec::new(),
         });
     }
     // The manifest must still be exactly the album's files.

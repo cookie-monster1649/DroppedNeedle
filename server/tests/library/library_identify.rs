@@ -197,6 +197,7 @@ fn release(group: &str, id: &str, recordings: &[&str]) -> Release {
                 position: index as u32 + 1,
                 absolute_position: index as u32 + 1,
                 length_ms: Some(200_000),
+                links: Vec::new(),
             })
             .collect(),
         ..Release::default()

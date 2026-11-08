@@ -37,10 +37,20 @@ Re-test both scenarios on v3; port only with a reproduction.
 ### Slice A – Phase 0 core: requests without a MusicBrainz ID
 The blocker for G1/#201.
 
-**No fork migrations.** v3 stamps the database with one sequential
-migration number (`kernel/src/schema/mod.rs`). A fork `0145` would collide
-with upstream's next migration and strand the NUC's database off the
-upstream chain. Everything below reuses existing columns.
+**Fork schema: the extension chain.** v3 stamps the database with one
+sequential migration number (`PRAGMA user_version`, `kernel/src/schema/mod.rs`).
+A fork `0145` would collide with upstream's next migration and strand the
+NUC's database off the upstream chain. So fork tables live on a second,
+independent chain (`kernel/src/db/extend.rs`, `kernel/src/schema/extensions.rs`):
+named chains of files under `server/migrations/<chain>/`, applied after the
+upstream chain, counted in their own ledger `schema_extensions(chain,
+version)`. Each file runs in one IMMEDIATE transaction. A binary older than
+the stored count refuses to boot (`ExtensionTooNew`). The rules, enforced by
+tests: files only create, and never alter or drop an upstream table, never
+touch `user_version`, and are never edited once shipped (byte-pinned in
+`persist_schema`). Every gate still applies: SQL in `sql.rs`, owners in
+`table-owners.txt`, and enums registered. Upstream rebases stay clean, and if upstream
+ever ships the same thing, a later extension file copies the data across and the table is retired.
 
 A1 (done): `POST /api/v3/requests/wants {artist_name, track_title,
 album_title?, duration_seconds?}`. A want is a `track` request whose key is
@@ -63,8 +73,17 @@ offers the album to identification instead. The asked length is read from
 the want's request row into the lone-track target, so Soulseek candidates
 are judged against it.
 
-A3: carry ISRC / Spotify track ID onto the placed track via
-`local_entity_source_links` (no CHECK change).
+A3 (done): a want may carry `isrc` and `spotify_track_id` (validated and
+normalised; a Spotify URI or link is accepted). They are stored in
+`acquire_want_identities` (chain `catalog`, file 0001). On Import the held
+queue puts them on the release document as `ReleaseTrack.links`
+(`matching::SourceLink`), and the ISRC is also written as a tag. The links
+ride the publisher's `Adoption` (journaled in provenance, so a resumed
+publish keeps them), and `identity::link_track` writes them to
+`local_entity_source_links` as automatic decisions. The same path is open to
+any future provider (Deezer, Tidal, Bandcamp): add a variant to
+`WantIdentityProvider`. Playlist wants send the Spotify track ID; ISRCs follow
+once playlist rows store them (Slice B).
 
 ### Slice B – Phase 1b: playlist reconciliation (#204)
 - Link `catalog_playlist_tracks` to `local_tracks` (existing

@@ -1047,6 +1047,7 @@ fn portishead(
             .map(|(index, (recording, title))| ReleaseTrack {
                 isrcs: Vec::new(),
                 genres: Vec::new(),
+                links: Vec::new(),
                 id: format!("{}b{}{index}", &id[..id.len() - 3], &id[id.len() - 1..]),
                 recording_id: (*recording).to_owned(),
                 title: (*title).to_owned(),

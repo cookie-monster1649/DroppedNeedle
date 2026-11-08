@@ -936,6 +936,7 @@ impl Imports {
             join: join.clone(),
             track: None,
             copy_seal: None,
+            links: Vec::new(),
         };
         let result = (|| {
             let mut items = Vec::with_capacity(placements.len());
@@ -1010,6 +1011,7 @@ impl Imports {
                             disc: track.disc,
                             folder: placement.copy_folder.clone(),
                         }),
+                        links: track.links.clone(),
                         ..dest_policy(placement.policy)
                     }),
                     replaces: None,

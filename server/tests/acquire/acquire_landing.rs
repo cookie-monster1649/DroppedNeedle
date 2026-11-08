@@ -173,6 +173,7 @@ pub(crate) fn release(id: &str, group: &str, titles: &[&str], lengths: &[Option<
             .map(|(index, (title, length))| ReleaseTrack {
                 isrcs: Vec::new(),
                 genres: Vec::new(),
+                links: Vec::new(),
                 id: format!("{}{:x}", &id[..id.len() - 1], 8 + index),
                 recording_id: format!("{}{:x}", &group[..group.len() - 1], 8 + index),
                 title: (*title).to_owned(),
@@ -3669,6 +3670,7 @@ fn edition(
                 position: at as u32 + 1,
                 absolute_position: tracks.len() as u32 + 1,
                 length_ms: lengths[index],
+                links: Vec::new(),
             });
         }
     }
@@ -8137,7 +8139,15 @@ async fn a_held_want_file_imports_as_tagged_with_no_identity() {
                  'held', 1)",
                 rusqlite::params![held, WANT],
             )?;
-            Ok((1, tx.last_insert_rowid()))
+            let file = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO acquire_want_identities (want_key, provider, \
+                 external_entity_type, external_id, created_at) VALUES \
+                 (?1, 'isrc', 'recording', 'USSM10812345', 1), \
+                 (?1, 'spotify', 'track', '4uLU6hMCjMI75M1A2tKUQC', 1)",
+                rusqlite::params![WANT],
+            )?;
+            Ok((1, file))
         })
         .await
         .expect("held rows");
@@ -8166,5 +8176,28 @@ async fn a_held_want_file_imports_as_tagged_with_no_identity() {
     assert!(
         identities.is_empty(),
         "no MusicBrainz identity: {identities:?}"
+    );
+    // The want's identities became the track's source links, and the ISRC
+    // is in the file's tags.
+    let links: Vec<String> = acquire.db.db().column(
+        "SELECT provider || ':' || external_entity_type || ':' || external_id || ' ' || \
+         canonical_url FROM local_entity_source_links WHERE local_track_id IS NOT NULL \
+         ORDER BY provider",
+        [],
+    );
+    assert_eq!(
+        links,
+        vec![
+            "isrc:recording:USSM10812345 https://musicbrainz.org/isrc/USSM10812345".to_owned(),
+            "spotify:track:4uLU6hMCjMI75M1A2tKUQC https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC"
+                .to_owned(),
+        ]
+    );
+    let fields =
+        droppedneedle_library::tags::save::read_fields(track_file(&placed[0])).expect("tags read");
+    assert_eq!(
+        fields.get(&TagField::Isrc),
+        Some(&vec!["USSM10812345".to_owned()]),
+        "{fields:?}"
     );
 }

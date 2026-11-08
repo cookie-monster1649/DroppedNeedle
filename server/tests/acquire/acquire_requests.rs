@@ -2758,6 +2758,8 @@ async fn a_track_asked_for_by_name_alone_is_a_want() {
             "artist_name": "Beyoncé",
             "track_title": "Halo (Live)",
             "duration_seconds": 262,
+            "isrc": "us-sm1-08-12345",
+            "spotify_track_id": "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC?si=x",
         })),
     )
     .await;
@@ -2814,6 +2816,37 @@ async fn a_track_asked_for_by_name_alone_is_a_want() {
     assert_eq!(want.duration_seconds, Some(262.0));
     assert_eq!(target.tracklist[0].duration_seconds, Some(262.0));
     assert_eq!(target.tracklist[0].recording_mbid, None);
+
+    // Its identities are kept beside it, normalized; a bad one refuses the
+    // ask before anything is kept.
+    use droppedneedle_acquire::requests::identities::WantIdentityProvider;
+    let kept: Vec<(WantIdentityProvider, String)> = state
+        .store
+        .want_identities(&key)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|identity| (identity.provider, identity.external_id))
+        .collect();
+    assert_eq!(
+        kept,
+        vec![
+            (WantIdentityProvider::Isrc, "USSM10812345".to_owned()),
+            (
+                WantIdentityProvider::Spotify,
+                "4uLU6hMCjMI75M1A2tKUQC".to_owned()
+            ),
+        ]
+    );
+    let (status, bad) = call(
+        &state,
+        Method::POST,
+        "/api/v3/requests/wants",
+        Some(TRUSTED),
+        Some(json!({"artist_name": "A", "track_title": "B", "isrc": "nope"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
 
     let (status, blank) = call(
         &state,

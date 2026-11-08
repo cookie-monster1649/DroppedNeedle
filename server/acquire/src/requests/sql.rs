@@ -13,6 +13,14 @@ use droppedneedle_library::identity::asked_groups;
 use droppedneedle_library::{owns_group, recording_mbid};
 
 droppedneedle_kernel::sql! {
+    /// Fork (catalogue extension 1): keep one identity (`?2` provider,
+    /// `?3` entity type, `?4` id) of want `?1`; a repeat is a no-op.
+    pub(super) INSERT_WANT_IDENTITY = "INSERT OR IGNORE INTO acquire_want_identities \
+             (want_key, provider, external_entity_type, external_id, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)";
+    /// Fork: every identity of want `?1`, by provider then id.
+    pub(super) WANT_IDENTITIES = "SELECT provider, external_id FROM acquire_want_identities \
+             WHERE want_key = ?1 ORDER BY provider, external_id";
     /// Settle the rows linked to one task (`?1`) as `?2`, stamping
     /// `completed_at` with `?3` unless it is NULL. Live rows always match;
     /// with `?4` set, failed, incomplete and mid-cancel rows match too (a
