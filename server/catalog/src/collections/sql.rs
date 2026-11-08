@@ -160,6 +160,20 @@ droppedneedle_kernel::sql! {
          GROUP BY c.entry_id) \
          UPDATE catalog_playlist_tracks SET library_file_id = chosen.track_id \
          FROM chosen WHERE catalog_playlist_tracks.id = chosen.entry_id";
+    /// Fork: entries no id links, asked for by name: id, artist, title.
+    pub(super) UNLINKED_BY_NAME = "SELECT id, artist_name, track_name \
+         FROM catalog_playlist_tracks WHERE library_file_id IS NULL \
+         AND COALESCE(recording_mbid, '') = ''";
+    /// Fork: the newest indexed track a download for want key `?1` landed
+    /// as (the request a playlist row's artist and title ask under).
+    pub(super) TRACK_OF_WANT = "SELECT t.id FROM download_tasks d \
+         CROSS JOIN local_tracks t ON t.download_task_id = d.id \
+         WHERE d.recording_mbid = ?1 AND t.download_task_id IS NOT NULL \
+         AND t.availability = 'indexed' \
+         ORDER BY t.imported_at DESC, t.id LIMIT 1";
+    /// Fork: link entry `?1` to track `?2`.
+    pub(super) LINK_ENTRY = "UPDATE catalog_playlist_tracks SET library_file_id = ?2 \
+         WHERE id = ?1 AND library_file_id IS NULL";
     /// Fork: a linked entry lists the library among its sources, which is
     /// what the player and the playlist page read to play it locally; an
     /// entry with no source yet (a Spotify import's) takes the library.

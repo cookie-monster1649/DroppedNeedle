@@ -674,17 +674,25 @@ impl LandingService {
         let ask = (*code == Reason::NoRelease)
             .then(|| want::ask(target))
             .flatten();
+        // One song is one file: only the first agreeing copy is paired, so a
+        // download holding the song twice files it once; the rest wait for
+        // a person.
+        let mut paired = false;
         let held: Vec<Held<'_>> = landing
             .audio
             .iter()
-            .map(|file| Held {
-                file,
-                track: ask
+            .map(|file| {
+                let track = ask
                     .as_ref()
-                    .filter(|_| want::agrees(target, file))
-                    .map(|_| 0),
-                code: *code,
-                detail: detail.clone(),
+                    .filter(|_| !paired && want::agrees(target, file))
+                    .map(|_| 0);
+                paired |= track.is_some();
+                Held {
+                    file,
+                    track,
+                    code: *code,
+                    detail: detail.clone(),
+                }
             })
             .collect();
         (

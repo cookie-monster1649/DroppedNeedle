@@ -534,22 +534,7 @@ pub fn is_want_key(key: &str) -> bool {
 /// (case, accents and spacing aside) always give the same key, so asking
 /// twice finds the first ask.
 pub fn want_key(artist: &str, title: &str) -> String {
-    use sha2::{Digest, Sha256};
-    use unicode_normalization::UnicodeNormalization;
-    let fold = |text: &str| -> String {
-        let lowered: String = text
-            .nfkd()
-            .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
-            .collect::<String>()
-            .to_lowercase();
-        lowered.split_whitespace().collect::<Vec<_>>().join(" ")
-    };
-    let mut hasher = Sha256::new();
-    hasher.update(fold(artist).as_bytes());
-    hasher.update([0]);
-    hasher.update(fold(title).as_bytes());
-    let digest = hasher.finalize();
-    format!("{WANT_PREFIX}{}", hex::encode(&digest[..16]))
+    droppedneedle_library::matching::strings::want_key(artist, title)
 }
 
 /// Validate a request key for `kind`: an MBID, or for a track a want key
