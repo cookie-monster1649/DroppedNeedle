@@ -472,6 +472,91 @@ impl HeldService {
         result
     }
 
+    /// Fork: songs from the entry owner's Spotify playlists the entry's
+    /// files could be matched to, searched by `query` (the entry's artist
+    /// and title when empty).
+    pub async fn spotify_candidates(
+        &self,
+        viewer: &Viewer,
+        entry_id: i64,
+        query: Option<String>,
+    ) -> Result<Vec<super::spotify_match::SpotifyCandidate>, HeldError> {
+        let entry = self.get(viewer, entry_id).await?;
+        let owner = entry
+            .user_id
+            .clone()
+            .unwrap_or_else(|| viewer.user_id.clone());
+        let query = query
+            .map(|query| query.trim().to_owned())
+            .filter(|query| !query.is_empty())
+            .or_else(|| {
+                entry.files.iter().find_map(|file| {
+                    file.evidence_title
+                        .clone()
+                        .or(file.pairing.track_title.clone())
+                })
+            })
+            .or(entry.album_title.clone())
+            .unwrap_or_default();
+        self.read("held.spotify_candidates", move |rows| {
+            rows.spotify_candidates(&owner, &query)
+        })
+        .await
+    }
+
+    /// Fork: import an entry's files as a song from the owner's Spotify
+    /// playlists, on a release made from Spotify's metadata.
+    pub async fn match_spotify(
+        &self,
+        viewer: &Viewer,
+        entry_id: i64,
+        candidate: &str,
+        file_ids: Option<Vec<i64>>,
+        actor: &str,
+    ) -> Result<Acted, HeldError> {
+        let current = self.get(viewer, entry_id).await?;
+        let owner = current
+            .user_id
+            .clone()
+            .unwrap_or_else(|| viewer.user_id.clone());
+        let id = candidate.trim().to_owned();
+        let song = self
+            .read("held.spotify_candidate", move |rows| {
+                rows.spotify_candidate(&owner, &id)
+            })
+            .await?
+            .ok_or_else(|| {
+                HeldError::Invalid(
+                    "That Spotify song is not in your playlists any more.".to_owned(),
+                )
+            })?;
+        let entry = self.claim(viewer, entry_id).await?;
+        let result = match Self::chosen(&entry, file_ids.as_deref()) {
+            Ok(files) if files.is_empty() => Ok(Acted::default()),
+            Ok(files) => {
+                let mut acted = Acted::default();
+                let release = song.release(files.len());
+                match self
+                    .place_group(
+                        &entry,
+                        files,
+                        Some(actor),
+                        Asker::Person,
+                        Some(release),
+                        &mut acted,
+                    )
+                    .await
+                {
+                    Ok(()) => Ok(acted),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        };
+        self.release(entry_id).await;
+        result
+    }
+
     /// Ask AcoustID again about files it heard as another recording or
     /// could not confirm; a file it now confirms is imported.
     pub async fn recheck(
@@ -1075,7 +1160,7 @@ impl HeldService {
         }
         let mut acted = Acted::default();
         for group in groups {
-            self.place_group(entry, group, actor, asker, &mut acted)
+            self.place_group(entry, group, actor, asker, None, &mut acted)
                 .await?;
         }
         Ok(acted)
@@ -1087,13 +1172,16 @@ impl HeldService {
         files: Vec<HeldFile>,
         actor: Option<&str>,
         asker: Asker,
+        chosen: Option<Release>,
         acted: &mut Acted,
     ) -> Result<(), HeldError> {
         let library = self.library();
-        if matches!(
-            entry.origin,
-            EntryOrigin::Upload | EntryOrigin::ImportFolder
-        ) && files.iter().any(|file| !file.is_paired())
+        if chosen.is_none()
+            && matches!(
+                entry.origin,
+                EntryOrigin::Upload | EntryOrigin::ImportFolder
+            )
+            && files.iter().any(|file| !file.is_paired())
         {
             return Err(HeldError::Refused(
                 "These files are not paired with any track yet. Pick the album with Match."
@@ -1113,12 +1201,17 @@ impl HeldService {
         let (task, target) = self.task_target(first).await?;
         // Fork: a track asked for by name has no release to place it on;
         // its files go in as tagged, on a release made from the ask.
-        let want = entry.origin == EntryOrigin::Download
-            && entry
-                .recording_mbid
-                .as_deref()
-                .is_some_and(crate::requests::ledger::is_want_key);
-        let (release, join) = if want {
+        // Fork: a release a person chose outside MusicBrainz (a Spotify
+        // song) takes the files one per track, as a want's does.
+        let want = chosen.is_some()
+            || entry.origin == EntryOrigin::Download
+                && entry
+                    .recording_mbid
+                    .as_deref()
+                    .is_some_and(crate::requests::ledger::is_want_key);
+        let (release, join) = if let Some(release) = chosen {
+            (release, None)
+        } else if want {
             let key = entry.recording_mbid.clone().unwrap_or_default();
             let links = self
                 .read("held.want_links", move |rows| rows.want_links(&key))
