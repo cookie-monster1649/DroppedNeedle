@@ -450,6 +450,18 @@ impl<'conn> DownloadStore<'conn> {
         Ok(())
     }
 
+    /// Fork: the length, in seconds, a track asked for by name was asked
+    /// with; `None` when the ask gave none or its row is gone.
+    pub fn want_duration(&self, want_key: &str) -> Result<Option<f64>, StoreError> {
+        use rusqlite::OptionalExtension as _;
+        let seconds: Option<Option<i64>> = self
+            .conn
+            .query_row(sql::WANT_DURATION.text(), [want_key], |row| row.get(0))
+            .optional()?;
+        #[allow(clippy::cast_precision_loss)]
+        Ok(seconds.flatten().filter(|s| *s > 0).map(|s| s as f64))
+    }
+
     /// Newest still-active task for one album. Queued rows count as active: a queued task is a live
     /// download-in-progress from the request's view.
     pub fn newest_active_for_album(
