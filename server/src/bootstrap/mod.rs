@@ -552,6 +552,7 @@ pub(crate) async fn build_on(
     }
     let concerts = droppedneedle_catalog::concerts::ConcertsSetup::from_platform(p, &providers);
     let precache_sources = jobs::catalog_precache(&catalog_setup, config_store, listening.clone());
+    let playlist_links = catalog_setup.collections.clone();
     // Every kind that can be enqueued, so none waits with nothing to run
     // it. Library Management queues the media-server rescans after a run,
     // sent through media's connection resolver; pages queue their image
@@ -696,6 +697,8 @@ pub(crate) async fn build_on(
     jobs::spawn_provider_cache_sweep(supervisor, providers.cache.clone()).map_err(|_| {
         stage("jobs loops")("the provider cache sweep is already running".to_owned())
     })?;
+    droppedneedle_catalog::collections::linker::spawn_playlist_linker(supervisor, &playlist_links)
+        .map_err(|_| stage("jobs loops")("the playlist linker is already running".to_owned()))?;
 
     let router = create_app_with_web(state.clone(), web);
     Ok(Built {

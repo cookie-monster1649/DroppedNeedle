@@ -332,7 +332,15 @@ impl CollectionsPlaylistBridge {
                 StoreError::Busy(_) => SpotifyError::Busy,
                 other => SpotifyError::Store(other.to_string()),
             })? {
-            Written::Done(()) => Ok(()),
+            Written::Done(()) => {
+                // Fork: the rows just written point at no file; the tracks
+                // the library already holds are linked now rather than on
+                // the linker's next pass. Best effort: the loop catches up.
+                if let Err(error) = self.playlists.link_library().await {
+                    tracing::warn!(%error, "imported playlist not linked to the library yet");
+                }
+                Ok(())
+            }
             Written::Missing => Err(SpotifyError::Store(format!(
                 "playlist {playlist_id} is gone"
             ))),
@@ -392,6 +400,8 @@ fn entry_for(track: &ImportedTrack) -> NewEntry {
             .and_then(|number| i32::try_from(number).ok()),
         duration: track.duration.map(|secs| secs as f64),
         recording_mbid: track.recording_mbid.clone(),
+        spotify_track_id: track.spotify_track_id.clone(),
+        isrc: track.isrc.clone(),
         ..NewEntry::default()
     }
 }

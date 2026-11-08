@@ -352,8 +352,8 @@
     "key": "end-of-you",
     "why": "files carry only a release group id, one track",
     "truth": {"release_group": "f90affa5-1f23-40f5-9fda-0a7fe825e967", "release": null},
-    "tagged": {"verdict": "unmatched", "release": null, "known_miss": "the files credit one of the release's three artists, so the names disagree"},
-    "stripped": {"verdict": "unmatched", "release": null, "known_miss": "the files credit one of the release's three artists, so the names disagree"},
+    "tagged": {"verdict": "review", "release": "06d3f86e-6e6f-4127-b63c-4b156c579bcb", "known_miss": "one file of a joint album; the files credit one of its three artists, so it waits for review"},
+    "stripped": {"verdict": "review", "release": "06d3f86e-6e6f-4127-b63c-4b156c579bcb", "known_miss": "one file of a joint album; the files credit one of its three artists, so it waits for review"},
     "facts": {
       "local_album_id": "end-of-you",
       "title": "End of You",

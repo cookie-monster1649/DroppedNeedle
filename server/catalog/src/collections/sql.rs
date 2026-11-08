@@ -37,7 +37,11 @@ droppedneedle_kernel::sql! {
     fragment TRACK_COLUMNS = "SELECT id, position, track_name, artist_name, album_name, \
          album_id, artist_id, track_source_id, cover_url, source_type, available_sources, \
          format, track_number, disc_number, duration_ms / 1000.0, created_at / 1000, \
-         plex_rating_key, library_file_id, recording_mbid FROM catalog_playlist_tracks";
+         plex_rating_key, library_file_id, recording_mbid, \
+         (SELECT x.spotify_track_id FROM catalog_playlist_entry_identities x \
+          WHERE x.entry_id = catalog_playlist_tracks.id), \
+         (SELECT x.isrc FROM catalog_playlist_entry_identities x \
+          WHERE x.entry_id = catalog_playlist_tracks.id) FROM catalog_playlist_tracks";
 
     /// Every playlist, then whether the caller may read it. A private
     /// playlist with no owner is left out unless `?2`, an admin asking.
@@ -129,6 +133,36 @@ droppedneedle_kernel::sql! {
     pub(super) REMOVE_ENTRY = "DELETE FROM catalog_playlist_tracks WHERE playlist_id = ?1 AND id = ?2";
     /// Whether playlist `?1` holds entry `?2`.
     pub(super) ENTRY_EXISTS = "SELECT 1 FROM catalog_playlist_tracks WHERE playlist_id = ?1 AND id = ?2";
+    /// Fork: link entries the library can now play. An entry with no file
+    /// takes an indexed track that is provably its track: the same
+    /// MusicBrainz recording (the Spotify import proves it by ISRC), or the
+    /// same Spotify track or ISRC among the track's provider links (a want
+    /// placed from the entry carries them). The lowest id wins when the
+    /// library holds several copies. Entries already linked are left alone,
+    /// so a person's own choice stays.
+    pub(super) LINK_LIBRARY = "WITH unlinked AS ( \
+         SELECT p.id, lower(p.recording_mbid) AS recording, x.spotify_track_id, x.isrc \
+         FROM catalog_playlist_tracks p \
+         LEFT JOIN catalog_playlist_entry_identities x ON x.entry_id = p.id \
+         WHERE p.library_file_id IS NULL), \
+         candidates AS ( \
+         SELECT u.id AS entry_id, i.local_track_id AS track_id FROM unlinked u \
+         JOIN local_track_external_identities i ON i.recording_mbid = u.recording \
+         UNION ALL SELECT u.id, l.local_track_id FROM unlinked u \
+         JOIN local_entity_source_links l ON l.provider = 'spotify' \
+         AND l.external_entity_type = 'track' AND l.external_id = u.spotify_track_id \
+         UNION ALL SELECT u.id, l.local_track_id FROM unlinked u \
+         JOIN local_entity_source_links l ON l.provider = 'isrc' \
+         AND l.external_entity_type = 'recording' AND l.external_id = u.isrc), \
+         chosen AS ( \
+         SELECT c.entry_id, MIN(c.track_id) AS track_id FROM candidates c \
+         WHERE (SELECT t.availability FROM local_tracks t WHERE t.id = c.track_id) = 'indexed' \
+         GROUP BY c.entry_id) \
+         UPDATE catalog_playlist_tracks SET library_file_id = chosen.track_id \
+         FROM chosen WHERE catalog_playlist_tracks.id = chosen.entry_id";
+    /// Fork: an entry's provider ids (`catalog_playlist_entry_identities`).
+    pub(super) INSERT_ENTRY_IDENTITY = "INSERT INTO catalog_playlist_entry_identities \
+         (entry_id, spotify_track_id, isrc) VALUES (?1, ?2, ?3)";
     /// An entry's preferred source. A recording belongs to the source that
     /// gave it, so another source starts with none.
     pub(super) SET_SOURCE_TYPE = "UPDATE catalog_playlist_tracks SET source_type = ?1, \

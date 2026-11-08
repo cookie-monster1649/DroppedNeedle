@@ -24,6 +24,8 @@ function row(over: Partial<PlaylistTrack>): PlaylistTrack {
 		plex_rating_key: null,
 		library_file_id: null,
 		recording_mbid: null,
+		spotify_track_id: null,
+		isrc: null,
 		created_at: '',
 		...over
 	} as PlaylistTrack;
@@ -48,16 +50,20 @@ describe('planMissingRequests', () => {
 				track_title: 'Halo (Live)',
 				album_title: 'Album',
 				duration_seconds: 183,
+				isrc: null,
 				spotify_track_id: null
 			}
 		]);
 	});
 
-	it("carries a Spotify row's track id with its want", () => {
+	it("carries a row's provider ids with its want", () => {
 		const plan = planMissingRequests([
-			row({ source_type: 'spotify', track_source_id: '4uLU6hMCjMI75M1A2tKUQC' }),
-			row({ source_type: 'youtube', track_source_id: 'dQw4w9WgXcQ', track_name: 'Other' })
+			row({ spotify_track_id: '4uLU6hMCjMI75M1A2tKUQC', isrc: 'USUM71703861' }),
+			row({ track_name: 'Other' })
 		]);
-		expect(plan.wants.map((w) => w.spotify_track_id)).toEqual(['4uLU6hMCjMI75M1A2tKUQC', null]);
+		expect(plan.wants.map((w) => [w.spotify_track_id, w.isrc])).toEqual([
+			['4uLU6hMCjMI75M1A2tKUQC', 'USUM71703861'],
+			[null, null]
+		]);
 	});
 });

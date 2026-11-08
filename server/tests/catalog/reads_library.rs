@@ -1520,3 +1520,86 @@ async fn library_holds_a_group_only_through_an_indexed_track_on_a_live_copy() {
         "a merged-away copy holds nothing"
     );
 }
+
+/// Fork: the playlist linker points an entry at the indexed track whose
+/// MusicBrainz recording is the entry's, whatever its case; a recording
+/// held only by a missing file, or none at all, stays unlinked; an entry
+/// already linked keeps its file; and a second pass changes nothing.
+#[tokio::test]
+async fn playlist_entries_link_to_the_library_tracks_they_name() {
+    use droppedneedle_catalog::collections::store::playlists::{NewEntry, PlaylistStore};
+
+    let fixture = sqlite_fixture().await;
+    seed(
+        &fixture,
+        "INSERT INTO local_track_external_identities (local_track_id, provider, recording_mbid, \
+         decision_source, selected_at) VALUES \
+         ('t1', 'musicbrainz', 'aa000000-0000-4000-8000-000000000001', 'manual', 1), \
+         ('t3', 'musicbrainz', 'aa000000-0000-4000-8000-000000000003', 'manual', 1), \
+         ('t4', 'musicbrainz', 'aa000000-0000-4000-8000-000000000004', 'manual', 1)",
+    )
+    .await;
+    let store = PlaylistStore::new(droppedneedle_catalog::collections::db::CollectionsDb::new(
+        fixture.runtime.db().clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    ));
+    let entry = |name: &str, recording: Option<&str>| NewEntry {
+        track_name: name.to_owned(),
+        artist_name: "Aurora".to_owned(),
+        album_name: "First Light".to_owned(),
+        recording_mbid: recording.map(str::to_owned),
+        ..NewEntry::default()
+    };
+    let owner = store.owned_by("u1");
+    let (id, _) = owner
+        .create_with(
+            "Spotify",
+            vec![
+                entry("Opener", Some("AA000000-0000-4000-8000-000000000001")),
+                entry("Gone", Some("aa000000-0000-4000-8000-000000000003")),
+                entry("Unknown", None),
+                entry("Single", Some("aa000000-0000-4000-8000-000000000004")),
+            ],
+        )
+        .await
+        .unwrap();
+    fixture
+        .runtime
+        .db()
+        .write(
+            droppedneedle_kernel::db::Lane::Foreground,
+            "hand link",
+            move |tx| {
+                tx.execute_batch(
+                    "UPDATE catalog_playlist_tracks SET library_file_id = 't6' \
+                     WHERE track_name = 'Single'",
+                )
+                .map_err(droppedneedle_kernel::db::DbError::from)
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(store.link_library().await.unwrap(), 1);
+    let linked: Vec<(String, Option<String>)> = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|track| (track.track_name, track.library_file_id))
+        .collect();
+    assert_eq!(
+        linked,
+        vec![
+            ("Opener".to_owned(), Some("t1".to_owned())),
+            ("Gone".to_owned(), None),
+            ("Unknown".to_owned(), None),
+            ("Single".to_owned(), Some("t6".to_owned())),
+        ]
+    );
+    assert_eq!(
+        store.link_library().await.unwrap(),
+        0,
+        "nothing left to link"
+    );
+}

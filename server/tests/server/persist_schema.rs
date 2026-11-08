@@ -74,7 +74,7 @@ fn fresh_migrate_marks_version_and_seeds() {
     assert_eq!(scalar(&connection, "PRAGMA user_version"), latest_version());
     // 177 upstream tables, plus the extension ledger and the catalogue
     // extension's want identities (fork).
-    assert_eq!(table_names(&connection).len(), 179);
+    assert_eq!(table_names(&connection).len(), 180);
     assert_eq!(
         scalar(
             &connection,
@@ -1495,6 +1495,7 @@ const FOREIGN_KEYS: &[(&str, &str, &str, &str)] = &[
     ("catalog_ignored_releases", "user_id", "auth_users", "CASCADE"),
     ("catalog_new_release_seen_marks", "user_id", "auth_users", "CASCADE"),
     ("catalog_playlist_covers", "playlist_id", "catalog_playlists", "CASCADE"),
+    ("catalog_playlist_entry_identities", "entry_id", "catalog_playlist_tracks", "CASCADE"),
     ("catalog_playlist_tracks", "playlist_id", "catalog_playlists", "CASCADE"),
     ("catalog_playlists", "user_id", "auth_users", "CASCADE"),
     ("catalog_user_favorite_names", "user_id, item_kind, item_id", "catalog_user_favorites", "CASCADE"),
@@ -3763,11 +3764,18 @@ mod extension_chains {
     #[test]
     fn shipped_extension_files_keep_their_bytes() {
         use sha2::{Digest, Sha256};
-        let shipped = [(
-            "catalog",
-            "catalog/0001_want_identities.sql",
-            "2a2c94efa770f1f25bf86c93d67a338140d2e1477c20c8e99d0b6da77048b70b",
-        )];
+        let shipped = [
+            (
+                "catalog",
+                "catalog/0001_want_identities.sql",
+                "2a2c94efa770f1f25bf86c93d67a338140d2e1477c20c8e99d0b6da77048b70b",
+            ),
+            (
+                "catalog",
+                "catalog/0002_playlist_entry_identities.sql",
+                "b402f82f51857771b8a5e0340f421b0112643b1b14bd6292565d4038dde11218",
+            ),
+        ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {
                 let pinned = shipped

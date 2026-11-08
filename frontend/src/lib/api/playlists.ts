@@ -135,9 +135,10 @@ export function planMissingRequests(tracks: PlaylistTrack[]): MissingPlan {
 			track_title: title,
 			album_title: track.album_name || null,
 			duration_seconds,
-			// The provider's own id rides with the want onto the placed track
-			// (local_entity_source_links); rows hold no ISRC until Slice B.
-			spotify_track_id: track.source_type === 'spotify' ? track.track_source_id || null : null
+			// The provider's ids ride with the want onto the placed track
+			// (local_entity_source_links), which links it back to this row.
+			isrc: track.isrc || null,
+			spotify_track_id: track.spotify_track_id || null
 		});
 	}
 	return plan;
