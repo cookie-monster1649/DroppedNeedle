@@ -107,13 +107,22 @@ once playlist rows store them (Slice B).
   the library can play: same MusicBrainz recording, or the same Spotify
   track / ISRC among the track's `local_entity_source_links`. v3 only
   linked entries added by hand, so landed downloads never showed on their
-  playlist (nor in Subsonic/Jellyfin playlists).
+  playlist (nor in Subsonic/Jellyfin playlists). A linked entry also gets
+  `local` in `available_sources` (what the player reads) and, with no source
+  yet, `source_type = 'local'`. The page labels Spotify imports "Imported
+  from Spotify".
 - B2 (done): `catalog_playlist_entry_identities` (chain `catalog` 0002)
   keeps each imported entry's Spotify track ID and ISRC; the API returns
   them and playlist wants send them.
-- B3 (next): a want whose download matches the ask by name and length
-  imports by itself (the ask is the release checked against), instead of
-  waiting in To Decide; a weak one is held and the task stops.
+- B3 (done): a want's file that agrees with the ask (title, artist or
+  one of its credited artists, length within 7 s of the provider's length;
+  `landing::want`) is held paired to the ask, so the task stops fetching
+  other copies, and the held loop (`retries_by_itself`, `RETRIES`) files it
+  through the want Import (A2/A3) within five minutes, with its Spotify
+  id/ISRC as source links. A file that disagrees (another song, another
+  length) is held unpaired for a person and the next source is tried.
+- B4 (next): request status for wants: a want filed from the held list
+  should show as imported, not "failed".
 - Per-row status (owned / requested / held / missing / unresolved) and
   counters on the playlist page.
 - "Request missing" sends **track** requests (request_kind `track` exists),

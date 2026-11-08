@@ -2174,9 +2174,22 @@ fn settles_as_automatic(file: &HeldFile) -> bool {
 }
 
 /// Whether a held file is retried by itself: paired with a track, and held
-/// for a library reason or waiting for AcoustID as an upload.
+/// for a library reason or waiting for AcoustID as an upload (or, fork,
+/// a want's file agreeing with the ask).
 pub fn retries_by_itself(file: &HeldFile) -> bool {
-    file.is_paired() && (is_retry(file.reason) || settles_as_automatic(file))
+    file.is_paired()
+        && (is_retry(file.reason) || settles_as_automatic(file) || agrees_with_ask(file))
+}
+
+/// Fork: a want's file the landing found agreeing with the ask by name and
+/// length is held paired to the ask (`landing::want`), and files as tagged.
+fn agrees_with_ask(file: &HeldFile) -> bool {
+    file.reason == Reason::NoRelease
+        && file
+            .pairing
+            .recording_mbid
+            .as_deref()
+            .is_some_and(crate::requests::ledger::is_want_key)
 }
 
 /// The held list's loop runs every five minutes, the first pass a minute

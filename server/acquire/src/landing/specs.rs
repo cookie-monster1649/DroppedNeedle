@@ -158,6 +158,10 @@ pub struct Target {
     /// A person confirmed this attempt's candidate outside the quality
     /// band: its files are kept whatever their quality.
     pub quality_waived: bool,
+    /// Fork: for a want (asked for by name), the asked length in seconds,
+    /// from the provider that named the track. A file agreeing with the
+    /// ask by name and this length lands by itself (`landing::want`).
+    pub want_seconds: Option<f64>,
 }
 
 impl Target {

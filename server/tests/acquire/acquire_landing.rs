@@ -8099,6 +8099,162 @@ async fn a_held_want_file_imports_as_tagged_with_no_identity() {
     );
 }
 
+/// Fork (Slice B3): a want's file agreeing with the ask by title, artist
+/// and length is held paired to the ask, the task stops fetching, and the
+/// held loop files it by itself. A file of another song stays for a person.
+#[tokio::test]
+async fn a_want_file_agreeing_with_the_ask_files_itself() {
+    use droppedneedle_acquire::downloads::plan::ExpectedTrack;
+    use droppedneedle_acquire::downloads::store::TaskDetails;
+    const WANT: &str = "want-0123456789abcdef0123456789abcdef";
+    const OTHER: &str = "want-fedcba9876543210fedcba9876543210";
+    let db = AcquireDb::scratch().expect("scratch db");
+    db.add_user("u-ada", "Ada", "user").await.expect("user");
+    let dir = db.path().parent().expect("scratch dir").to_path_buf();
+    let config = Arc::new(
+        ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+            .expect("config"),
+    );
+    let platform = TestPlatform::on(db.db(), &dir)
+        .settings(config)
+        .build()
+        .await;
+    let (library, _) = library_at(&platform);
+    let music = dir.join("music");
+    std::fs::create_dir_all(&music).expect("music root");
+    library
+        .scans
+        .add_root(
+            Some("music".to_owned()),
+            music.to_string_lossy().into_owned(),
+            EffectivePolicy::Automatic,
+        )
+        .expect("root adds");
+    let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(Vec::new()));
+    let (acquire, _fixed) = acquire_serving(
+        &platform,
+        &library,
+        Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+    );
+    let mount = dir.join("downloads");
+    let right = land_file(
+        &mount.join("a"),
+        "sour.flac",
+        "flac_full_01.flac",
+        "Sour Times",
+        1,
+    );
+    let wrong = land_file(
+        &mount.join("b"),
+        "glory.flac",
+        "flac_full_01.flac",
+        "Glory Box",
+        1,
+    );
+    let seconds = length_ms(&right).expect("length") as f64 / 1000.0;
+    for (id, key, title) in [("t-right", WANT, "Sour Times"), ("t-wrong", OTHER, "Roads")] {
+        acquire
+            .journal
+            .run("test.seed", move |store| {
+                let task = NewTask {
+                    artist_name: "Portishead".to_owned(),
+                    album_title: String::new(),
+                    ..new_task(id, "")
+                };
+                store.insert_track_task(&task, key, 1.0)?;
+                store.set_task_details(
+                    id,
+                    &TaskDetails {
+                        track_title: Some(title.to_owned()),
+                        ..TaskDetails::default()
+                    },
+                    1.0,
+                )?;
+                store.set_task_plan(
+                    id,
+                    &TaskPlan {
+                        expected_tracks: vec![ExpectedTrack {
+                            track_number: 0,
+                            disc_number: 1,
+                            duration_seconds: Some(seconds + 3.0),
+                            recording_mbid: None,
+                            title: Some(title.to_owned()),
+                            release_track_mbid: None,
+                        }],
+                        ..TaskPlan::default()
+                    },
+                    1.0,
+                )
+            })
+            .await
+            .expect("task");
+    }
+    let land = |id: &'static str, file: PathBuf| {
+        let acquire = &acquire;
+        let mount = mount.clone();
+        async move {
+            let task = acquire
+                .journal
+                .read_task(id)
+                .await
+                .expect("task reads")
+                .expect("task");
+            let landed = Landed {
+                mounts: vec![mount.into()],
+                files: vec![Reported::path(file)],
+            };
+            acquire.landing.land(&task, None, landed, false).await
+        }
+    };
+    let report = land("t-right", right).await;
+    assert!(
+        matches!(
+            report.result,
+            LandingResult::Held {
+                code: Reason::NoRelease,
+                ..
+            }
+        ),
+        "{:?}",
+        report.result
+    );
+    assert!(report.whole_copy, "an agreeing file stops the task");
+    let report = land("t-wrong", wrong).await;
+    assert!(
+        matches!(report.result, LandingResult::Held { .. }),
+        "{:?}",
+        report.result
+    );
+    assert!(!report.whole_copy, "another song: the next source is tried");
+    let paired: Vec<String> = acquire.db.db().column(
+        "SELECT source_task_id || ' ' || COALESCE(recording_mbid, '-') || ' ' || \
+         COALESCE(release_mbid, '-') FROM acquire_held_files ORDER BY source_task_id",
+        [],
+    );
+    assert_eq!(
+        paired,
+        vec![format!("t-right {WANT} -"), "t-wrong - -".to_owned()]
+    );
+
+    acquire.held.tend().await;
+    let placed = files_under(&music, "flac");
+    assert_eq!(
+        placed.len(),
+        1,
+        "the agreeing file filed itself: {placed:?}"
+    );
+    let titles: Vec<String> = acquire.db.db().column(
+        "SELECT title FROM local_tracks WHERE availability = 'indexed'",
+        [],
+    );
+    assert_eq!(titles, vec!["Sour Times".to_owned()]);
+    let waiting: Vec<String> = acquire.db.db().column(
+        "SELECT source_task_id FROM acquire_held_files WHERE state = 'held'",
+        [],
+    );
+    assert_eq!(waiting, vec!["t-wrong".to_owned()], "the other song waits");
+}
+
 /// Fork: with a pinned edition, a copy tagged as a sibling edition of the
 /// same group (its own recordings in MusicBrainz, as a digital and a CD
 /// release often have) whose tracks line up is placed as the pin instead of
