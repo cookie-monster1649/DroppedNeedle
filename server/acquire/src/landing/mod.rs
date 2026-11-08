@@ -35,6 +35,7 @@ pub mod probe;
 pub mod quality;
 pub mod specs;
 pub(crate) mod sql;
+pub mod want;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -1239,6 +1240,19 @@ impl LandingService {
 /// every track of the matched release, carry nothing beyond it, and are
 /// close enough as a whole to import but for the album title or artist.
 /// Files that name other tracks are far from the release and are not this.
+/// Fork: a want held for want of a release, with a file that agrees with
+/// the ask: that file lands by itself, so no other copy is fetched.
+fn want_agreed(target: &Target, landing: &Landing, decision: &Decision) -> bool {
+    matches!(
+        &decision.outcome,
+        Outcome::Hold {
+            code: Reason::NoRelease,
+            ..
+        }
+    ) && want::want_key(target).is_some()
+        && landing.audio.iter().any(|file| want::agrees(target, file))
+}
+
 fn whole_copy(decision: &Decision, matched: &MatchSummary) -> bool {
     matches!(
         &decision.outcome,
@@ -1306,6 +1320,12 @@ pub fn target_for(task: &TaskRow, details: &TaskDetails, plan: &TaskPlan) -> Tar
             .collect(),
         planned_album: planned_album(details, plan),
         quality_waived: false,
+        want_seconds: task
+            .recording_mbid
+            .as_deref()
+            .filter(|key| crate::requests::ledger::is_want_key(key.trim()))
+            .and_then(|_| plan.expected_tracks.first())
+            .and_then(|track| track.duration_seconds),
     }
 }
 
@@ -1672,8 +1692,11 @@ fn hold_item(
             pairing: HeldPairing {
                 release_mbid: track
                     .map(|(release, _)| release.id.clone())
+                    .filter(|id| !id.is_empty())
                     .or_else(|| target.release_mbid.clone()),
-                release_track_mbid: track.map(|(_, track)| track.id.clone()),
+                release_track_mbid: track
+                    .map(|(_, track)| track.id.clone())
+                    .filter(|id| !id.is_empty()),
                 recording_mbid: track
                     .map(|(_, track)| track.recording_id.clone())
                     .or_else(|| tag.musicbrainz_recording_id.clone()),
