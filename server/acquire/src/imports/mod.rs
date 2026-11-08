@@ -31,4 +31,5 @@ pub mod spotify_albums;
 pub mod spotify_client;
 pub mod spotify_oauth;
 pub mod spotify_store;
+pub mod spotify_sync;
 pub(crate) mod sql;

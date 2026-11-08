@@ -41,6 +41,7 @@ pub static CATALOG: ExtensionChain = ExtensionChain {
     migrations: &[
         extension!(1, "catalog/0001_want_identities.sql"),
         extension!(2, "catalog/0002_playlist_entry_identities.sql"),
+        extension!(3, "catalog/0003_spotify_playlist_syncs.sql"),
     ],
 };
 

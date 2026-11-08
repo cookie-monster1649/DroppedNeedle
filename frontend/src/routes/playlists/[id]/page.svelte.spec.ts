@@ -14,7 +14,11 @@ vi.mock('$lib/api/playlists', async (importOriginal) => ({
 	isRedactedPlaylist: (p: { is_redacted?: boolean } | null | undefined) => p?.is_redacted === true,
 	planMissingRequests: (await importOriginal<typeof import('$lib/api/playlists')>())
 		.planMissingRequests,
-	requestMissingTracks: vi.fn()
+	requestMissingTracks: vi.fn(),
+	fetchSpotifySync: vi.fn(() =>
+		Promise.resolve({ enabled: false, auto_request: false, checked_at: null, last_error: null })
+	),
+	setSpotifySync: vi.fn()
 }));
 
 // The detail page consumes the user-scoped TanStack detail query + V3 mutations;

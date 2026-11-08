@@ -347,6 +347,22 @@ impl CollectionsPlaylistBridge {
         }
     }
 
+    /// Fork: the entries of one of the user's playlists, in order.
+    pub async fn entries(
+        &self,
+        user_id: &str,
+        playlist_id: &str,
+    ) -> Result<Vec<droppedneedle_catalog::collections::models::PlaylistTrack>, SpotifyError> {
+        self.playlists
+            .owned_by(user_id)
+            .tracks(playlist_id)
+            .await
+            .map_err(|error| match error {
+                StoreError::Busy(_) => SpotifyError::Busy,
+                other => SpotifyError::Store(other.to_string()),
+            })
+    }
+
     /// Store the picked provider image as the local cover. Answers false
     /// when a cover already exists.
     pub async fn set_imported_cover(

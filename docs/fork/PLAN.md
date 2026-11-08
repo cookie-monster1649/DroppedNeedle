@@ -130,8 +130,22 @@ once playlist rows store them (Slice B).
 - Liked songs (`/me/tracks`) and saved albums as pseudo-playlists.
 
 ### Slice C – sync
-`snapshot_id` stored per playlist; scheduled job skips unchanged playlists;
-additive/mirror; errors mark the playlist degraded and never empty it.
+C1 (done): a playlist imported from Spotify can follow Spotify
+(`imports::spotify_sync`, chain `catalog` 0003
+`acquire_spotify_playlist_syncs`; a row = sync on). The loop (every 15
+minutes) reads each synced playlist's `snapshot_id` and imports it again
+only when it changed, mirroring it through the import's populate. With
+"Request new songs", the songs new since the last import (by Spotify id or
+folded artist + title, so pre-B2 rows are not re-asked) that the library
+does not hold are asked for as the owner, under their approval and quota:
+a track request when the ISRC proved the recording, else a want with the
+Spotify id/ISRC (B3 files it by itself). At most 50 per sync. The linker
+attaches each song as it lands. A failed check is recorded on the row and
+shown on the page; the playlist is never emptied by a failure (populate
+writes nothing when Spotify fails). Toggles on the playlist header
+(`SpotifySyncControl`), `GET/PUT /api/v3/acquire/spotify/synced/{id}`.
+
+Next: liked songs as a synced pseudo-playlist; a "Sync now" button.
 
 ### Slice D – scoring
 Score breakdown persisted per candidate; "no results" vs "none qualified"

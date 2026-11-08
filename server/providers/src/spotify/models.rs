@@ -114,7 +114,7 @@ pub struct Image {
     pub width: Option<i64>,
 }
 
-/// One playlist's metadata, `GET /playlists/{id}?fields=id,name,images,tracks.total`.
+/// One playlist's metadata, `GET /playlists/{id}?fields=id,name,images,tracks.total,snapshot_id`.
 ///
 /// Checked against the Spotify mock's `spotify_playlist`.
 #[derive(Debug, Deserialize)]
@@ -125,6 +125,10 @@ pub struct PlaylistInfo {
     /// Cover images, null when none.
     #[serde(default)]
     pub images: Option<Vec<Image>>,
+    /// Fork: the playlist's version; it changes with every edit, so an
+    /// unchanged one means there is nothing to sync.
+    #[serde(default)]
+    pub snapshot_id: Option<String>,
 }
 
 /// One page of a playlist's entries, `GET /playlists/{id}/items`.

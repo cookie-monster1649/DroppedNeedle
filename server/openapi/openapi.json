@@ -507,6 +507,122 @@
         ]
       }
     },
+    "/api/v3/acquire/spotify/synced/{playlist_id}": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: whether one of the caller's playlists imported from Spotify is\nkept in step with Spotify.",
+        "operationId": "get_spotify_sync",
+        "parameters": [
+          {
+            "name": "playlist_id",
+            "in": "path",
+            "description": "Internal playlist id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sync setting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifySyncState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's playlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: turn sync with Spotify on or off for one of the caller's\nplaylists imported from Spotify.",
+        "operationId": "put_spotify_sync",
+        "parameters": [
+          {
+            "name": "playlist_id",
+            "in": "path",
+            "description": "Internal playlist id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpotifySyncUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Sync setting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifySyncState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's playlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Sync asked for on a playlist not from Spotify",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/admin/app-passwords": {
       "get": {
         "tags": [
@@ -65559,6 +65675,56 @@
           "spotify_redirect_origin": {
             "type": "string",
             "description": "Optional absolute origin the OAuth redirect URI is built from."
+          }
+        }
+      },
+      "SpotifySyncState": {
+        "type": "object",
+        "description": "Fork: a Spotify playlist's sync with Spotify.",
+        "required": [
+          "enabled",
+          "auto_request"
+        ],
+        "properties": {
+          "auto_request": {
+            "type": "boolean",
+            "description": "Songs added at Spotify are requested (as the owner, under their\napproval and quota)."
+          },
+          "checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Epoch milliseconds of the last check."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "The playlist is checked against Spotify every 15 minutes and\nimported again when it changed there."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last check failed."
+          }
+        }
+      },
+      "SpotifySyncUpdate": {
+        "type": "object",
+        "description": "Fork: turn a Spotify playlist's sync on or off.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "auto_request": {
+            "type": "boolean",
+            "description": "Request songs added at Spotify (default on)."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Keep the playlist in step with Spotify."
           }
         }
       },

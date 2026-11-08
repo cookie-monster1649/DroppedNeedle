@@ -120,6 +120,22 @@ const ADMITTED: u16 = 0;
 /// resource, destructive operations come last, since the owner pass runs
 /// them in order on one resource.
 const PATH_ID_ROWS: &[(Owned, &str, &str, u16, u16)] = &[
+    // Fork: a playlist's sync with Spotify (off for a playlist not from
+    // Spotify, which the owner may still read and turn off).
+    (
+        Owned::Playlist,
+        "GET",
+        "/api/v3/acquire/spotify/synced/{playlist_id}",
+        404,
+        404,
+    ),
+    (
+        Owned::Playlist,
+        "PUT",
+        "/api/v3/acquire/spotify/synced/{playlist_id}",
+        404,
+        404,
+    ),
     // Playlists: opening a private one answers its stub to everyone else,
     // admins included, and every other route treats it as not there.
     (
@@ -916,6 +932,7 @@ fn body(method: &str, template: &str, ids: &Ids) -> Option<Value> {
     let id = |name: &str| ids.get(name).cloned().unwrap_or_default();
     match (method, template) {
         ("PUT", "/api/v3/playlists/{playlist_id}") => Some(json!({"name": "Renamed"})),
+        ("PUT", "/api/v3/acquire/spotify/synced/{playlist_id}") => Some(json!({"enabled": false})),
         ("POST", "/api/v3/playlists/{playlist_id}/cover") => {
             Some(json!({"content_type": "image/png", "image_base64": OTHER_PNG}))
         }

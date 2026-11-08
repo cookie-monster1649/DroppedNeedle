@@ -154,6 +154,35 @@ pub struct SpotifyImportRequest {
     pub name: String,
 }
 
+/// Fork: a Spotify playlist's sync with Spotify.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpotifySyncState {
+    /// The playlist is checked against Spotify every 15 minutes and
+    /// imported again when it changed there.
+    pub enabled: bool,
+    /// Songs added at Spotify are requested (as the owner, under their
+    /// approval and quota).
+    pub auto_request: bool,
+    /// Epoch milliseconds of the last check.
+    pub checked_at: Option<i64>,
+    /// Why the last check failed.
+    pub last_error: Option<String>,
+}
+
+/// Fork: turn a Spotify playlist's sync on or off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpotifySyncUpdate {
+    /// Keep the playlist in step with Spotify.
+    pub enabled: bool,
+    /// Request songs added at Spotify (default on).
+    #[serde(default = "default_true")]
+    pub auto_request: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Import acknowledgement. The populate runs
 /// as the `spotify:import` durable job; the id is usable immediately.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

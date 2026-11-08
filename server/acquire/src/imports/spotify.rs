@@ -50,6 +50,15 @@ pub struct ImportedTrack {
     pub isrc: Option<String>,
 }
 
+/// Fork: one populate's result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Populated {
+    /// The Spotify snapshot the rows came from, when Spotify sent one.
+    pub snapshot_id: Option<String>,
+    /// The rows written, in playlist order.
+    pub tracks: Vec<ImportedTrack>,
+}
+
 /// What a Spotify import step fails with.
 #[derive(Debug)]
 pub enum ImportFailure {
@@ -244,6 +253,38 @@ impl SpotifyImportService {
         spotify_playlist_id: &str,
         playlist_id: &str,
     ) -> Result<usize, ImportFailure> {
+        self.populate(user_id, spotify_playlist_id, playlist_id)
+            .await
+            .map(|populated| populated.tracks.len())
+    }
+
+    /// Fork: the playlist's Spotify snapshot id (its version), read at
+    /// background priority. `None` when Spotify sent none.
+    pub async fn snapshot(
+        &self,
+        user_id: &str,
+        spotify_playlist_id: &str,
+    ) -> Result<Option<String>, ImportFailure> {
+        let refresher = self.refresher(
+            user_id,
+            self.link(user_id).await?,
+            RequestPriority::BackgroundSync,
+        )?;
+        let info = self
+            .client
+            .playlist(&refresher, spotify_playlist_id)
+            .await?;
+        Ok(info.snapshot_id.filter(|id| !id.is_empty()))
+    }
+
+    /// [`Self::populate_playlist`], answering the rows written and the
+    /// snapshot they came from (fork: what the playlist sync diffs).
+    pub async fn populate(
+        &self,
+        user_id: &str,
+        spotify_playlist_id: &str,
+        playlist_id: &str,
+    ) -> Result<Populated, ImportFailure> {
         // The import runs as a queued job after the route has answered, so
         // it waits its turn on the rate row instead of failing when Spotify
         // asks for a pause.
@@ -307,7 +348,6 @@ impl SpotifyImportService {
                 }
             })
             .collect();
-        let written = rows.len();
         self.playlists
             .replace_tracks(user_id, playlist_id, &rows)
             .await?;
@@ -317,7 +357,10 @@ impl SpotifyImportService {
         {
             tracing::debug!(%reason, "spotify playlist imported without a cover");
         }
-        Ok(written)
+        Ok(Populated {
+            snapshot_id: info.snapshot_id.clone().filter(|id| !id.is_empty()),
+            tracks: rows,
+        })
     }
 
     /// The release group of each Spotify album on the playlist, keyed by

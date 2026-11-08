@@ -43,13 +43,14 @@ use super::models::{
     LidarrArtistListResponse, LidarrConnectionSettings, LidarrImportRequest, LidarrImportResponse,
     LidarrTestResponse, SabnzbdStatusResponse, SlskdStatusResponse, SpotifyAuthUrlResponse,
     SpotifyImportRequest, SpotifyImportResponse, SpotifyPlaylistListResponse, SpotifyRedirectUri,
-    SpotifySettings,
+    SpotifySettings, SpotifySyncState, SpotifySyncUpdate,
 };
 use super::spotify::{ImportFailure, SpotifyImportService};
 use super::spotify_albums::AlbumResolver;
 use super::spotify_client::{SpotifyClient, SpotifyError, now_unix_secs};
 use super::spotify_oauth::{PendingAuth, SPOTIFY_CALLBACK_PATH, SpotifyConnection, redirect_uri};
 use super::spotify_store::{CollectionsPlaylistBridge, SqliteSpotifyLinks, SqliteSpotifyStates};
+use super::spotify_sync::{SpotifySyncs, SyncSettingError};
 use crate::follows::Follows;
 use crate::requests::error::RequestsError;
 use crate::settings::{ConfigLidarrSettings, ConfigSpotifySettings, settings_failed};
@@ -77,6 +78,8 @@ pub struct ImportsDeps {
     pub resolver: Arc<AlbumResolver>,
     /// Queues Spotify imports on the jobs table and reads their state.
     pub spotify_imports: SpotifyImports,
+    /// Fork: which imported playlists are kept in step with Spotify.
+    pub spotify_syncs: SpotifySyncs,
     /// Probes behind the download client status reads.
     pub probes: Arc<HealthProbes>,
     /// Fresh ids, the OAuth state fallback when the OS RNG fails.
@@ -124,6 +127,7 @@ pub fn routes() -> Routes<ImportsDeps> {
         .public(routes!(spotify_callback))
         .user(routes!(list_spotify_playlists))
         .user(routes!(import_spotify_playlist))
+        .user(routes!(get_spotify_sync, put_spotify_sync))
         .user(routes!(disconnect_spotify))
         .user(routes!(get_slskd_status))
         .admin(routes!(get_sabnzbd_status))
@@ -559,6 +563,94 @@ pub async fn import_spotify_playlist(
         .await
         .map_err(job_failed)?;
     Ok(Json(SpotifyImportResponse { playlist_id }))
+}
+
+/// Map a sync setting failure to the wire.
+fn sync_failed(error: SyncSettingError) -> ImportsError {
+    match error {
+        SyncSettingError::NotFound => ImportsError::NotFound,
+        SyncSettingError::NotSpotify => ImportsError::Conflict {
+            message: "Only playlists imported from Spotify can sync with it".to_owned(),
+        },
+        SyncSettingError::Store(
+            error @ (droppedneedle_kernel::db::DbError::Busy { .. }
+            | droppedneedle_kernel::db::DbError::LaneClosed),
+        ) => ImportsError::Busy {
+            cause: error.to_string(),
+        },
+        SyncSettingError::Store(error) => ImportsError::internal(&error),
+    }
+}
+
+/// Fork: whether one of the caller's playlists imported from Spotify is
+/// kept in step with Spotify.
+#[utoipa::path(get, tag = "imports", path = "/api/v3/acquire/spotify/synced/{playlist_id}",
+    params(("playlist_id" = String, Path, description = "Internal playlist id")),
+    responses(
+        (status = 200, description = "Sync setting", body = SpotifySyncState),
+        (status = 404, description = "Not the caller's playlist"),
+    ))]
+pub async fn get_spotify_sync(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+    Path(playlist_id): Path<String>,
+) -> Result<Json<SpotifySyncState>, ApiError> {
+    let setting = deps
+        .spotify_syncs
+        .get(principal.user_id(), &playlist_id)
+        .await
+        .map_err(sync_failed)?;
+    Ok(Json(sync_state(setting)))
+}
+
+/// Fork: turn sync with Spotify on or off for one of the caller's
+/// playlists imported from Spotify.
+#[utoipa::path(put, tag = "imports", path = "/api/v3/acquire/spotify/synced/{playlist_id}",
+    params(("playlist_id" = String, Path, description = "Internal playlist id")),
+    request_body = SpotifySyncUpdate,
+    responses(
+        (status = 200, description = "Sync setting", body = SpotifySyncState),
+        (status = 404, description = "Not the caller's playlist"),
+        (status = 409, description = "Sync asked for on a playlist not from Spotify"),
+    ))]
+pub async fn put_spotify_sync(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+    Path(playlist_id): Path<String>,
+    ValidJson(body): ValidJson<SpotifySyncUpdate>,
+) -> Result<Json<SpotifySyncState>, ApiError> {
+    deps.spotify_syncs
+        .set(
+            principal.user_id(),
+            &playlist_id,
+            body.enabled,
+            body.auto_request,
+        )
+        .await
+        .map_err(sync_failed)?;
+    let setting = deps
+        .spotify_syncs
+        .get(principal.user_id(), &playlist_id)
+        .await
+        .map_err(sync_failed)?;
+    Ok(Json(sync_state(setting)))
+}
+
+fn sync_state(setting: Option<super::spotify_sync::SyncSetting>) -> SpotifySyncState {
+    match setting {
+        Some(setting) => SpotifySyncState {
+            enabled: true,
+            auto_request: setting.auto_request,
+            checked_at: setting.checked_at,
+            last_error: setting.last_error,
+        },
+        None => SpotifySyncState {
+            enabled: false,
+            auto_request: false,
+            checked_at: None,
+            last_error: None,
+        },
+    }
 }
 
 /// Live slskd client status (any signed-in user may read it).
