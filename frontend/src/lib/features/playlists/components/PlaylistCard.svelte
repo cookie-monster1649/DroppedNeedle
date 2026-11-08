@@ -21,6 +21,7 @@
 	import JellyfinIcon from '$lib/media/icons/JellyfinIcon.svelte';
 	import NavidromeIcon from '$lib/media/icons/NavidromeIcon.svelte';
 	import PlexIcon from '$lib/media/icons/PlexIcon.svelte';
+	import SpotifyIcon from '$lib/media/icons/SpotifyIcon.svelte';
 	import PlaylistMosaic from '$lib/media/PlaylistMosaic.svelte';
 	import IconButton from '$lib/ui/IconButton.svelte';
 
@@ -195,6 +196,8 @@
 				<NavidromeIcon class="size-3" />
 			{:else if sourceType === 'plex'}
 				<PlexIcon class="size-3" />
+			{:else if sourceType === 'spotify'}
+				<SpotifyIcon class="size-3" />
 			{/if}
 			{sourceLabel}
 		</span>

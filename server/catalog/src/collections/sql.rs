@@ -160,6 +160,16 @@ droppedneedle_kernel::sql! {
          GROUP BY c.entry_id) \
          UPDATE catalog_playlist_tracks SET library_file_id = chosen.track_id \
          FROM chosen WHERE catalog_playlist_tracks.id = chosen.entry_id";
+    /// Fork: a linked entry lists the library among its sources, which is
+    /// what the player and the playlist page read to play it locally; an
+    /// entry with no source yet (a Spotify import's) takes the library.
+    pub(super) MARK_LINKED_LOCAL = "UPDATE catalog_playlist_tracks SET available_sources = \
+         json_insert(CASE WHEN json_valid(available_sources) THEN available_sources \
+         ELSE '[]' END, '$[#]', 'local'), \
+         source_type = CASE WHEN source_type = '' THEN 'local' ELSE source_type END \
+         WHERE library_file_id IS NOT NULL AND (available_sources IS NULL \
+         OR NOT json_valid(available_sources) \
+         OR NOT EXISTS (SELECT 1 FROM json_each(available_sources) s WHERE s.value = 'local'))";
     /// Fork: an entry's provider ids (`catalog_playlist_entry_identities`).
     pub(super) INSERT_ENTRY_IDENTITY = "INSERT INTO catalog_playlist_entry_identities \
          (entry_id, spotify_track_id, isrc) VALUES (?1, ?2, ?3)";
