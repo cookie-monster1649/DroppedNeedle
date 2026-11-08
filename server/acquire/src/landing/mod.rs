@@ -1439,11 +1439,19 @@ async fn decide_hearing(
         .checks
         .iter()
         .filter(|check| !matches!(check.verdict, Verdict::Accept { .. }));
-    let only_artist_evidence = holding
+    // Fork: a track whose only hold is that it names another album may be
+    // the requested recording from another release; AcoustID can show it.
+    let from_other_album = |spec: &str| {
+        spec == "close_album_match"
+            && matched
+                .best()
+                .is_some_and(|found| specs::album_version(target, landing, found).is_some())
+    };
+    let only_hearable = holding
         .next()
-        .is_some_and(|check| check.spec == "artist_evidence")
+        .is_some_and(|check| check.spec == "artist_evidence" || from_other_album(check.spec))
         && holding.next().is_none();
-    let Some(found) = matched.best().filter(|_| only_artist_evidence) else {
+    let Some(found) = matched.best().filter(|_| only_hearable) else {
         return (unheard, None);
     };
     let files = found

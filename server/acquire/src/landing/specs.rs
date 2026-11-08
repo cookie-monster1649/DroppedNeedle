@@ -900,6 +900,14 @@ impl ImportSpec for CloseAlbumMatch {
         // alone ("Singles 2020") does not show that: the next source is
         // tried.
         if let Some(album) = album_version(subject.target, subject.landing, found) {
+            // Fork: AcoustID heard the requested recording itself: the song
+            // asked for, from another release of it (another edition of the
+            // soundtrack, a compilation).
+            if heard_requested(subject, found) {
+                return Verdict::note(format!(
+                    "AcoustID heard the requested recording, from '{album}'"
+                ));
+            }
             if subject.target.album_version {
                 return Verdict::note(format!("the track from '{album}', taken as this song"));
             }
@@ -912,6 +920,21 @@ impl ImportSpec for CloseAlbumMatch {
         }
         Verdict::hold(Reason::WeakMatch, weak)
     }
+}
+
+/// Fork: whether AcoustID heard the requested recording in the file paired
+/// with the requested track.
+pub fn heard_requested(subject: &Subject<'_>, found: &FoundRelease) -> bool {
+    let (Some(heard), Some(wanted)) = (subject.heard, subject.target.recording_mbid.as_deref())
+    else {
+        return false;
+    };
+    let Some(pair) = found.requested_pair(subject.target) else {
+        return false;
+    };
+    heard
+        .get(&pair.local.to_string())
+        .is_some_and(|ids| ids.iter().any(|id| id.eq_ignore_ascii_case(wanted)))
 }
 
 /// For a track download whose files miss the release only because they

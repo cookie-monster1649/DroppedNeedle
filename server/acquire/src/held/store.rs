@@ -380,6 +380,13 @@ pub struct HeldRows<'c> {
     conn: &'c Connection,
 }
 
+impl<'c> HeldRows<'c> {
+    /// Fork: the connection, for the fork's own statements beside these.
+    pub(super) fn conn(&self) -> &'c Connection {
+        self.conn
+    }
+}
+
 /// A held file a removed-album clean-up claimed: file id, entry id and path.
 pub type ClaimedFile = (i64, i64, String);
 

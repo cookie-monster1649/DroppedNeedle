@@ -89,7 +89,7 @@ export interface HeldMatchInput extends HeldFilesInput {
 	matchMbid: string;
 }
 
-function heldMutation<I extends HeldFilesInput>(
+export function heldMutation<I extends HeldFilesInput>(
 	post: (input: I) => Promise<HeldActionResult>,
 	failure: string
 ) {

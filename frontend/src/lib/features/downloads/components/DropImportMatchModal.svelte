@@ -7,6 +7,7 @@
 	import type { Album } from '$lib/features/album/queries/types';
 	import Input from '$lib/ui/Input.svelte';
 	import Modal from '$lib/ui/Modal.svelte';
+	import SpotifyMatchList from '$lib/features/downloads/components/SpotifyMatchList.svelte';
 
 	// Curators pick the album a held entry's files belong to; the app pairs them.
 	interface Props {
@@ -29,6 +30,10 @@
 	const searchQuery = getAlbumSearchQuery(() => searchTerm);
 	const match = createMatchHeldMutation();
 	const results = $derived(searchQuery.data ?? []);
+	// Fork: the Spotify songs search the typed words once the person types;
+	// until then, the held file's own title.
+	const initialSearch = untrack(() => searchTerm);
+	const spotifySearch = $derived(searchTerm === initialSearch ? '' : searchTerm.trim());
 	const label = $derived(`${name || search} · ${fileCount} file${fileCount === 1 ? '' : 's'}`);
 
 	async function pick(album: Album) {
@@ -98,6 +103,14 @@
 			{/if}
 		{/each}
 	</div>
+
+	<SpotifyMatchList
+		{entryId}
+		search={spotifySearch}
+		{releaseGroupMbid}
+		busy={match.isPending}
+		onmatched={onclose}
+	/>
 
 	{#if match.isPending}
 		<p class="mt-3 text-sm text-muted">

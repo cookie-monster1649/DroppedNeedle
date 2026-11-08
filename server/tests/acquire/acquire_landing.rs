@@ -6030,6 +6030,17 @@ async fn a_single_lands_as_the_song_only_on_proof() {
                 imported(),
             )],
         ),
+        // Fork: AcoustID hears the single itself in a copy from another
+        // release: the requested recording imports.
+        (
+            0,
+            Some(SINGLE_RECORDING),
+            vec![(
+                "t-heard",
+                SingleCase::titled("Love Me", "Singles 2020"),
+                imported(),
+            )],
+        ),
         // A Picard-tagged album copy is held, unless the person chose the
         // album: then it imports as the single.
         (
@@ -8267,6 +8278,72 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
         [],
     );
     assert_eq!(waiting, vec!["t-wrong".to_owned()], "the other song waits");
+
+    // Fork: the person matches the other song to a song of their Spotify
+    // playlist; it goes in tagged from Spotify, with its Spotify id.
+    acquire
+        .db
+        .write("test.spotify_playlist", |tx| {
+            tx.execute(
+                "INSERT INTO catalog_playlists (id, name, created_at, updated_at, source_ref, \
+                 user_id) VALUES ('pl-1', 'Trip', 1, 1, 'spotify:playlist:abc', 'u-ada')",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO catalog_playlist_tracks (id, playlist_id, position, track_name, \
+                 artist_name, album_name, source_type, duration_ms, created_at) \
+                 VALUES ('e-1', 'pl-1', 0, 'Glory Box', 'Portishead', 'Dummy', '', 300000, 1)",
+                [],
+            )?;
+            tx.execute(
+                "INSERT INTO catalog_playlist_entry_identities (entry_id, spotify_track_id) \
+                 VALUES ('e-1', '3Ty7OTBNSigGEpeW2PqcsC')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("playlist");
+    let viewer = droppedneedle_acquire::downloads::queue_rows::Viewer {
+        user_id: "u-ada".to_owned(),
+        admin: false,
+    };
+    let entry_id: i64 = acquire.db.db().one(
+        "SELECT entry_id FROM acquire_held_files WHERE source_task_id = 't-wrong'",
+        [],
+    );
+    let found = acquire
+        .held
+        .spotify_candidates(&viewer, entry_id, Some("glory".to_owned()))
+        .await
+        .expect("candidates");
+    assert_eq!(
+        found
+            .iter()
+            .map(|song| song.entry_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["e-1"]
+    );
+    let acted = acquire
+        .held
+        .match_spotify(&viewer, entry_id, "e-1", None, "u-ada")
+        .await
+        .expect("matched");
+    assert_eq!(acted.imported, 1);
+    let mut titles: Vec<String> = acquire.db.db().column(
+        "SELECT title FROM local_tracks WHERE availability = 'indexed'",
+        [],
+    );
+    titles.sort();
+    assert_eq!(
+        titles,
+        vec!["Glory Box".to_owned(), "Sour Times".to_owned()]
+    );
+    let links: Vec<String> = acquire.db.db().column(
+        "SELECT external_id FROM local_entity_source_links WHERE provider = 'spotify'",
+        [],
+    );
+    assert_eq!(links, vec!["3Ty7OTBNSigGEpeW2PqcsC".to_owned()]);
 }
 
 /// Fork: with a pinned edition, a copy tagged as a sibling edition of the

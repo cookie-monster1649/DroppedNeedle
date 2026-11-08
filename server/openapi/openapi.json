@@ -8187,6 +8187,56 @@
         ]
       }
     },
+    "/api/v3/held/{entry_id}/match-spotify": {
+      "post": {
+        "tags": [
+          "held"
+        ],
+        "summary": "Fork: import a held entry's files as a song from the owner's Spotify\nplaylists, tagged from Spotify's metadata with its Spotify id and ISRC.\n`POST /api/v3/held/{entry_id}/match-spotify`.",
+        "operationId": "match_spotify_handler",
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "description": "Held entry id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeldSpotifyMatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeldActionResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/held/{entry_id}/recheck": {
       "post": {
         "tags": [
@@ -8223,6 +8273,55 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HeldActionResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/held/{entry_id}/spotify-candidates": {
+      "get": {
+        "tags": [
+          "held"
+        ],
+        "summary": "Fork: songs from the owner's playlists imported from Spotify that a held\nentry's files could be matched to.\n`GET /api/v3/held/{entry_id}/spotify-candidates`.",
+        "operationId": "spotify_candidates_handler",
+        "parameters": [
+          {
+            "name": "entry_id",
+            "in": "path",
+            "description": "Held entry id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Words of the title or artist; the held file's title when left out.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifyCandidatesResponse"
                 }
               }
             }
@@ -47296,6 +47395,29 @@
           "error"
         ]
       },
+      "HeldSpotifyMatchRequest": {
+        "type": "object",
+        "description": "Fork: the Spotify song picked, and the files it takes (all when left out).",
+        "required": [
+          "entry_id"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "description": "The playlist entry the song was read from."
+          },
+          "file_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        }
+      },
       "HeldTracks": {
         "type": "object",
         "description": "How much of one release group the library holds, over every album that\nowns it: their tracks add up, to the edition's count at most.",
@@ -65511,6 +65633,73 @@
           "auth_url": {
             "type": "string",
             "description": "`accounts.spotify.com/authorize` URL with state."
+          }
+        }
+      },
+      "SpotifyCandidate": {
+        "type": "object",
+        "description": "A song from the owner's Spotify playlists a held file can be matched to.",
+        "required": [
+          "entry_id",
+          "title",
+          "artist"
+        ],
+        "properties": {
+          "album": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "artist": {
+            "type": "string"
+          },
+          "cover_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "entry_id": {
+            "type": "string",
+            "description": "The playlist entry it was read from (what a match names)."
+          },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spotify_track_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "SpotifyCandidatesResponse": {
+        "type": "object",
+        "description": "Fork: Spotify songs a held entry's files could be matched to.",
+        "required": [
+          "candidates"
+        ],
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpotifyCandidate"
+            }
           }
         }
       },
