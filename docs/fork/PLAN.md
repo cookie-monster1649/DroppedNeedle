@@ -124,6 +124,14 @@ once playlist rows store them (Slice B).
   Files held before B3 are checked the same way by the held loop
   (`pair_wants`, asked length from the request row when the task's plan
   has none), and an unpaired want file offers Import.
+- B3b (done): a track request whose file comes from another release of
+  the song (album tag names another edition, so `close_album_match` holds
+  it as weak) asks AcoustID; when it hears the requested recording itself
+  the file imports (`specs::heard_requested`). Match on a held entry also
+  lists songs from the owner's Spotify playlists (`held::spotify_match`,
+  `GET /api/v3/held/{id}/spotify-candidates`, `POST .../match-spotify`):
+  picking one imports the files tagged from Spotify, with its Spotify id
+  and ISRC as source links (`SpotifyMatchList` in the Match dialog).
 - B4 (next): request status for wants: a want filed from the held list
   should show as imported, not "failed".
 - Per-row status (done): `GET /api/v3/acquire/playlists/{id}/rows`

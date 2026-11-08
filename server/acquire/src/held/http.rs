@@ -601,7 +601,83 @@ pub fn routes() -> Routes<Arc<HeldService>> {
         .user(routes!(recheck_all_handler))
         .user(routes!(import_handler))
         .curator(routes!(match_handler))
+        .user(routes!(spotify_candidates_handler))
+        .user(routes!(match_spotify_handler))
         .user(routes!(recheck_handler))
         .user(routes!(discard_handler))
         .user(routes!(audio_handler))
+}
+
+/// Fork: search the owner's Spotify playlist songs.
+#[derive(Debug, Clone, Default, Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SpotifyCandidatesQuery {
+    /// Words of the title or artist; the held file's title when left out.
+    pub q: Option<String>,
+}
+
+/// Fork: Spotify songs a held entry's files could be matched to.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SpotifyCandidatesResponse {
+    pub candidates: Vec<super::spotify_match::SpotifyCandidate>,
+}
+
+/// Fork: the Spotify song picked, and the files it takes (all when left out).
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct HeldSpotifyMatchRequest {
+    /// The playlist entry the song was read from.
+    pub entry_id: String,
+    #[serde(default)]
+    pub file_ids: Option<Vec<i64>>,
+}
+
+/// Fork: songs from the owner's playlists imported from Spotify that a held
+/// entry's files could be matched to.
+/// `GET /api/v3/held/{entry_id}/spotify-candidates`.
+#[utoipa::path(
+    get,
+    tag = "held",
+    path = "/api/v3/held/{entry_id}/spotify-candidates",
+    params(("entry_id" = i64, Path, description = "Held entry id"), SpotifyCandidatesQuery),
+    responses((status = 200, body = SpotifyCandidatesResponse))
+)]
+pub async fn spotify_candidates_handler(
+    State(service): State<Arc<HeldService>>,
+    User(principal): User,
+    Path(entry_id): Path<String>,
+    ValidQuery(query): ValidQuery<SpotifyCandidatesQuery>,
+) -> Result<Json<SpotifyCandidatesResponse>, ApiError> {
+    let candidates = service
+        .spotify_candidates(&viewer(&principal), id_of(&entry_id)?, query.q)
+        .await?;
+    Ok(Json(SpotifyCandidatesResponse { candidates }))
+}
+
+/// Fork: import a held entry's files as a song from the owner's Spotify
+/// playlists, tagged from Spotify's metadata with its Spotify id and ISRC.
+/// `POST /api/v3/held/{entry_id}/match-spotify`.
+#[utoipa::path(
+    post,
+    tag = "held",
+    path = "/api/v3/held/{entry_id}/match-spotify",
+    params(("entry_id" = i64, Path, description = "Held entry id")),
+    request_body = HeldSpotifyMatchRequest,
+    responses((status = 200, body = HeldActionResponse))
+)]
+pub async fn match_spotify_handler(
+    State(service): State<Arc<HeldService>>,
+    User(principal): User,
+    Path(entry_id): Path<String>,
+    ValidJson(body): ValidJson<HeldSpotifyMatchRequest>,
+) -> Result<Json<HeldActionResponse>, ApiError> {
+    let acted = service
+        .match_spotify(
+            &viewer(&principal),
+            id_of(&entry_id)?,
+            &body.entry_id,
+            body.file_ids,
+            principal.user_id(),
+        )
+        .await?;
+    Ok(Json(acted.into()))
 }
