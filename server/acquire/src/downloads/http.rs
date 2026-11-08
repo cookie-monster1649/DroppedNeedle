@@ -179,6 +179,9 @@ pub struct DownloadTaskResponse {
     /// A library album whose edition is a guess of this album, though its
     /// files name another: "You may have this".
     pub maybe_have: Option<MaybeHaveView>,
+    /// Fork: the library album this task's files landed in, so a task with
+    /// no release group (a want) still links to its album.
+    pub library_album_id: Option<String>,
 }
 
 /// A library album that may already be the one a download hunts for.
@@ -277,6 +280,7 @@ impl From<TaskView> for DownloadTaskResponse {
             maybe_have: facts
                 .doubted_guess
                 .map(|(album_id, title)| MaybeHaveView { album_id, title }),
+            library_album_id: facts.landed_album,
         }
     }
 }

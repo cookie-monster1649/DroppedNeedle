@@ -21,7 +21,8 @@
 	import { authStore } from '$lib/stores/authStore.svelte';
 	import { nowSeconds, startSharedClock } from '$lib/stores/clock.svelte';
 	import type { DownloadTask } from '$lib/features/downloads/queries/types';
-	import { albumHref, artistHref } from '$lib/utils/entityRoutes';
+	import { artistHref } from '$lib/utils/entityRoutes';
+	import { taskAlbumHref } from '../taskAlbumHref';
 	import { withBasePath } from '$lib/utils/basePath';
 	import { formatRelativeTime } from '$lib/utils/formatting';
 	import Button from '$lib/ui/Button.svelte';
@@ -97,7 +98,7 @@
 
 		<div class="hunt__who">
 			<h3 class="hunt__title">
-				<a href={albumHref(task.release_group_mbid)} class="hunt__link">{task.album_title}</a>
+				<a href={taskAlbumHref(task)} class="hunt__link">{task.album_title}</a>
 			</h3>
 			<p class="hunt__artist">
 				{#if task.artist_mbid}
