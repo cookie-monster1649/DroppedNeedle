@@ -19761,6 +19761,20 @@ export interface components {
              */
             track_count?: number;
         };
+        /**
+         * @description Where one playlist entry stands.
+         * @enum {string}
+         */
+        PlaylistRowState: "owned" | "missing" | "requested" | "fetching" | "held" | "failed" | "imported";
+        /** @description One entry's state. */
+        PlaylistRowStatus: {
+            state: components["schemas"]["PlaylistRowState"];
+            track_id: string;
+        };
+        /** @description Every entry's state, in playlist order. */
+        PlaylistRowsResponse: {
+            rows: components["schemas"]["PlaylistRowStatus"][];
+        };
         /** @description Body requesting playlist suggestions. */
         PlaylistSuggestionsRequest: {
             /**
