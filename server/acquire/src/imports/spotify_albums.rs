@@ -127,6 +127,82 @@ impl AlbumResolver {
     }
 }
 
+impl AlbumResolver {
+    /// Fork: the recording and album one song is, looked up by itself
+    /// (`spotify_tracks`). `None` when no recording agrees with it.
+    ///
+    /// # Errors
+    ///
+    /// A MusicBrainz failure; nothing is cached for it.
+    pub async fn resolve_track(
+        &self,
+        song: &super::spotify_tracks::SpotifySong,
+    ) -> Result<Option<super::spotify_tracks::ProvenTrack>, ProviderError> {
+        let Some(first) = song.artists.first().filter(|name| !name.trim().is_empty()) else {
+            return Ok(None);
+        };
+        if song.title.trim().is_empty() {
+            return Ok(None);
+        }
+        let Some(settings) = self.settings.read() else {
+            return Err(ProviderError::NotConfigured {
+                provider: SOURCE,
+                message: "the musicbrainz settings cannot be read".to_owned(),
+            });
+        };
+        let namespace = format!("{}:g{}", settings.source_id, settings.generation);
+        let view = self.musicbrainz.fixed(
+            self.musicbrainz.source_from(&settings),
+            RequestPriority::BackgroundSync,
+        );
+        let seconds = song.seconds.map(|s| s.to_string()).unwrap_or_default();
+        let key = CacheKey::hashed(
+            Source::MusicBrainz,
+            "spotify_track_recording",
+            &[
+                &namespace,
+                &song.title,
+                &song.artists.join("\u{1f}"),
+                &song.album,
+                &seconds,
+            ],
+        );
+        let (song, first) = (song.clone(), first.clone());
+        self.cache
+            .get_or_fetch(
+                &key,
+                Policy::RELEASE_TO_GROUP,
+                RequestPriority::BackgroundSync,
+                move |_| async move {
+                    let mut titles = vec![song.title.clone()];
+                    let core = crate::landing::want::core_title(&song.title);
+                    if !core.is_empty() && !core.eq_ignore_ascii_case(&song.title) {
+                        titles.push(core);
+                    }
+                    let mut hits = Vec::new();
+                    for title in titles {
+                        let query = droppedneedle_providers::musicbrainz::build_recording_query(
+                            &title, &first,
+                        );
+                        let page = view
+                            .search_recordings_query(
+                                &query,
+                                super::spotify_tracks::TRACK_SEARCH_LIMIT,
+                                Criticality::IdentityCritical,
+                            )
+                            .await?;
+                        hits.extend(page.items);
+                        if let Some(found) = super::spotify_tracks::choose(&song, &hits) {
+                            return Ok(Fetched::Found(found));
+                        }
+                    }
+                    Ok(Fetched::Missing)
+                },
+            )
+            .await
+    }
+}
+
 /// Search each title form until one proves exactly one release group.
 async fn prove(
     view: &MusicBrainzView,
