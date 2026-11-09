@@ -94,6 +94,11 @@ struct Rig {
 /// MusicBrainz tracklist. `review` leaves the look before an automatic
 /// grab on, as saved by default.
 async fn rig(mock: &MockSlskd, review: bool) -> Rig {
+    rig_over(mock, review, |_| {}).await
+}
+
+/// Fork: [`rig`], with the MusicBrainz answers adjusted.
+async fn rig_over(mock: &MockSlskd, review: bool, adjust: impl FnOnce(&mut FixedAlbums)) -> Rig {
     let db = AcquireDb::scratch().expect("scratch db");
     db.add_user("u1", "U", "user").await.expect("user seeds");
     db.add_user("u2", "V", "user").await.expect("user seeds");
@@ -101,6 +106,7 @@ async fn rig(mock: &MockSlskd, review: bool) -> Rig {
     let journal = Arc::new(Journal::new(db.clone(), quiet_ticks()));
     let mut albums = FixedAlbums::default();
     albums.releases.insert(RELEASE.to_owned(), album());
+    adjust(&mut albums);
     let settings = droppedneedle_acquire::test_support::scratch_settings(&staging.join("settings"))
         .expect("settings open");
     save_slskd(&settings, &mock.base_url());
@@ -149,6 +155,101 @@ async fn look_finishes(updates: &mut Subscription, worker: &DownloadWorker) {
     .await
     .expect("the look tells its owner");
     assert!(!worker.reviews_running(), "the look finished");
+}
+
+const SHORT: &str = "44444444-4444-4444-8444-444444444444";
+
+/// Fork: a folder missing tracks of the edition asked for but holding the
+/// whole of a shorter edition names that edition; picking it as that
+/// edition downloads it as that edition, and naming an edition the folder
+/// does not hold is refused.
+#[tokio::test]
+async fn a_folder_holding_another_edition_names_it_and_is_taken_as_it() {
+    let mock = MockSlskd::start().await.expect("mock starts");
+    mock.script_responses(vec![peer(
+        "halfway",
+        "@@music\\Massive Attack\\Blue Lines",
+        &[0, 1],
+    )]);
+    let Rig {
+        journal,
+        jobs,
+        events,
+        staging: _staging,
+        ..
+    } = rig_over(&mock, false, |albums| {
+        let mut short = album();
+        short.id = SHORT.to_owned();
+        short.tracks.truncate(2);
+        albums.releases.insert(SHORT.to_owned(), short);
+        let listed = |id: &str, tracks: u32| droppedneedle_library::identify::sources::Edition {
+            release_mbid: id.to_owned(),
+            release_group_mbid: GROUP.to_owned(),
+            title: "Blue Lines".to_owned(),
+            status: Some("Official".to_owned()),
+            country: Some("GB".to_owned()),
+            media_formats: vec!["CD".to_owned()],
+            track_count: tracks,
+            ..Default::default()
+        };
+        albums
+            .group_editions
+            .insert(GROUP.to_owned(), vec![listed(RELEASE, 4), listed(SHORT, 2)]);
+    })
+    .await;
+    let owner = principal("u1");
+    let mut updates = events.subscribe(owner.user_id());
+    let StartOutcome::Searching(job_id) = jobs
+        .start(
+            &owner,
+            AlbumSearch {
+                artist_name: "Massive Attack".to_owned(),
+                album_title: "Blue Lines".to_owned(),
+                year: Some(1991),
+                release_group_mbid: Some(GROUP.to_owned()),
+                release_mbid: Some(RELEASE.to_owned()),
+            },
+        )
+        .await
+        .expect("search starts")
+    else {
+        panic!("nothing was searched");
+    };
+    let view = tokio::time::timeout(crate::common::PATIENCE, async {
+        loop {
+            let view = jobs.get(&owner, &job_id).await.expect("job reads");
+            if view.row.status != JobStatus::Searching {
+                break view;
+            }
+            updates.next().await.expect("the hub stays open");
+        }
+    })
+    .await
+    .expect("the search settles");
+    let candidate = &view.payload.expect("candidates").candidates[0];
+    assert_eq!(candidate.view.note.code, CandidateNoteCode::OtherEdition);
+    let other = candidate
+        .view
+        .other_edition
+        .as_ref()
+        .expect("names the edition");
+    assert_eq!((other.release_mbid.as_str(), other.track_count), (SHORT, 2));
+
+    assert!(matches!(
+        jobs.pick_edition(&owner, &job_id, 0, false, Some(RELEASE.to_owned()))
+            .await,
+        Err(SearchJobError::Invalid(_))
+    ));
+    let task_id = jobs
+        .pick_edition(&owner, &job_id, 0, false, Some(SHORT.to_owned()))
+        .await
+        .expect("pick starts a download");
+    let id = task_id.clone();
+    let details = journal
+        .read("test.details", move |store| store.task_details(&id))
+        .await
+        .expect("details");
+    assert_eq!(details.release_mbid.as_deref(), Some(SHORT));
 }
 
 #[tokio::test]
@@ -573,6 +674,7 @@ async fn pick_is_refused_while_the_album_downloads() {
                 username: Some("complete".to_owned()),
                 candidate_index: 0,
                 quality_waived: false,
+                edition: None,
             },
         )
         .await

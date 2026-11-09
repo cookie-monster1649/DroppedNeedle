@@ -718,6 +718,7 @@ async fn queued_past_the_wait(
                 username: peer,
                 candidate_index: 0,
                 quality_waived: false,
+                edition: None,
             };
             let linked = jobs.pick("job-1", picked).await.unwrap().unwrap();
             assert_eq!(linked, "t-slow", "the parked download takes the pick");

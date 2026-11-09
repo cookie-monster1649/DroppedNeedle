@@ -45,6 +45,8 @@ pub struct FixedAlbums {
     pub releases: HashMap<String, AlbumRelease>,
     /// Release-group MBID to its first release date.
     pub first_release_dates: HashMap<String, String>,
+    /// Fork: release-group MBID to its listed editions.
+    pub group_editions: HashMap<String, Vec<droppedneedle_library::identify::sources::Edition>>,
 }
 
 impl AlbumLookup for FixedAlbums {
@@ -68,6 +70,29 @@ impl AlbumLookup for FixedAlbums {
         release_group_mbid: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Option<String>, LookupError>> + Send + 'a>> {
         Box::pin(async move { Ok(self.first_release_dates.get(release_group_mbid).cloned()) })
+    }
+
+    fn group_editions<'a>(
+        &'a self,
+        release_group_mbid: &'a str,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        Vec<droppedneedle_library::identify::sources::Edition>,
+                        LookupError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            Ok(self
+                .group_editions
+                .get(release_group_mbid)
+                .cloned()
+                .unwrap_or_default())
+        })
     }
 }
 
