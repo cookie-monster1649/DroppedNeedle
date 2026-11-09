@@ -906,6 +906,13 @@ impl ImportSpec for CloseAlbumMatch {
         } else {
             return Verdict::accept();
         };
+        // Fork: a song asked for, found at its length and named as it: by
+        // AcoustID hearing the requested recording, or by its own title and
+        // track artist tags. The album names (a label in the album artist
+        // tag, another release's title) are no reason to hold it.
+        if let Some(why) = the_song_itself(subject, found) {
+            return Verdict::note(why);
+        }
         // A single whose only copy is its album's track waits for the
         // person, who can choose to take it from the album. An album tag
         // alone ("Singles 2020") does not show that: the next source is
@@ -931,6 +938,46 @@ impl ImportSpec for CloseAlbumMatch {
         }
         Verdict::hold(Reason::WeakMatch, weak)
     }
+}
+
+/// Fork: why the file paired with the requested song of a track download
+/// is that song, whatever album it says it comes from: at the track's
+/// length ([`wrong_track`] finds nothing), and AcoustID heard the requested
+/// recording, or its album tag names the release and its title tag (else
+/// file name) and track artist tag agree with the track and the release's
+/// artist.
+fn the_song_itself(subject: &Subject<'_>, found: &FoundRelease) -> Option<String> {
+    if !subject.target.is_track {
+        return None;
+    }
+    let pair = found.requested_pair(subject.target)?;
+    if pair.distance > ACCEPT_TRACK || wrong_track(found, pair, subject.landing).is_some() {
+        return None;
+    }
+    if heard_requested(subject, found) {
+        return Some("AcoustID heard the requested recording".to_owned());
+    }
+    let file = subject.landing.audio.get(pair.local)?;
+    let track = found.release.tracks.get(pair.track)?;
+    let title = match file.tag.title.trim() {
+        "" => file_name_parts(file).2,
+        tagged => tagged.to_owned(),
+    };
+    let artist = file.tag.artist.trim();
+    let release_artist = found.release.artist_text();
+    // The album tag must name this release: a copy from another album
+    // (the album's version of a single) is the person's call
+    // ([`album_version`]).
+    let same_album = string_dist(
+        &strip_edition_words(album_tag(file)),
+        &strip_edition_words(&found.release.title),
+    ) <= NAME_GATE;
+    let named = same_album
+        && string_dist(&title, &track.title) <= NAME_GATE
+        && !artist.is_empty()
+        && (string_dist(artist, &release_artist) <= NAME_GATE
+            || artist_subset(artist, &release_artist));
+    named.then(|| format!("the song '{}' by {artist}, at its length", track.title))
 }
 
 /// Fork: whether AcoustID heard the requested recording in the file paired
