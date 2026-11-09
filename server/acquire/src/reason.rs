@@ -378,7 +378,7 @@ impl Reason {
             Self::OwnedOnAlbum => "You now have this track on this album.",
             Self::NoAlbumMatch => "DroppedNeedle couldn't work out which album this is.",
             Self::AlbumNotFound => {
-                "MusicBrainz has no release of the album you picked that these files can be matched to."
+                "No release of the album you picked has tracks these files line up with by title, number and length."
             }
             Self::TagsDisagree => {
                 "These files are tagged with an album they don't match closely enough to import on their own."
@@ -543,7 +543,9 @@ impl Reason {
                 "Discard it, or choose Import: it replaces yours only if it is better, and yours then goes to the recycle bin."
             }
             Self::NoAlbumMatch => "Pick the album by hand with Match, or discard the folder.",
-            Self::AlbumNotFound => "Check that you picked the right album, then try Match again.",
+            Self::AlbumNotFound => {
+                "Check that you picked the right album (a single is its own album), then try Match again."
+            }
             Self::TagsDisagree => "Pick the album by hand with Match, or discard the folder.",
             Self::NotChosenEdition => {
                 "Use Match to import them anyway, or change the album's edition in the library first."
