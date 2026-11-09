@@ -30,8 +30,10 @@ use droppedneedle_kernel::jobs::{AlreadyRunning, BoxFuture, FnTick, Next, Schedu
 use rusqlite::{OptionalExtension, params};
 
 use super::spotify::{ImportFailure, ImportedTrack, SpotifyImportService};
+use super::spotify_albums::AlbumResolver;
 use super::spotify_client::SpotifyError;
 use super::spotify_store::CollectionsPlaylistBridge;
+use super::spotify_tracks::SpotifySong;
 use super::sql;
 use crate::db::AcquireDb;
 use crate::requests::error::RequestsError;
@@ -227,6 +229,14 @@ pub enum SyncSettingError {
 pub trait SyncRequests: Send + Sync {
     /// Ask for `tracks` for `user_id`; answers how many were asked for.
     fn request<'a>(&'a self, user_id: &'a str, tracks: Vec<ImportedTrack>) -> BoxFuture<'a, usize>;
+
+    /// Fork: songs asked for by name that MusicBrainz now places (title,
+    /// artist and length, `spotify_tracks`) are asked for again as
+    /// MusicBrainz tracks on their album, and the want is cancelled.
+    /// Answers how many moved.
+    fn upgrade_wants<'a>(&'a self, _resolver: &'a AlbumResolver) -> BoxFuture<'a, usize> {
+        Box::pin(async { 0 })
+    }
 }
 
 /// What one sync of one playlist did.
@@ -267,6 +277,10 @@ impl SpotifySync {
     /// Check every synced playlist once; answers how many were imported
     /// again. One playlist's failure is recorded on it and the rest go on.
     pub async fn run_once(&self) -> usize {
+        let moved = self.requests.upgrade_wants(self.service.resolver()).await;
+        if moved > 0 {
+            tracing::info!(moved, "songs asked for by name moved to musicbrainz tracks");
+        }
         let rows = match self.syncs.rows().await {
             Ok(rows) => rows,
             Err(error) => {
@@ -454,7 +468,115 @@ impl RequestsSync {
     }
 }
 
+/// Wants read per upgrade pass.
+const UPGRADE_BATCH: i64 = 200;
+
 impl SyncRequests for RequestsSync {
+    fn upgrade_wants<'a>(&'a self, resolver: &'a AlbumResolver) -> BoxFuture<'a, usize> {
+        Box::pin(async move {
+            type Row = (
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<i64>,
+                String,
+            );
+            let rows: Result<Vec<Row>, DbError> = self
+                .requests
+                .library
+                .db()
+                .read("spotify.open_wants", |conn| {
+                    let mut statement = conn.prepare_cached(sql::OPEN_WANTS.text())?;
+                    let rows = statement
+                        .query_map([UPGRADE_BATCH], |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                                row.get(5)?,
+                                row.get(6)?,
+                            ))
+                        })?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(rows)
+                })
+                .await;
+            let rows = match rows {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::warn!(%error, "wants to upgrade unreadable");
+                    return 0;
+                }
+            };
+            let service = RequestsService::new(&self.requests);
+            let mut moved = 0;
+            for (key, user_id, artist, album, title, seconds, task_id) in rows {
+                let Some(title) = title.filter(|title| !title.trim().is_empty()) else {
+                    continue;
+                };
+                let album = album
+                    .filter(|album| album != "Single track")
+                    .unwrap_or_default();
+                let song = SpotifySong {
+                    title: title.clone(),
+                    artists: artist
+                        .split(", ")
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                    album: album.clone(),
+                    seconds: seconds.and_then(|s| u64::try_from(s).ok()),
+                };
+                let placed = match resolver.resolve_track(&song).await {
+                    Ok(Some(placed)) => placed,
+                    Ok(None) => continue,
+                    Err(error) => {
+                        tracing::warn!(%error, "musicbrainz failed; want upgrade waits");
+                        break;
+                    }
+                };
+                let Some(principal) = self.owner(&user_id).await else {
+                    continue;
+                };
+                let asked = service
+                    .request_track(
+                        &principal,
+                        &TrackIntake {
+                            recording_mbid: placed.recording.clone(),
+                            artist_name: artist.clone(),
+                            track_title: title.clone(),
+                            album_title: Some(album).filter(|album| !album.is_empty()),
+                            duration_seconds: seconds,
+                            release_group_mbid: Some(placed.group.clone()),
+                            artist_mbid: None,
+                            release_mbid: None,
+                        },
+                    )
+                    .await;
+                if let Err(error) = asked {
+                    tracing::info!(%key, ?error, "want not moved: the track request was refused");
+                    continue;
+                }
+                if let Err(error) = self.requests.dispatch.cancel(&task_id).await {
+                    tracing::warn!(%key, %error, "want moved but its download not cancelled");
+                }
+                tracing::info!(
+                    %key,
+                    recording = %placed.recording,
+                    group = %placed.group,
+                    "want moved to a musicbrainz track request"
+                );
+                moved += 1;
+            }
+            moved
+        })
+    }
+
     fn request<'a>(&'a self, user_id: &'a str, tracks: Vec<ImportedTrack>) -> BoxFuture<'a, usize> {
         Box::pin(async move {
             let Some(principal) = self.owner(user_id).await else {

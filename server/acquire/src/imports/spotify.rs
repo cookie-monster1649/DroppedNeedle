@@ -430,6 +430,11 @@ impl SpotifyImportService {
         resolved
     }
 
+    /// Fork: the album and song resolver, for the want upgrade.
+    pub fn resolver(&self) -> &AlbumResolver {
+        &self.resolver
+    }
+
     /// Fork: songs the album proof left without a recording, looked up
     /// one by one (`AlbumResolver::resolve_track`), by Spotify track id.
     async fn resolve_tracks(
