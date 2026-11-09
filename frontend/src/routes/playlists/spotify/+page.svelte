@@ -41,7 +41,7 @@
 				message: `"${playlist.name}" is importing in the background`,
 				type: 'success'
 			});
-			await goto(withBasePath(`/playlists/${result.playlist_id}`));
+			await goto(withBasePath(`/playlists/${result.playlist_id}?sync=ask`));
 		} catch (error) {
 			toastStore.show({
 				message: providerUnavailableMessage(error) ?? `Failed to import "${playlist.name}"`,
