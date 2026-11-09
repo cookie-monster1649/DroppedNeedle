@@ -60,7 +60,14 @@ pub const LOOPS: &[&str] = &[
     PUBLISH_JOB,
     RECYCLE_EXPIRY_JOB,
     LEFTOVERS_JOB,
+    SAME_FOLDER_JOB,
 ];
+
+/// Fork: the merge of albums that are plainly one album (same folder, same
+/// artist and title), and how often it looks.
+pub const SAME_FOLDER_JOB: &str = "library-same-folder-albums";
+const SAME_FOLDER_EVERY: Duration = Duration::from_secs(600);
+const SAME_FOLDER_FAILED: &str = "SAME_FOLDER_MERGE_FAILED";
 
 /// Scan idle ceiling: how often the scan loop looks for scheduled work
 /// when nothing wakes it.
@@ -749,6 +756,19 @@ pub(crate) fn start_loops(
     )?;
     let (db, blobs) = (setup.db.clone(), setup.core.blobs.clone());
     supervisor.one_shot(UNDO_MOVE_JOB, move |ctx| undo_move(db, blobs, ctx))?;
+    let corrections = services.corrections.clone();
+    supervisor.periodic_blocking(
+        SAME_FOLDER_JOB,
+        Schedule::new(SAME_FOLDER_EVERY)
+            .with_initial_delay(Duration::from_secs(90))
+            .with_backoff(Duration::from_secs(60), SAME_FOLDER_EVERY),
+        move |_ctx| match caught("same-folder merge", || {
+            corrections.merge_same_folder_albums()
+        })? {
+            Ok(_) => Ok(Next::Continue),
+            Err(error) => Err(TickError::new(SAME_FOLDER_FAILED, error.to_string())),
+        },
+    )?;
     let publish = services.publishing.clone();
     supervisor.periodic_blocking(
         PUBLISH_JOB,

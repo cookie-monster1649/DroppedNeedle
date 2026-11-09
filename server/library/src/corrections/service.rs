@@ -34,6 +34,11 @@ pub struct Corrections {
 }
 
 impl Corrections {
+    /// Fork: the database, for `auto_merge`.
+    pub(super) fn db(&self) -> &Db {
+        &self.db
+    }
+
     pub fn new(
         db: Db,
         signer: LibrarySettings,

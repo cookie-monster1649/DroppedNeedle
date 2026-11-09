@@ -295,6 +295,33 @@ droppedneedle_kernel::sql! {
     pub(super) RETIRED_INTO = "SELECT retired_into_album_id FROM local_albums WHERE id = ?1";
     pub(super) SUCCESSOR = "SELECT COALESCE(retired_into_album_id, id) FROM local_albums WHERE id = ?1";
     pub(super) REPLAY = "SELECT after_json FROM library_catalog_actions WHERE idempotency_key = ?1";
+    /// Fork: pairs of live, automatically grouped albums that are one
+    /// album: same root, same grouping key (folded album artist + title),
+    /// and every indexed track of each in the same folder. Answers the
+    /// album to keep (the older) and the one to fold into it.
+    pub(super) SAME_FOLDER_ALBUMS = "WITH dirs AS ( \
+               SELECT a.id, a.root_id, a.grouping_key, a.created_at, \
+                      MIN(rtrim(t.relative_path, replace(t.relative_path, '/', ''))) AS dir, \
+                      MAX(rtrim(t.relative_path, replace(t.relative_path, '/', ''))) AS last_dir \
+               FROM local_albums a \
+               CROSS JOIN local_tracks t ON t.local_album_id = a.id AND t.availability = 'indexed' \
+               WHERE a.retired_into_album_id IS NULL AND a.has_indexed_track = 1 \
+                 AND a.grouping_locked = 0 AND a.grouping_source = 'automatic' \
+               GROUP BY a.id HAVING dir = last_dir AND dir <> '') \
+             SELECT keep.id, fold.id FROM dirs keep \
+             JOIN dirs fold ON fold.root_id = keep.root_id \
+               AND fold.grouping_key = keep.grouping_key AND fold.dir = keep.dir \
+               AND (fold.created_at > keep.created_at \
+                    OR (fold.created_at = keep.created_at AND fold.id > keep.id)) \
+             WHERE NOT EXISTS (SELECT 1 FROM dirs older WHERE older.root_id = keep.root_id \
+               AND older.grouping_key = keep.grouping_key AND older.dir = keep.dir \
+               AND (older.created_at < keep.created_at \
+                    OR (older.created_at = keep.created_at AND older.id < keep.id))) \
+             ORDER BY keep.id, fold.id";
+    /// Fork: the account an automatic merge is recorded under, the first
+    /// administrator.
+    pub(super) FIRST_ADMIN = "SELECT id FROM auth_users WHERE role = 'admin' \
+             ORDER BY rowid LIMIT 1";
     /// The track a local id names now: the track itself while its file is
     /// indexed, else the track its alias names (a missing track that
     /// continued into another), else the id itself, so a read's own
