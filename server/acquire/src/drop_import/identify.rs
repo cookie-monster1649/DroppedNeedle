@@ -29,8 +29,8 @@ use crate::landing::specs::Target;
 use crate::reason::Reason;
 use droppedneedle_kernel::db::DbError;
 use droppedneedle_kernel::jobs::{Schedule, SplitMix64};
-use droppedneedle_library::matching::Release;
 use droppedneedle_library::matching::decide::ACCEPT_ALBUM;
+use droppedneedle_library::matching::{LocalAlbum, Release};
 use droppedneedle_providers::RequestPriority;
 
 /// Releases fetched from fingerprint or group lookups.
@@ -278,12 +278,51 @@ pub async fn assigned(
         Ok(aliases) => aliases,
         Err(detail) => return Outcome::Unavailable(detail),
     };
-    let mut summary = choose(&local, releases, &aliases, &target);
+    let mut summary = choose(&local, releases.clone(), &aliases, &target);
+    if summary.best().is_none() && carries_ids(&local) {
+        // Fork: the person picked this album, so their pick outranks
+        // MusicBrainz ids in the tags that name another release: the files
+        // are matched on their names, numbers and lengths instead.
+        let untagged = without_ids(&local);
+        summary = choose(&untagged, releases, &aliases, &target);
+        if summary.best().is_some() {
+            tracing::info!(
+                release_group = %group,
+                "held match: tagged MusicBrainz ids disagree with the picked album; matched without them"
+            );
+        }
+    }
     if summary.best().is_none() {
+        tracing::info!(
+            release_group = %group,
+            files = landing.audio.len(),
+            state = ?summary.state,
+            "held match: no release of the picked album pairs with the files"
+        );
         return review(Reason::AlbumNotFound);
     }
     summary.owned = library.owned(&group, None).await;
     Outcome::Matched(Box::new(summary))
+}
+
+/// Whether any file names a MusicBrainz recording, track or release.
+fn carries_ids(local: &LocalAlbum) -> bool {
+    local.tracks.iter().any(|track| {
+        track.recording_mbid.is_some()
+            || track.release_track_mbid.is_some()
+            || track.release_mbid.is_some()
+    })
+}
+
+/// The album with its files' MusicBrainz ids left out.
+fn without_ids(local: &LocalAlbum) -> LocalAlbum {
+    let mut local = local.clone();
+    for track in &mut local.tracks {
+        track.recording_mbid = None;
+        track.release_track_mbid = None;
+        track.release_mbid = None;
+    }
+    local
 }
 
 /// The third tier: releases the audio is heard on, voted by file.
@@ -374,4 +413,62 @@ async fn chosen_edition(
     }
     summary.owned = library.owned(&group, None).await;
     Outcome::Matched(Box::new(summary))
+}
+
+#[cfg(test)]
+mod fork_tests {
+    use super::{carries_ids, without_ids};
+    use crate::landing::matching::choose;
+    use crate::landing::specs::Target;
+    use droppedneedle_library::matching::{LocalAlbum, LocalTrack, Release, ReleaseTrack};
+    use std::collections::HashMap;
+
+    /// Fork: a file whose tags name a recording the picked album does not
+    /// carry rules every release out, until its ids are left out.
+    #[test]
+    fn a_foreign_recording_id_gives_way_to_the_picked_album() {
+        let release = Release {
+            id: "rel".to_owned(),
+            release_group_id: "rg".to_owned(),
+            title: "SULA (Paperback)".to_owned(),
+            tracks: vec![ReleaseTrack {
+                id: "rt".to_owned(),
+                title: "SULA (Paperback)".to_owned(),
+                recording_id: "r-on-release".to_owned(),
+                disc: 1,
+                position: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let local = LocalAlbum {
+            title: "SULA (Paperback)".to_owned(),
+            artist: "Jamila Woods".to_owned(),
+            tracks: vec![LocalTrack {
+                id: "0".to_owned(),
+                title: "SULA (Paperback)".to_owned(),
+                artist: "Jamila Woods".to_owned(),
+                track_number: 1,
+                disc_number: 1,
+                recording_mbid: Some("r-elsewhere".to_owned()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let target = Target::default();
+        let aliases = HashMap::new();
+        assert!(carries_ids(&local));
+        assert!(
+            choose(&local, vec![release.clone()], &aliases, &target)
+                .best()
+                .is_none()
+        );
+        let untagged = without_ids(&local);
+        assert!(!carries_ids(&untagged));
+        assert!(
+            choose(&untagged, vec![release], &aliases, &target)
+                .best()
+                .is_some()
+        );
+    }
 }
