@@ -100,6 +100,68 @@ pub fn stage_tags(
         .map_err(|error| map_tags_error(temp, error))
 }
 
+/// Fork: [`stage_tags`] for a file coming into the library (an import,
+/// not a library file). An MP3 whose own ID3 tag the save wrapper cannot
+/// carry byte for byte (frame flags it cannot keep, a duplicate frame, an
+/// ID3v2.2 tag, a verify that sees untouched text move) is copied from
+/// `source` again, its old ID3v2 and APE tags are dropped, and the tags are
+/// written fresh. The audio is untouched; only the old tag's oddities go.
+pub fn stage_tags_import(
+    temp: &Path,
+    source: &Path,
+    managed_updates: &TagUpdates,
+    pictures: Option<&[super::super::tags::save::PictureSpec]>,
+) -> Result<String, PublishError> {
+    use super::super::tags::save::save_in_place;
+    let edits = tag_edits(managed_updates);
+    match save_in_place(temp, &edits, pictures) {
+        Ok(saved) => Ok(saved.sha256),
+        Err(TagsError::SaveRefused {
+            refusal: refusal @ (Refusal::NoByteInventory { .. } | Refusal::VerifyMismatch { .. }),
+            ..
+        }) if temp
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3")) =>
+        {
+            tracing::info!(
+                file = %message_name_path(temp),
+                %refusal,
+                "an imported file's tag cannot be kept byte for byte; writing a fresh tag"
+            );
+            let io = |error: std::io::Error| {
+                PublishError::Io(
+                    format!("io error on '{}': {error}", message_name_path(temp)).into(),
+                )
+            };
+            let bytes = std::fs::read(source).map_err(io)?;
+            std::fs::write(temp, without_id3v2(&bytes)).map_err(io)?;
+            save_in_place(temp, &edits, pictures)
+                .map(|saved| saved.sha256)
+                .map_err(|error| map_tags_error(temp, error))
+        }
+        Err(error) => Err(map_tags_error(temp, error)),
+    }
+}
+
+/// The bytes after every leading ID3v2 tag (header, body and footer), so
+/// a fresh tag can be written in its place. Anything that doesn't read as
+/// an ID3v2 header is left as it is.
+fn without_id3v2(mut bytes: &[u8]) -> &[u8] {
+    while bytes.len() >= 10 && &bytes[..3] == b"ID3" && bytes[6..10].iter().all(|b| b & 0x80 == 0) {
+        let body = bytes[6..10]
+            .iter()
+            .fold(0usize, |size, b| (size << 7) | usize::from(*b));
+        let footer = if bytes[5] & 0x10 != 0 { 10 } else { 0 };
+        let end = 10 + body + footer;
+        if end > bytes.len() {
+            break;
+        }
+        bytes = &bytes[end..];
+    }
+    bytes
+}
+
 /// Read the current semantic tag document for one audio file: every
 /// field the staged writer can write back. Undo and baseline restore
 /// replay `managed` through staging, so anything stored here must
