@@ -802,6 +802,11 @@ impl ImportSpec for PinnedEdition {
         let Some(pin) = subject.target.release_mbid.as_deref() else {
             return Verdict::accept();
         };
+        // Fork: any edition of the asked album will do (see
+        // `matching::recall`), unless fetching for a library copy.
+        if subject.target.planned_album.is_none() && subject.target.album_wanted.is_empty() {
+            return Verdict::accept();
+        }
         // Fork: a single song asked for is the song, whichever edition it
         // comes from; once the requested track is found the edition is
         // moot (`right_track` and the length check judge the file).

@@ -552,10 +552,9 @@ pub async fn merged_recordings(
     Ok(aliases)
 }
 
-/// Candidate releases of the requested group. A pinned edition is the
-/// only candidate: the files are judged against its tracklist and nothing
-/// else (owner rule, the pin is honoured end to end). Without a pin: the
-/// tagged release, then the group's editions from its listing (closest
+/// Candidate releases of the requested group. A pinned edition comes
+/// first; it is the only candidate when fetching for a library copy.
+/// Otherwise (and without a pin): the tagged release, then the group's editions from its listing (closest
 /// track count first), else from a title search.
 async fn recall(
     library: &dyn LandingLibrary,
@@ -569,7 +568,14 @@ async fn recall(
             library.release(pinned, PRIORITY).await.map_err(error)?,
             &mut releases,
         );
-        return Ok(releases);
+        // Fork: any edition of the asked album will do; the pin is only
+        // preferred (`choose` ranks it first among close editions) and the
+        // missing tracks are counted against the edition that arrived.
+        // Fetching for a library copy ("get missing tracks") keeps to that
+        // copy's edition.
+        if target.planned_album.is_some() || !target.album_wanted.is_empty() {
+            return Ok(releases);
+        }
     }
     if let Some(tagged) = local.tagged_release()
         && !releases.iter().any(|known| known.answers_to(&tagged))
