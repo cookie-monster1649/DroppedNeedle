@@ -301,6 +301,7 @@ impl SpotifyImportService {
         let tracks = tracks?;
 
         let album_mbid = self.resolve_albums(&tracks).await;
+        let songs = self.resolve_tracks(&tracks, &album_mbid).await;
 
         let rows: Vec<ImportedTrack> = tracks
             .iter()
@@ -309,7 +310,10 @@ impl SpotifyImportService {
                 let proven = album
                     .and_then(|album| album.id.as_deref())
                     .and_then(|id| album_mbid.get(id));
-                let mbid = proven.map(|proven| proven.group.clone());
+                // Fork: a song the album proof left unresolved, placed by
+                // itself on its recording and the album it comes from.
+                let alone = track.id.as_deref().and_then(|id| songs.get(id));
+                let mut mbid = proven.map(|proven| proven.group.clone());
                 let recording_mbid = proven.and_then(|proven| {
                     let isrc = track
                         .external_ids
@@ -319,6 +323,14 @@ impl SpotifyImportService {
                         .to_ascii_uppercase();
                     proven.recordings.get(&isrc).map(|id| id.to_lowercase())
                 });
+                let recording_mbid = match (recording_mbid, alone) {
+                    (Some(found), _) => Some(found),
+                    (None, Some(alone)) => {
+                        mbid = Some(alone.group.clone());
+                        Some(alone.recording.clone())
+                    }
+                    (None, None) => None,
+                };
                 let cover_url = match &mbid {
                     Some(mbid) => Some(format!("/api/v3/covers/release-group/{mbid}?size=250")),
                     None => best_image_url(album.and_then(|album| album.images.as_deref()), 250),
@@ -416,6 +428,68 @@ impl SpotifyImportService {
             }
         }
         resolved
+    }
+
+    /// Fork: songs the album proof left without a recording, looked up
+    /// one by one (`AlbumResolver::resolve_track`), by Spotify track id.
+    async fn resolve_tracks(
+        &self,
+        tracks: &[EntryTrack],
+        albums: &HashMap<String, ProvenAlbum>,
+    ) -> HashMap<String, super::spotify_tracks::ProvenTrack> {
+        let mut found = HashMap::new();
+        for track in tracks {
+            let Some(id) = track.id.as_deref().filter(|id| !id.is_empty()) else {
+                continue;
+            };
+            let album = track.album.as_ref();
+            let proven = album
+                .and_then(|album| album.id.as_deref())
+                .and_then(|id| albums.get(id));
+            let isrc = track
+                .external_ids
+                .as_ref()
+                .and_then(|ids| ids.isrc.as_deref())
+                .map(|isrc| isrc.trim().to_ascii_uppercase());
+            if proven.is_some_and(|proven| {
+                isrc.as_ref()
+                    .is_some_and(|isrc| proven.recordings.contains_key(isrc))
+            }) {
+                continue;
+            }
+            let song = super::spotify_tracks::SpotifySong {
+                title: track.name.clone(),
+                artists: track
+                    .artists
+                    .iter()
+                    .filter_map(|artist| artist.name.clone())
+                    .filter(|name| !name.is_empty())
+                    .collect(),
+                album: album
+                    .and_then(|album| album.name.clone())
+                    .unwrap_or_default(),
+                seconds: track
+                    .duration_ms
+                    .and_then(|ms| u64::try_from(ms / 1000).ok()),
+            };
+            match self.resolver.resolve_track(&song).await {
+                Ok(Some(placed)) => {
+                    found.insert(id.to_owned(), placed);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "musicbrainz failed; remaining songs imported without a recording");
+                    break;
+                }
+            }
+        }
+        if !found.is_empty() {
+            tracing::info!(
+                songs = found.len(),
+                "spotify songs placed on musicbrainz by title, artist and length"
+            );
+        }
+        found
     }
 
     /// Store the picked provider image as the local cover. Any failure
