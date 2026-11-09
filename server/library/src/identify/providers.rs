@@ -534,6 +534,20 @@ impl<R: ReleaseSource, F: FingerprintSource> Recall<'_, R, F> {
                 return Ok(near);
             }
         }
+        // Fork: a song asked for by name carries its ISRC; the releases
+        // of the recordings that carry it are the candidates. Each ISRC
+        // is asked once; the first that finds anything answers.
+        let mut asked: Vec<&str> = Vec::new();
+        for isrc in facts.tracks.iter().flat_map(|track| &track.isrcs) {
+            if asked.contains(&isrc.as_str()) || asked.len() >= ISRC_ASKS {
+                continue;
+            }
+            asked.push(isrc);
+            let hits = self.releases.search_isrc(isrc).await?;
+            if !hits.is_empty() {
+                return Ok(hits);
+            }
+        }
         if artist.is_empty() && !per_track {
             return Ok(Vec::new());
         }
@@ -856,6 +870,9 @@ impl<R: ReleaseSource, F: FingerprintSource> IdentifyProviders for LiveProviders
 }
 
 /// The recall answer when MusicBrainz could not be reached.
+/// Fork: at most this many ISRC lookups per album.
+const ISRC_ASKS: usize = 3;
+
 fn deferred() -> RecallResult {
     RecallResult {
         provider_deferred: true,

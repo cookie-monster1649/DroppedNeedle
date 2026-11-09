@@ -198,6 +198,13 @@ droppedneedle_kernel::sql! {
                  ON h.local_track_id = t.id \
                  WHERE t.local_album_id = ?1 AND t.availability = 'indexed' \
                  ORDER BY t.disc_number, t.track_number, t.relative_path";
+    /// Fork: the ISRCs linked to an album's indexed tracks (a song asked
+    /// for by name carries its provider's ISRC).
+    pub(super) ALBUM_FACT_ISRCS = "SELECT l.local_track_id, l.external_id FROM local_tracks t \
+                 CROSS JOIN local_entity_source_links l ON l.local_track_id = t.id \
+                 WHERE t.local_album_id = ?1 AND +t.availability = 'indexed' \
+                 AND l.local_track_id IS NOT NULL AND l.provider = 'isrc' \
+                 ORDER BY l.local_track_id, l.external_id";
     pub(super) FINGERPRINT = "SELECT fingerprint, duration_seconds FROM library_audio_fingerprint_outcomes \
                      WHERE local_track_id = ?1 AND stat_revision = ?2 \
                      AND fingerprinter_version = ?3 AND fingerprint IS NOT NULL";
