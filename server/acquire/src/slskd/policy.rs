@@ -64,7 +64,7 @@ impl DownloadPolicy {
             quality_min: saved.quality_min.clone(),
             quality_max: saved.quality_max.clone(),
             quality_recipe: saved.quality_recipe.clone(),
-            search_timeout: Duration::from_secs(30),
+            search_timeout: Duration::from_secs(12),
             completion_grace: Duration::from_secs(30),
             poll_interval: Duration::from_millis(500),
         }
