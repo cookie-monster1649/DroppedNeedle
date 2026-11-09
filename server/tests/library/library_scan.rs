@@ -11123,3 +11123,47 @@ async fn the_folder_watcher_scans_the_changed_folder_across_a_restart() {
         [("music".to_owned(), "A".to_owned())]
     );
 }
+
+/// Fork: an album split across two records whose files now share one
+/// folder (moved together by hand; the scan follows each file onto its old
+/// record) is merged by the same-folder pass, once.
+#[tokio::test]
+async fn same_folder_albums_merge_by_themselves() {
+    let scratch = ScratchDir::new("scan-same-folder-merge");
+    let music = scratch.join("music");
+    plant(&music, "a/01.flac", "flac_full_02.flac");
+    plant(&music, "b/02.flac", "flac_full_02.flac");
+    let library = bundle(&scratch).await;
+    scan(&library).await;
+    let albums = |library: &LibrarySetup| {
+        query(
+            library,
+            "SELECT COUNT(DISTINCT local_album_id) FROM local_tracks \
+             WHERE availability = 'indexed'",
+        )
+    };
+    assert_eq!(albums(&library), 2, "two folders, two albums");
+    std::fs::rename(music.join("b/02.flac"), music.join("a/02.flac")).expect("move");
+    scan(&library).await;
+    library
+        .scan_store
+        .db()
+        .run_sql(
+            "INSERT OR IGNORE INTO auth_users (id, display_name, role, created_at) \
+             VALUES ('admin', 'Admin', 'admin', 1);",
+        )
+        .expect("admin");
+    let corrections = crate::common::library::services(&library).corrections;
+    let before = albums(&library);
+    let merged = corrections.merge_same_folder_albums().expect("merge pass");
+    assert_eq!(
+        albums(&library),
+        1,
+        "one album after the pass (was {before}, merged {merged})"
+    );
+    assert_eq!(
+        corrections.merge_same_folder_albums().expect("second pass"),
+        0,
+        "nothing left to merge"
+    );
+}

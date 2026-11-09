@@ -36,6 +36,8 @@
 pub(crate) mod artist_convergence;
 pub(crate) mod artist_join;
 mod artists;
+/// Fork: same-folder albums merged without a person.
+mod auto_merge;
 pub mod continuation;
 mod edition;
 pub(crate) mod membership;
