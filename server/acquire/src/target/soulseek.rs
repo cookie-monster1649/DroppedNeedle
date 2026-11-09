@@ -1,10 +1,11 @@
 //! Search Soulseek for a target and pick the folder to fetch from.
 //!
-//! Albums and single tracks both search with the album query ladder and
-//! rank folders with [`rank_folders`]. A single track only falls back to
-//! the track query ladder when no album folder holds it, and a lone-track
-//! share is taken only when nothing better exists; the caller records the
-//! reason.
+//! Albums search with the album query ladder and rank folders with
+//! [`rank_folders`]. Fork: a single track goes straight to the track query
+//! ladder (each rung costs a search window, and slskd runs one search at a
+//! time); its results still turn up album folders, which rank first, and a
+//! lone-track share is taken only when nothing better exists; the caller
+//! records the reason.
 
 use super::SearchTarget;
 use super::reasons::TrackReason;
@@ -68,7 +69,7 @@ pub async fn choose<H: SlskdHttp>(
     };
     let policy = repo.policy();
     let mut hits: Vec<SearchResult> = Vec::new();
-    if target.has_album() {
+    if target.has_album() && target.track.is_none() {
         hits = repo
             .search_album(&target.artist, &target.album_title, target.year)
             .await
@@ -86,12 +87,6 @@ pub async fn choose<H: SlskdHttp>(
             }
             (None, None) => {
                 return Err(miss(&hits, request, repo, Reason::NoSource, NO_FOLDER));
-            }
-            (Some(_), Some(pick)) if !pick.lone_track => {
-                return Ok(SoulseekChoice {
-                    pick,
-                    lone_reason: None,
-                });
             }
             (Some(_), _) => {}
         }
