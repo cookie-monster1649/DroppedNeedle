@@ -316,6 +316,8 @@ pub struct DownloadActivitySummaryResponse {
     pub active_count: i64,
     pub held_count: i64,
     pub failed_count: i64,
+    /// Fork: tasks waiting to start, however many the list pages hold.
+    pub queued_count: i64,
     /// The 20 albums that landed most recently, newest first.
     pub landed_release_group_mbids: Vec<String>,
 }
@@ -656,6 +658,7 @@ pub async fn activity_summary_handler(
         active_count: summary.active_count,
         held_count: summary.held_count,
         failed_count: summary.failed_count,
+        queued_count: summary.queued_count,
         landed_release_group_mbids: summary.landed_release_group_mbids,
     }))
 }

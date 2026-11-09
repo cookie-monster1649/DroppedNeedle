@@ -13,6 +13,10 @@ use crate::downloads::store::{AttemptRow, StoreError, TaskOutcome, TaskRow};
 use crate::reason::Reason;
 use crate::target::reasons::TrackReason;
 
+/// Fork: queued tasks that search at once in one enqueue pass. Each search
+/// still takes one of the slskd repository's search permits.
+const SEARCHES_AT_ONCE: usize = 3;
+
 /// Enqueue backoff after a pass where no source could serve a task.
 const ENQUEUE_BACKOFF_SECONDS: f64 = 15.0 * 60.0;
 
@@ -56,13 +60,22 @@ impl DownloadWorker {
             .config
             .max_concurrent_downloads
             .saturating_sub(live.len());
-        for task in queued {
-            if budget == 0 {
+        // Fork: up to SEARCHES_AT_ONCE tasks search at a time, in queue
+        // order; a batch never starts more fetches than the budget left.
+        let mut waiting = queued.iter();
+        while budget > 0 {
+            let batch: Vec<&TaskRow> = waiting
+                .by_ref()
+                .take(budget.min(SEARCHES_AT_ONCE))
+                .collect();
+            if batch.is_empty() {
                 break;
             }
-            if self.enqueue_one(pass, &task).await {
-                budget -= 1;
-            }
+            let started = futures_util::future::join_all(
+                batch.iter().map(|task| self.enqueue_one(pass, task)),
+            )
+            .await;
+            budget = budget.saturating_sub(started.into_iter().filter(|started| *started).count());
         }
     }
 

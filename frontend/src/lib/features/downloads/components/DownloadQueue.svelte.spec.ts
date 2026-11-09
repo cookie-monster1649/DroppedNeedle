@@ -153,6 +153,14 @@ beforeEach(() => {
 describe('the held list on the Downloads queue', () => {
 	it('shows a held download and a held upload as two entries with the same actions', async () => {
 		fakeApi({
+			'GET /api/v3/downloads/activity-summary': {
+				revision: 1,
+				active_count: 0,
+				held_count: 0,
+				failed_count: 0,
+				queued_count: 0,
+				landed_release_group_mbids: []
+			},
 			'GET /api/v3/downloads/tasks': { items: [], page: 1, page_size: 100 },
 			'GET /api/v3/held': { entries: [download, upload] }
 		});
@@ -179,6 +187,14 @@ describe('a held file retried by itself', () => {
 		const day = at.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 		const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 		fakeApi({
+			'GET /api/v3/downloads/activity-summary': {
+				revision: 1,
+				active_count: 0,
+				held_count: 0,
+				failed_count: 0,
+				queued_count: 0,
+				landed_release_group_mbids: []
+			},
 			'GET /api/v3/downloads/tasks': { items: [], page: 1, page_size: 100 },
 			'GET /api/v3/held': {
 				entries: [
@@ -201,6 +217,14 @@ describe('a held file retried by itself', () => {
 describe('finished downloads on the Downloads queue', () => {
 	it('files a settled stop with finished work and counts only real misses', async () => {
 		fakeApi({
+			'GET /api/v3/downloads/activity-summary': {
+				revision: 1,
+				active_count: 0,
+				held_count: 0,
+				failed_count: 0,
+				queued_count: 0,
+				landed_release_group_mbids: []
+			},
 			'GET /api/v3/downloads/tasks': {
 				items: [
 					task('done', { status: 'completed' }),
@@ -222,6 +246,14 @@ describe('finished downloads on the Downloads queue', () => {
 
 	it("links a stop to another user's download fetching the same album", async () => {
 		fakeApi({
+			'GET /api/v3/downloads/activity-summary': {
+				revision: 1,
+				active_count: 0,
+				held_count: 0,
+				failed_count: 0,
+				queued_count: 0,
+				landed_release_group_mbids: []
+			},
 			'GET /api/v3/downloads/tasks': {
 				items: [
 					task('live', {
@@ -252,6 +284,14 @@ describe('finished downloads on the Downloads queue', () => {
 
 	it('settles Retry when it joins a download already running', async () => {
 		fakeApi({
+			'GET /api/v3/downloads/activity-summary': {
+				revision: 1,
+				active_count: 0,
+				held_count: 0,
+				failed_count: 0,
+				queued_count: 0,
+				landed_release_group_mbids: []
+			},
 			'GET /api/v3/downloads/tasks': {
 				items: [task('broke', { status: 'failed' })],
 				page: 1,

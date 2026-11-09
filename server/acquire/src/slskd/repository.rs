@@ -112,6 +112,9 @@ pub struct MountDiagnosis {
     pub client_downloads_dir: Option<String>,
 }
 
+/// Fork: concurrent slskd searches.
+const SEARCH_PERMITS: usize = 3;
+
 /// Search and acquisition over one slskd instance.
 pub struct SlskdRepository<T: SlskdHttp> {
     client: SlskdClient<T>,
@@ -139,9 +142,9 @@ impl<T: SlskdHttp> SlskdRepository<T> {
             configured: !url.is_empty() && !api_key.is_empty(),
             downloads: downloads.into(),
             incomplete_mount: None,
-            // slskd permits only one concurrent search and one concurrent
-            // enqueue.
-            search_permits: Arc::new(Semaphore::new(1)),
+            // Fork: up to three searches at once (the Soulseek server
+            // throttles clients that search much faster), one enqueue.
+            search_permits: Arc::new(Semaphore::new(SEARCH_PERMITS)),
             enqueue_permits: Arc::new(Semaphore::new(1)),
             policy,
         }

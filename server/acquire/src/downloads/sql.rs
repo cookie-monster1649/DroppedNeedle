@@ -310,10 +310,11 @@ droppedneedle_kernel::sql! {
     /// One user's (`?1`) activity revision.
     pub(super) USER_REVISION = "SELECT revision FROM download_activity_user_revisions \
              WHERE user_id = ?1";
-    /// Live and failed task counts for a viewer (`?1`, NULL for all).
+    /// Live, failed and (fork) queued task counts for a viewer (`?1`, NULL for all).
     pub(super) ACTIVITY_COUNTS = "SELECT \
              COALESCE(SUM(status IN ('queued', 'downloading', 'processing')), 0), \
-             COALESCE(SUM(status = 'failed'), 0) \
+             COALESCE(SUM(status = 'failed'), 0), \
+             COALESCE(SUM(status = 'queued'), 0) \
              FROM download_tasks WHERE (?1 IS NULL OR user_id = ?1)";
     /// The 20 albums that landed most recently for a viewer (`?1`).
     pub(super) LANDED_ALBUMS = "SELECT release_group_mbid FROM download_tasks \

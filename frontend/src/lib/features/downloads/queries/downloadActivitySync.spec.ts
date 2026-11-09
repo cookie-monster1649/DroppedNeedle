@@ -16,6 +16,7 @@ function summary(
 		active_count: 0,
 		held_count: 0,
 		failed_count: 0,
+		queued_count: 0,
 		landed_release_group_mbids
 	};
 }

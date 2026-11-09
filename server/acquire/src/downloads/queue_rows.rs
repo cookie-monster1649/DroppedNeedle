@@ -435,6 +435,8 @@ pub struct ActivitySummary {
     pub active_count: i64,
     pub held_count: i64,
     pub failed_count: i64,
+    /// Fork: tasks waiting to start, however many the list pages hold.
+    pub queued_count: i64,
     pub landed_release_group_mbids: Vec<String>,
 }
 
@@ -563,10 +565,10 @@ impl DownloadStore<'_> {
                 })
                 .optional()?
         };
-        let (active_count, failed_count): (i64, i64) =
+        let (active_count, failed_count, queued_count): (i64, i64, i64) =
             self.conn
                 .query_row(sql::ACTIVITY_COUNTS.text(), params![owner], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                 })?;
         // What the Downloads page lists: the viewer's own, plus the import
         // folder's owner-less entries for an admin.
@@ -581,6 +583,7 @@ impl DownloadStore<'_> {
             active_count,
             held_count,
             failed_count,
+            queued_count,
             landed_release_group_mbids: landed,
         })
     }
