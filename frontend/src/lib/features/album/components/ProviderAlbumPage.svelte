@@ -32,6 +32,7 @@
 		getLibraryAlbumStatusQuery
 	} from '$lib/features/library/queries/LibraryQueries.svelte';
 	import LocalAlbumPage from './LocalAlbumPage.svelte';
+	import MergeCopiesButton from './MergeCopiesButton.svelte';
 	import {
 		getRatingsQuery,
 		ratingOf,
@@ -202,11 +203,24 @@
 		<div class="dn-album-page space-y-8 pt-0">
 			{#if localCopies.length > 1}
 				<Card variant="bordered" padding="md" as="section" aria-label="Copies in your library">
-					<h2 class="text-lg font-bold">Copies in your library</h2>
-					<p class="mt-1 max-w-2xl text-sm text-muted">
-						This MusicBrainz release matches more than one local album. Choose the copy you want to
-						open.
-					</p>
+					<div class="flex flex-wrap items-start justify-between gap-3">
+						<div>
+							<h2 class="text-lg font-bold">Copies in your library</h2>
+							<p class="mt-1 max-w-2xl text-sm text-muted">
+								This MusicBrainz release matches more than one local album. Choose the copy you want
+								to open.
+							</p>
+						</div>
+						{#if authStore.isAdmin}
+							<MergeCopiesButton
+								copies={localCopies}
+								onmerged={() => {
+									void localAlbumQuery.refetch();
+									void localCopiesQuery.refetch();
+								}}
+							/>
+						{/if}
+					</div>
 					<div class="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
 						{#each localCopies as localCopy (localCopy.id)}
 							<LibraryAlbumCard album={localCopy} />
