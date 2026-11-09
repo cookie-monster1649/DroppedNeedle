@@ -564,7 +564,7 @@ impl HeldService {
             Ok(files) if files.is_empty() => Ok(Acted::default()),
             Ok(files) => {
                 let mut acted = Acted::default();
-                let release = song.release(files.len());
+                let release = song.ask();
                 match self
                     .place_group(
                         &entry,
@@ -1204,7 +1204,10 @@ impl HeldService {
         files: Vec<HeldFile>,
         actor: Option<&str>,
         asker: Asker,
-        chosen: Option<Release>,
+        chosen: Option<(
+            super::want_shape::Ask,
+            Vec<droppedneedle_library::matching::SourceLink>,
+        )>,
         acted: &mut Acted,
     ) -> Result<(), HeldError> {
         let library = self.library();
@@ -1241,17 +1244,23 @@ impl HeldService {
                     .recording_mbid
                     .as_deref()
                     .is_some_and(crate::requests::ledger::is_want_key);
-        let (release, join) = if let Some(release) = chosen {
-            (release, None)
+        // Fork: a want's (or a chosen Spotify song's) release is shaped
+        // from the ask and the files' own tags, read below.
+        let mut shape = if let Some(chosen) = chosen {
+            Some(chosen)
         } else if want {
             let key = entry.recording_mbid.clone().unwrap_or_default();
-            let links = self
-                .read("held.want_links", move |rows| rows.want_links(&key))
+            let (links, asked) = self
+                .read("held.want_ask", move |rows| {
+                    Ok((rows.want_links(&key)?, rows.want_ask(&key)?))
+                })
                 .await?;
-            (
-                want_release(entry, target.as_ref(), files.len(), &links),
-                None,
-            )
+            Some((want_ask(entry, target.as_ref(), asked), links))
+        } else {
+            None
+        };
+        let (mut release, join) = if shape.is_some() {
+            (Release::default(), None)
         } else {
             self.release_for(&library, entry, first, target.as_ref(), asker.priority())
                 .await?
@@ -1287,6 +1296,27 @@ impl HeldService {
             // Every file is compared with the library's copies of its
             // track; with none there, it is placed as it is.
             pairing.owned.push((index, track));
+        }
+        if let Some((ask, links)) = shape.take() {
+            let tags: Vec<&droppedneedle_library::tags::read::AudioTag> =
+                batch_files.iter().map(|file| &file.file.tag).collect();
+            release = super::want_shape::release(&ask, &tags, &links);
+            // A song joining an album the library has takes its year, so
+            // the naming script files it in that album's folder.
+            let artist = release
+                .artists
+                .first()
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
+            let title = release.title.clone();
+            if let Some(year) = self
+                .read("held.album_year", move |rows| {
+                    rows.library_album_year(&artist, &title)
+                })
+                .await?
+            {
+                release.date = year.map(|year| year.to_string());
+            }
         }
         let folder = match entry.origin {
             EntryOrigin::ImportFolder => Some(self.import_folder_of(entry).await?),
@@ -2304,60 +2334,27 @@ async fn probe_held(path: &Path) -> Option<LandedFile> {
 /// no identity is sealed and the album is offered to identification. One
 /// track per file, titled from the ask; a lone track with no album named
 /// is its own single.
-fn want_release(
+/// Fork: what a want asked for: the request's names (the provider's
+/// spelling), else the held entry's and the task's.
+fn want_ask(
     entry: &Entry,
     target: Option<&specs::Target>,
-    files: usize,
-    links: &[droppedneedle_library::matching::SourceLink],
-) -> Release {
-    use droppedneedle_library::matching::{CreditedArtist, ReleaseTrack};
-    // The ISRC is also written to the file's tags, where every player and
-    // tagger reads it.
-    let isrcs: Vec<String> = links
-        .iter()
-        .filter(|link| link.provider == "isrc")
-        .map(|link| link.external_id.clone())
-        .collect();
-    let artist = entry
-        .artist_name
-        .clone()
-        .or_else(|| target.map(|target| target.artist_name.clone()))
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "Unknown Artist".to_owned());
-    let title = target
-        .and_then(|target| target.track_title.clone())
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| "Unknown Track".to_owned());
-    let album = entry
-        .album_title
-        .clone()
-        .filter(|album| !album.trim().is_empty() && album != "Single track");
-    let single = album.is_none();
-    let credit = vec![CreditedArtist {
-        name: artist,
-        ..CreditedArtist::default()
-    }];
-    let tracks = (0..files)
-        .map(|index| {
-            let position = u32::try_from(index + 1).unwrap_or(u32::MAX);
-            ReleaseTrack {
-                title: title.clone(),
-                artists: credit.clone(),
-                disc: 1,
-                position,
-                absolute_position: position,
-                isrcs: isrcs.clone(),
-                links: links.to_vec(),
-                ..ReleaseTrack::default()
-            }
-        })
-        .collect();
-    Release {
-        title: album.unwrap_or_else(|| title.clone()),
-        artists: credit,
-        primary_type: Some(if single { "Single" } else { "Album" }.to_owned()),
-        tracks,
-        ..Release::default()
+    asked: Option<super::store::WantAsk>,
+) -> super::want_shape::Ask {
+    let asked = asked.unwrap_or_default();
+    let named = |value: Option<String>| value.filter(|value| !value.trim().is_empty());
+    super::want_shape::Ask {
+        artist: named(asked.artist)
+            .or_else(|| named(entry.artist_name.clone()))
+            .or_else(|| target.map(|target| target.artist_name.clone()))
+            .unwrap_or_default(),
+        title: named(asked.title)
+            .or_else(|| target.and_then(|target| target.track_title.clone()))
+            .unwrap_or_default(),
+        // The entry's album title is the song for a want; only the request
+        // knows the album.
+        album: named(asked.album),
+        length_ms: None,
     }
 }
 

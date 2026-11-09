@@ -8,7 +8,7 @@
 //! (`service::want_release`). No MusicBrainz id is sealed, so the album is
 //! offered to identification afterwards.
 
-use droppedneedle_library::matching::{CreditedArtist, Release, ReleaseTrack, SourceLink};
+use droppedneedle_library::matching::SourceLink;
 use rusqlite::{OptionalExtension as _, Row, params};
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -77,49 +77,20 @@ impl SpotifyCandidate {
     /// The release `files` held files are placed on: one track per file,
     /// titled as on Spotify, on its Spotify album (a lone song with no
     /// album is its own single).
-    pub fn release(&self, files: usize) -> Release {
-        let links = self.links();
-        let isrcs: Vec<String> = self.isrc.iter().cloned().collect();
-        let credit = vec![CreditedArtist {
-            name: if self.artist.trim().is_empty() {
-                "Unknown Artist".to_owned()
-            } else {
-                self.artist.clone()
-            },
-            ..CreditedArtist::default()
-        }];
+    /// The ask a match files the song with (see `want_shape`).
+    #[must_use]
+    pub fn ask(&self) -> (super::want_shape::Ask, Vec<SourceLink>) {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let length = self.duration_seconds.map(|s| (s * 1000.0) as u64);
-        let tracks = (0..files)
-            .map(|index| {
-                let position = u32::try_from(index + 1).unwrap_or(u32::MAX);
-                ReleaseTrack {
-                    title: self.title.clone(),
-                    artists: credit.clone(),
-                    disc: 1,
-                    position,
-                    absolute_position: position,
-                    length_ms: length,
-                    isrcs: isrcs.clone(),
-                    links: links.clone(),
-                    ..ReleaseTrack::default()
-                }
-            })
-            .collect();
-        Release {
-            title: self.album.clone().unwrap_or_else(|| self.title.clone()),
-            artists: credit,
-            primary_type: Some(
-                if self.album.is_some() {
-                    "Album"
-                } else {
-                    "Single"
-                }
-                .to_owned(),
-            ),
-            tracks,
-            ..Release::default()
-        }
+        let length_ms = self.duration_seconds.map(|s| (s * 1000.0) as u64);
+        (
+            super::want_shape::Ask {
+                title: self.title.clone(),
+                artist: self.artist.clone(),
+                album: self.album.clone(),
+                length_ms,
+            },
+            self.links(),
+        )
     }
 }
 

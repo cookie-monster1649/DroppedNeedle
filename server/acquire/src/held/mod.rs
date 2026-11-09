@@ -27,6 +27,7 @@ pub mod service;
 pub mod spotify_match;
 pub mod sql;
 pub mod store;
+pub mod want_shape;
 
 use std::path::{Component, Path, PathBuf};
 

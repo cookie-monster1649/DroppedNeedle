@@ -122,6 +122,16 @@ droppedneedle_kernel::sql! {
     /// area kept them.
     pub(super) WANT_IDENTITIES = "SELECT provider, external_id FROM acquire_want_identities \
              WHERE want_key = ?1 ORDER BY provider, external_id";
+    /// Fork: what want `?1` asked for (artist, album, title), newest ask.
+    pub(super) WANT_ASK = "SELECT artist_name, album_title, track_title FROM request_history \
+             WHERE musicbrainz_id_lower = 'track:' || lower(?1) \
+             ORDER BY requested_at DESC LIMIT 1";
+    /// Fork: the year of the library album by album artist `?1` titled
+    /// `?2` (both folded), so a song joining it is filed in its folder.
+    pub(super) LIBRARY_ALBUM_YEAR = "SELECT year FROM local_albums \
+             WHERE album_artist_name_folded = ?1 AND title_folded = ?2 \
+               AND retired_into_album_id IS NULL AND has_indexed_track = 1 \
+             ORDER BY created_at, id LIMIT 1";
     pub(super) TASK_HOLDS = "SELECT EXISTS (SELECT 1 FROM acquire_held_files f \
              JOIN acquire_held_entries e ON e.id = f.entry_id \
              WHERE f.source_task_id = ?1 AND f.state = 'held' AND e.state IN " + OPEN + ")";

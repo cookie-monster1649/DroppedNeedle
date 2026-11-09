@@ -8110,6 +8110,177 @@ async fn a_held_want_file_imports_as_tagged_with_no_identity() {
     );
 }
 
+/// Fork: songs of one album asked for separately by name land as one
+/// album: filed under the asked (Spotify) album and artist spelling, in the
+/// order of the files' own track numbers.
+#[tokio::test]
+async fn wants_from_one_album_land_as_one_album() {
+    use droppedneedle_acquire::downloads::store::TaskDetails;
+    let wants = [
+        (
+            "want-0123456789abcdef0123456789abcd01",
+            "t-roads",
+            "Roads",
+            5u32,
+            1i64,
+        ),
+        (
+            "want-0123456789abcdef0123456789abcd02",
+            "t-glory",
+            "Glory Box",
+            11u32,
+            2i64,
+        ),
+    ];
+    let db = AcquireDb::scratch().expect("scratch db");
+    db.add_user("u-ada", "Ada", "user").await.expect("user");
+    let dir = db.path().parent().expect("scratch dir").to_path_buf();
+    let config = Arc::new(
+        ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+            .expect("config"),
+    );
+    let platform = TestPlatform::on(db.db(), &dir)
+        .settings(config)
+        .build()
+        .await;
+    let (library, _) = library_at(&platform);
+    let music = dir.join("music");
+    std::fs::create_dir_all(&music).expect("music root");
+    library
+        .scans
+        .add_root(
+            Some("music".to_owned()),
+            music.to_string_lossy().into_owned(),
+            EffectivePolicy::Automatic,
+        )
+        .expect("root adds");
+    let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(Vec::new()));
+    let (acquire, _fixed) = acquire_serving(
+        &platform,
+        &library,
+        Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+    );
+    let held_dir = acquire.held.folders().held.clone();
+    let ada = &test_principal("u-ada", Role::User, "sess-ada", SessionKind::Standard);
+    for (want, task_id, title, track, entry) in wants {
+        acquire
+            .journal
+            .run("test.seed", move |store| {
+                let task = NewTask {
+                    artist_name: "Portishead".to_owned(),
+                    album_title: title.to_owned(),
+                    ..new_task(task_id, "")
+                };
+                store.insert_track_task(&task, want, 1.0)?;
+                store.set_task_details(
+                    task_id,
+                    &TaskDetails {
+                        track_title: Some(title.to_owned()),
+                        ..TaskDetails::default()
+                    },
+                    1.0,
+                )
+            })
+            .await
+            .expect("task");
+        let path = land_file(
+            &held_dir,
+            &format!("{task_id}.flac"),
+            "flac_full_01.flac",
+            title,
+            track,
+        );
+        // Another spelling of the artist in the file's own tags; the
+        // second song has no year, and still joins the first's folder.
+        let mut edits = vec![TagEdit::new(
+            TagField::AlbumArtist,
+            vec!["PORTISHEAD".to_owned()],
+        )];
+        if entry == 2 {
+            edits.push(TagEdit::new(TagField::Date, Vec::new()));
+            edits.push(TagEdit::new(TagField::OriginalDate, Vec::new()));
+        }
+        save_tags(&path, &edits).expect("retag");
+        let held = path
+            .file_name()
+            .expect("name")
+            .to_string_lossy()
+            .into_owned();
+        let file: i64 = acquire
+            .db
+            .write("test.held", move |tx| {
+                tx.execute(
+                    "INSERT INTO request_history (musicbrainz_id_lower, musicbrainz_id, \
+                     artist_name, album_title, track_title, requested_at, status, user_id, \
+                     download_task_id, request_kind) VALUES (?1, ?2, 'Portishead', 'Dummy', \
+                     ?3, 1700000000000, 'downloading', 'u-ada', ?4, 'track')",
+                    rusqlite::params![format!("track:{want}"), want, title, task_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO acquire_held_entries (id, user_id, origin, group_key, \
+                     recording_mbid, artist_name, album_title, state, created_at, expires_at) \
+                     VALUES (?1, 'u-ada', 'download', ?2, ?3, 'Portishead', ?4, 'held', 1, 2)",
+                    rusqlite::params![entry, format!("track:{want}"), want, title],
+                )?;
+                tx.execute(
+                    "INSERT INTO acquire_held_files (entry_id, root, path, original_name, \
+                     recording_mbid, track_number, disc_number, reason, source, \
+                     source_task_id, state, created_at) VALUES (?1, 'held', ?2, ?2, ?3, 1, 1, \
+                     'no_release', 'soulseek', ?4, 'held', 1)",
+                    rusqlite::params![entry, held, want, task_id],
+                )?;
+                Ok(tx.last_insert_rowid())
+            })
+            .await
+            .expect("held rows");
+        let (status, body) = held_call(
+            &acquire,
+            "POST",
+            &format!("/api/v3/held/{entry}/import"),
+            Some(serde_json::json!({ "file_ids": [file] })),
+            ada,
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["imported"], 1, "{body}");
+    }
+    let mut placed = files_under(&music, "flac");
+    placed.sort();
+    assert_eq!(placed.len(), 2, "{placed:?}");
+    let folders: Vec<_> = placed
+        .iter()
+        .map(|path| path.parent().map(Path::to_path_buf))
+        .collect();
+    assert_eq!(folders[0], folders[1], "one album folder: {placed:?}");
+    let shown: Vec<String> = placed
+        .iter()
+        .map(|path| {
+            path.strip_prefix(&music)
+                .expect("under root")
+                .display()
+                .to_string()
+        })
+        .collect();
+    assert!(
+        shown
+            .iter()
+            .all(|path| path.starts_with("Portishead/Dummy (1997)/")),
+        "filed under the asked artist and album: {shown:?}"
+    );
+    let albums: Vec<String> = acquire.db.db().column(
+        "SELECT DISTINCT local_album_id || ' ' || album_title FROM local_tracks \
+         WHERE availability = 'indexed'",
+        [],
+    );
+    assert_eq!(albums.len(), 1, "one library album: {albums:?}");
+    let order: Vec<String> = acquire.db.db().column(
+        "SELECT track_number || ' ' || title FROM local_tracks \
+         WHERE availability = 'indexed' ORDER BY disc_number, track_number",
+        [],
+    );
+    assert_eq!(order, vec!["5 Roads".to_owned(), "11 Glory Box".to_owned()]);
+}
+
 /// Fork (Slice B3): a want's file agreeing with the ask by title, artist
 /// and length is held paired to the ask, the task stops fetching, and the
 /// held loop files it by itself. A file of another song stays for a person.
