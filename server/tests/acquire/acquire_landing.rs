@@ -5796,6 +5796,8 @@ struct SingleCase {
     release_track_tag: Option<&'static str>,
     /// A release group tag alone.
     group_tag: Option<&'static str>,
+    /// Fork: an album artist tag (a label, as some shares tag it).
+    album_artist: Option<&'static str>,
 }
 
 impl SingleCase {
@@ -5809,6 +5811,7 @@ impl SingleCase {
             recording_tag: None,
             release_track_tag: None,
             group_tag: None,
+            album_artist: None,
         }
     }
 }
@@ -5912,6 +5915,12 @@ impl SingleRig {
                 vec![id.to_owned()],
             ));
         }
+        if let Some(name) = case.album_artist {
+            edits.push(TagEdit::verbatim(
+                TagField::AlbumArtist,
+                vec![name.to_owned()],
+            ));
+        }
         save_tags(&song, &edits).expect("tags save");
         let task = NewTask {
             album_title: "Love Me".to_owned(),
@@ -6012,6 +6021,16 @@ async fn a_single_lands_as_the_song_only_on_proof() {
                     "t-dummy",
                     SingleCase::titled("Love Me", "Dummy"),
                     held_as("album_version_only"),
+                ),
+                // Fork: the song from its own release, its album artist tag
+                // a label: the song, at its length, named as it.
+                (
+                    "t-label",
+                    SingleCase {
+                        album_artist: Some("Ninja Tune"),
+                        ..SingleCase::titled("Love Me", "Love Me")
+                    },
+                    imported(),
                 ),
             ],
         ),
