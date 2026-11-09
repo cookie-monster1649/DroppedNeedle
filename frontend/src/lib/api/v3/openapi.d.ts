@@ -13226,6 +13226,11 @@ export interface components {
             landed_release_group_mbids: string[];
             /**
              * Format: int64
+             * @description Fork: tasks waiting to start, however many the list pages hold.
+             */
+            queued_count: number;
+            /**
+             * Format: int64
              * @description Moves whenever the viewer's queue changes structurally (not on
              *     byte progress). Refetch the list when it moves.
              */

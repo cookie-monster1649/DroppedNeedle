@@ -43207,6 +43207,7 @@
           "active_count",
           "held_count",
           "failed_count",
+          "queued_count",
           "landed_release_group_mbids"
         ],
         "properties": {
@@ -43228,6 +43229,11 @@
               "type": "string"
             },
             "description": "The 20 albums that landed most recently, newest first."
+          },
+          "queued_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fork: tasks waiting to start, however many the list pages hold."
           },
           "revision": {
             "type": "integer",
