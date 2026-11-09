@@ -184,6 +184,35 @@ droppedneedle_kernel::sql! {
          WHERE library_file_id IS NOT NULL AND (available_sources IS NULL \
          OR NOT json_valid(available_sources) \
          OR NOT EXISTS (SELECT 1 FROM json_each(available_sources) s WHERE s.value = 'local'))";
+    /// Fork: a linked library entry takes the shape of one added from the
+    /// library: its source id is the file, its album and artist are the
+    /// MusicBrainz ids of the album holding the file (so the row links where
+    /// the album page is), and format and recording come from the file. An
+    /// album or artist the library hasn't matched keeps what the entry had.
+    pub(super) FILL_LINKED_LOCAL = "UPDATE catalog_playlist_tracks SET \
+         track_source_id = library_file_id, \
+         album_id = COALESCE((SELECT e.release_group_mbid FROM local_tracks t \
+           JOIN local_album_external_identities e ON e.local_album_id = t.local_album_id \
+           AND e.provider = 'musicbrainz' WHERE t.id = library_file_id \
+           AND COALESCE(e.release_group_mbid, '') != ''), NULLIF(album_id, '')), \
+         artist_id = COALESCE(NULLIF(artist_id, ''), (SELECT ae.provider_artist_id \
+           FROM local_tracks t JOIN local_albums b ON b.id = t.local_album_id \
+           JOIN local_artist_external_identities ae ON ae.local_artist_id = b.album_artist_id \
+           AND ae.provider = 'musicbrainz' WHERE t.id = library_file_id)), \
+         format = COALESCE(NULLIF(format, ''), (SELECT lower(t.file_format) \
+           FROM local_tracks t WHERE t.id = library_file_id)), \
+         recording_mbid = COALESCE(NULLIF(recording_mbid, ''), (SELECT i.recording_mbid \
+           FROM local_track_external_identities i WHERE i.local_track_id = library_file_id \
+           AND COALESCE(i.recording_mbid, '') != '' LIMIT 1)) \
+         WHERE library_file_id IS NOT NULL AND source_type = 'local'";
+    /// Fork: a linked library entry with a MusicBrainz album shows that
+    /// album's cover, as one added from the library does, not the remote
+    /// image its import carried.
+    pub(super) FILL_LINKED_COVER = "UPDATE catalog_playlist_tracks SET \
+         cover_url = '/api/v3/covers/release-group/' || lower(album_id) || '?size=250' \
+         WHERE library_file_id IS NOT NULL AND source_type = 'local' \
+         AND length(COALESCE(album_id, '')) = 36 \
+         AND COALESCE(cover_url, '') NOT LIKE '/api/v3/covers/release-group/' || lower(album_id) || '%'";
     /// Fork: an entry's provider ids (`catalog_playlist_entry_identities`).
     pub(super) INSERT_ENTRY_IDENTITY = "INSERT INTO catalog_playlist_entry_identities \
          (entry_id, spotify_track_id, isrc) VALUES (?1, ?2, ?3)";
