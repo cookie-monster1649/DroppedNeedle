@@ -841,9 +841,9 @@ impl Imports {
                         use rusqlite::OptionalExtension as _;
                         Ok::<_, PublishError>(
                             conn.query_row(
-                                crate::import::sql::PLANNED_TRACK_ID.text(),
+                                crate::import::sql::OCCUPANT_AVAILABILITY.text(),
                                 rusqlite::params![root.id, placement.dest_rel],
-                                |row| row.get::<_, Availability>(2),
+                                |row| row.get::<_, Availability>(0),
                             )
                             .optional()?,
                         )
