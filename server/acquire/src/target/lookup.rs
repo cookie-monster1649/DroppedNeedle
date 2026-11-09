@@ -110,6 +110,16 @@ pub trait AlbumLookup: Send + Sync {
         &'a self,
         release_group_mbid: &'a str,
     ) -> BoxFuture<'a, Result<Option<String>, LookupError>>;
+
+    /// Fork: a release group's editions as MusicBrainz lists them (no
+    /// tracklists). Empty when the lookup does not list them.
+    fn group_editions<'a>(
+        &'a self,
+        _release_group_mbid: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<droppedneedle_library::identify::sources::Edition>, LookupError>>
+    {
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 /// [`AlbumLookup`] over the MusicBrainz client.
@@ -187,6 +197,21 @@ impl AlbumLookup for MusicBrainzAlbums {
             Ok(found
                 .and_then(|lookup| lookup.entity.first_release_date)
                 .filter(|date| !date.trim().is_empty()))
+        })
+    }
+
+    fn group_editions<'a>(
+        &'a self,
+        release_group_mbid: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<droppedneedle_library::identify::sources::Edition>, LookupError>>
+    {
+        Box::pin(async move {
+            droppedneedle_library::identify::sources::group_editions(
+                &self.client,
+                release_group_mbid,
+            )
+            .await
+            .map_err(|error| LookupError(error.0))
         })
     }
 }

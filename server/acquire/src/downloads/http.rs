@@ -1061,6 +1061,10 @@ pub struct PickRequest {
     /// `refusal` is not empty). Without it such a pick answers 409.
     #[serde(default)]
     pub confirm_policy_break: bool,
+    /// Fork: take the copy as the other edition it holds (its
+    /// `other_edition.release_mbid`); the request switches to it.
+    #[serde(default)]
+    pub edition: Option<String>,
 }
 
 /// The download a pick started.
@@ -1197,11 +1201,12 @@ pub async fn pick_candidate_handler(
     ValidJson(body): ValidJson<PickRequest>,
 ) -> Result<Json<PickResponse>, ApiError> {
     let task_id = search
-        .pick(
+        .pick_edition(
             &principal,
             &job_id,
             body.candidate_index,
             body.confirm_policy_break,
+            body.edition,
         )
         .await?;
     Ok(Json(PickResponse { task_id }))

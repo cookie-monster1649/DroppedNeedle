@@ -135,7 +135,18 @@ impl DownloadWorker {
         };
         let job_id = uuid::Uuid::new_v4().simple().to_string();
         let ordered: Vec<_> = in_try_order(sources, order).into_iter().cloned().collect();
-        let (candidates, _failed) = search_sources(&ordered, &target, &job_id).await;
+        let (mut candidates, _failed) = search_sources(&ordered, &target, &job_id).await;
+        if let Some(pin) = release_mbid.as_deref()
+            && !task.release_group_mbid.is_empty()
+            && target.wanted.is_empty()
+            && crate::search_jobs::candidates::wants_other_editions(&candidates)
+        {
+            let editions = self
+                .targets
+                .other_editions(&task.release_group_mbid, pin)
+                .await;
+            crate::search_jobs::candidates::mark_other_editions(&mut candidates, &editions);
+        }
         let upgrade = task.origin == DispatchOrigin::Upgrade;
         // "Always wait for my pick" covers requests and wanted albums: an
         // upgrade that waits costs nothing but a growing queue.

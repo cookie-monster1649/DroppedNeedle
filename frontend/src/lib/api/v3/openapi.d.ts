@@ -18853,6 +18853,21 @@ export interface components {
              */
             sidecar_patterns: string[];
         };
+        /** @description Fork: another edition of the asked album, as the downloads page shows it. */
+        OtherEdition: {
+            country?: string | null;
+            /** @description Release date as MusicBrainz gives it. */
+            date?: string | null;
+            /** @description MusicBrainz's note telling it apart ("deluxe edition"). */
+            disambiguation?: string | null;
+            /** @description Media formats ("CD", "Digital Media"). */
+            formats: string[];
+            /** @description Release MBID, lowercase. */
+            release_mbid: string;
+            title: string;
+            /** @description Audio tracks on it. */
+            track_count: number;
+        };
         /** @description One release group of an artist's discography that the library holds. */
         OwnedRelease: {
             /** @description Release-group MBID. */
@@ -19604,6 +19619,11 @@ export interface components {
              *     `refusal` is not empty). Without it such a pick answers 409.
              */
             confirm_policy_break?: boolean;
+            /**
+             * @description Fork: take the copy as the other edition it holds (its
+             *     `other_edition.release_mbid`); the request switches to it.
+             */
+            edition?: string | null;
         };
         /** @description The download a pick started. */
         PickResponse: {
@@ -23001,6 +23021,12 @@ export interface components {
             length_misses?: number | null;
             /** @description Why, in one sentence. */
             note: components["schemas"]["CandidateNote"];
+            /**
+             * @description Fork: Soulseek: the folder misses the edition asked for but holds
+             *     the whole of this other edition of the album. Picking it with this
+             *     edition switches the request to it.
+             */
+            other_edition?: null | components["schemas"]["OtherEdition"];
             /**
              * Format: double
              * @description Usenet: when it was posted (unix seconds).

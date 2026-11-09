@@ -108,4 +108,49 @@ describe('picking a source by hand', () => {
 			.poll(() => api.calls('POST /api/v3/downloads/search/{job_id}/pick').map((c) => c.body))
 			.toEqual([{ candidate_index: 1, confirm_policy_break: true }]);
 	});
+
+	it('shows the requested and the available edition, and switches once confirmed', async () => {
+		const api = fakeApi({
+			'GET /api/v3/downloads/search/{job_id}': {
+				...job,
+				candidates: [
+					candidate(0, {
+						title: 'Dummy (Deluxe)',
+						username: 'deluxepeer',
+						tier: 'possible',
+						note: {
+							code: 'other_edition',
+							text: 'Holds all 13 tracks of another edition, not the one asked for.'
+						},
+						other_edition: {
+							release_mbid: 'rel-deluxe',
+							title: 'Dummy',
+							date: '2014-05-01',
+							country: 'GB',
+							formats: ['Digital Media'],
+							track_count: 13,
+							disambiguation: 'deluxe'
+						}
+					})
+				]
+			},
+			'GET /api/v3/plugins/sources': { sources: [] },
+			'POST /api/v3/downloads/search/{job_id}/pick': { task_id: 'task-1' }
+		});
+		await renderWithQuery(ManualSearch, { jobId: 'job-1' });
+
+		const card = page.getByRole('article').filter({ hasText: 'deluxepeer' });
+		await expect.element(card.getByText('11-track edition')).toBeVisible();
+		await expect
+			.element(card.getByText('deluxe · 2014 · GB · Digital Media · 13 tracks'))
+			.toBeVisible();
+
+		await card.getByRole('button', { name: /^Use the edition/ }).click();
+		const dialog = page.getByRole('dialog');
+		await expect.element(dialog.getByText(/You asked for the 11-track edition/)).toBeVisible();
+		await dialog.getByRole('button', { name: 'Use this edition' }).click();
+		await expect
+			.poll(() => api.calls('POST /api/v3/downloads/search/{job_id}/pick').map((c) => c.body))
+			.toEqual([{ candidate_index: 0, edition: 'rel-deluxe', confirm_policy_break: false }]);
+	});
 });

@@ -21,9 +21,11 @@
 		Gauge,
 		Library,
 		Puzzle,
+		Repeat,
 		Signal,
 		Timer
 	} from 'lucide-svelte';
+	import { editionLabel } from '../editionLabel';
 
 	import type { SearchCandidate } from '$lib/features/downloads/queries/SearchQueries.svelte';
 	import Button from '$lib/ui/Button.svelte';
@@ -35,8 +37,20 @@
 		picking?: boolean;
 		/** lock every pick button once a pick is in flight or committed (double-pick guard) */
 		disabled?: boolean;
+		/** Fork: tracks on the edition asked for, when known. */
+		requestedTracks?: number | null;
+		/** Fork: take the copy as the other edition it holds. */
+		onPickEdition?: () => void;
 	}
-	const { candidate, onPick, picking = false, disabled = false }: Props = $props();
+	const {
+		candidate,
+		onPick,
+		picking = false,
+		disabled = false,
+		requestedTracks = null,
+		onPickEdition
+	}: Props = $props();
+	const otherEdition = $derived(candidate.other_edition ?? null);
 
 	const isSoulseek = $derived(candidate.source === 'soulseek');
 	const isUsenet = $derived(candidate.source === 'usenet');
@@ -113,6 +127,21 @@
 			<p class="mt-1 text-xs {noteTone}" data-testid="candidate-note">
 				{candidate.note.text}
 			</p>
+			{#if otherEdition}
+				<dl
+					class="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 rounded-field bg-base-200 px-2 py-1.5 text-xs"
+					data-testid="candidate-editions"
+				>
+					<dt class="text-muted">Requested</dt>
+					<dd class="text-muted line-through decoration-base-content/30">
+						{requestedTracks ? `${requestedTracks}-track edition` : 'the edition you asked for'}
+					</dd>
+					<dt class="font-semibold text-info">Available</dt>
+					<dd class="font-semibold text-info" title={otherEdition.title}>
+						{editionLabel(otherEdition)}
+					</dd>
+				</dl>
+			{/if}
 			<div class="mt-1.5 flex flex-wrap items-center gap-1.5">
 				{#if candidate.format}
 					<span
@@ -178,17 +207,32 @@
 			</div>
 		</div>
 
-		<Button
-			variant={recommended ? 'primary' : 'outline'}
-			size="sm"
-			class="min-h-11 shrink-0"
-			loading={picking}
-			{disabled}
-			onclick={onPick}
-			aria-label={`Pick ${candidate.title} from ${subtitle}`}
-		>
-			{recommended ? 'Pick' : refusal ? 'Pick anyway…' : 'Pick anyway'}
-		</Button>
+		{#if otherEdition && onPickEdition}
+			<Button
+				variant="primary"
+				size="sm"
+				icon={Repeat}
+				class="min-h-11 shrink-0"
+				loading={picking}
+				{disabled}
+				onclick={onPickEdition}
+				aria-label={`Use the edition ${candidate.title} from ${subtitle} holds`}
+			>
+				Use this edition…
+			</Button>
+		{:else}
+			<Button
+				variant={recommended ? 'primary' : 'outline'}
+				size="sm"
+				class="min-h-11 shrink-0"
+				loading={picking}
+				{disabled}
+				onclick={onPick}
+				aria-label={`Pick ${candidate.title} from ${subtitle}`}
+			>
+				{recommended ? 'Pick' : refusal ? 'Pick anyway…' : 'Pick anyway'}
+			</Button>
+		{/if}
 	</div>
 </Card>
 

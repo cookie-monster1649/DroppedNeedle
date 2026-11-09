@@ -15,6 +15,7 @@
 	import SearchResultCard, { REFUSAL_LABELS } from './SearchResultCard.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import ConfirmDialog from '$lib/ui/ConfirmDialog.svelte';
+	import { editionLabel } from '../editionLabel';
 
 	let { jobId, onClose }: { jobId: string; onClose?: () => void } = $props();
 
@@ -111,6 +112,46 @@
 		}
 	}
 
+	// Fork: a copy holding another edition is taken as that edition once the
+	// person confirms the switch.
+	let switching = $state<SearchCandidate | null>(null);
+	let switchOpen = $state(false);
+	const switchMessage = $derived.by(() => {
+		const other = switching?.other_edition;
+		if (!other) return '';
+		const asked = job?.tracks_total ? `the ${job.tracks_total}-track edition` : 'another edition';
+		const refusal = switching?.refusal?.[0];
+		return (
+			`You asked for ${asked}. This copy is ${other.title} (${editionLabel(other)}). ` +
+			'The request switches to this edition and its files are checked against it.' +
+			(refusal ? ` Note: ${REFUSAL_LABELS[refusal].toLowerCase()}.` : '')
+		);
+	});
+
+	function handlePickEdition(candidate: SearchCandidate) {
+		if (busy || !candidate.other_edition) return;
+		switching = candidate;
+		switchOpen = true;
+	}
+
+	async function confirmSwitch() {
+		const candidate = switching;
+		const other = candidate?.other_edition;
+		if (!candidate || !other) return;
+		pickingIndex = candidate.candidate_index;
+		try {
+			await pick.mutateAsync({
+				jobId,
+				candidate_index: candidate.candidate_index,
+				edition: other.release_mbid,
+				confirm_policy_break: (candidate.refusal?.length ?? 0) > 0
+			});
+			picked = true;
+		} finally {
+			if (!picked) pickingIndex = null;
+		}
+	}
+
 	function handleDismiss() {
 		if (busy) return;
 		dismiss.mutate(jobId, { onSuccess: () => onClose?.() });
@@ -171,6 +212,8 @@
 							picking={pickingIndex === candidate.candidate_index}
 							disabled={busy}
 							onPick={() => handlePick(candidate)}
+							requestedTracks={job.tracks_total}
+							onPickEdition={() => handlePickEdition(candidate)}
 						/>
 					{/each}
 				</div>
@@ -216,5 +259,14 @@
 		confirmLabel="Download anyway"
 		onconfirm={confirmPick}
 		oncancel={() => (confirming = null)}
+	/>
+
+	<ConfirmDialog
+		bind:open={switchOpen}
+		title="Switch to this edition?"
+		message={switchMessage}
+		confirmLabel="Use this edition"
+		onconfirm={confirmSwitch}
+		oncancel={() => (switching = null)}
 	/>
 </section>
