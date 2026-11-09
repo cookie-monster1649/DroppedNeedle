@@ -8,8 +8,11 @@
 -->
 <script lang="ts">
 	import { Combine } from 'lucide-svelte';
-	import { api } from '$lib/api/client';
-	import { v3 } from '$lib/api/v3/endpoint';
+	import {
+		fetchAlbumRevision,
+		fetchAlbumTracks,
+		removeTrack
+	} from '../queries/MergeCopiesQueries.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import Modal from '$lib/ui/Modal.svelte';
 	import { toastStore } from '$lib/stores/toast';
@@ -40,22 +43,12 @@
 		return list.reduce((best, copy) => (copy.track_count > best.track_count ? copy : best));
 	}
 
-	async function albumTracks(albumId: string): Promise<TrackView[]> {
-		const page = await api.v3.GET(
-			v3('/api/v3/library/albums/{id}/tracks', {
-				path: { id: albumId },
-				query: { limit: 500 }
-			})
-		);
-		return page.items;
-	}
-
 	async function start(): Promise<void> {
 		if (copies.length < 2 || busy) return;
 		busy = true;
 		try {
 			const kept = keeper(copies);
-			const tracks = (await Promise.all(copies.map((copy) => albumTracks(copy.id)))).flat();
+			const tracks = (await Promise.all(copies.map((copy) => fetchAlbumTracks(copy.id)))).flat();
 			const found = pickDuplicates(tracks, kept.id);
 			pending = { kept, tracks };
 			if (found.length > 0) {
@@ -82,14 +75,7 @@
 		const plan = pending;
 		if (!plan) return;
 		try {
-			for (const track of discard) {
-				await api.v3.DELETE(
-					v3('/api/v3/library/tracks/{id}', {
-						path: { id: track.id },
-						query: { expected_revision: track.row_revision }
-					})
-				);
-			}
+			for (const track of discard) await removeTrack(track);
 			const gone = new Set(discard.map((track) => track.id));
 			const moving = plan.tracks.filter(
 				(track) => track.album_id !== plan.kept.id && !gone.has(track.id)
@@ -97,14 +83,10 @@
 			if (moving.length > 0) {
 				const albums = [plan.kept.id, ...new Set(moving.map((track) => track.album_id))];
 				// Fresh revisions: the discards above move them.
-				const details = await Promise.all(
-					albums.map((id) => api.v3.GET(v3('/api/v3/library/albums/{id}', { path: { id } })))
-				);
+				const revisions = await Promise.all(albums.map(fetchAlbumRevision));
 				const request: MembershipPreviewInput = {
 					track_ids: moving.map((track) => track.id),
-					expected_album_revisions: Object.fromEntries(
-						details.map((detail) => [detail.id, detail.row_revision])
-					),
+					expected_album_revisions: Object.fromEntries(revisions),
 					target_album_id: plan.kept.id,
 					identity_choice: 'retain_manual'
 				};
