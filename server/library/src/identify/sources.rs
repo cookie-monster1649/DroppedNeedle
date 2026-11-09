@@ -169,6 +169,15 @@ pub trait ReleaseSource: Send + Sync {
     /// it now names, with the requested id in [`Release::old_ids`].
     fn release<'a>(&'a self, mbid: &'a str) -> BoxFuture<'a, Result<Option<Release>, SourceError>>;
 
+    /// Fork: releases that carry a recording with this ISRC. A source
+    /// without a recording index finds none.
+    fn search_isrc<'a>(
+        &'a self,
+        _isrc: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<ReleaseHit>, SourceError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
     /// The id a recording MBID resolves to after merges.
     fn canonical_recording<'a>(
         &'a self,
@@ -422,6 +431,24 @@ impl ReleaseSource for MusicBrainzView {
     ) -> BoxFuture<'a, Result<Vec<ReleaseHit>, SourceError>> {
         Box::pin(async move {
             let query = build_recording_query(title, artist);
+            let page = self
+                .search_recordings_query(&query, RECORDING_LIMIT, Criticality::IdentityCritical)
+                .await
+                .map_err(|error| SourceError(error.to_string()))?;
+            Ok(recording_release_hits(page.items))
+        })
+    }
+
+    fn search_isrc<'a>(
+        &'a self,
+        isrc: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<ReleaseHit>, SourceError>> {
+        Box::pin(async move {
+            let isrc: String = isrc.chars().filter(char::is_ascii_alphanumeric).collect();
+            if isrc.len() != 12 {
+                return Ok(Vec::new());
+            }
+            let query = format!("isrc:{}", isrc.to_ascii_uppercase());
             let page = self
                 .search_recordings_query(&query, RECORDING_LIMIT, Criticality::IdentityCritical)
                 .await
@@ -739,6 +766,13 @@ impl ReleaseSource for CachedMusicBrainz {
         artist: &'a str,
     ) -> BoxFuture<'a, Result<Vec<ReleaseHit>, SourceError>> {
         self.view.search_recording(title, artist)
+    }
+
+    fn search_isrc<'a>(
+        &'a self,
+        isrc: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<ReleaseHit>, SourceError>> {
+        self.view.search_isrc(isrc)
     }
 
     fn release<'a>(&'a self, mbid: &'a str) -> BoxFuture<'a, Result<Option<Release>, SourceError>> {

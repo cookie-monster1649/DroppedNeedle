@@ -326,6 +326,9 @@ pub struct LocalTrackFacts {
     pub release_track_mbid: Option<String>,
     pub release_mbid: Option<String>,
     pub release_group_mbid: Option<String>,
+    /// Fork: ISRCs linked to the track (upper case).
+    #[serde(default)]
+    pub isrcs: Vec<String>,
     /// Where the file lives, for fingerprinting.
     #[serde(default)]
     pub root_id: String,

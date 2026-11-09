@@ -29,7 +29,8 @@
 //!   earliest date, worldwide country), then MBID.
 //! - A lone candidate (no other release group plausible) needs a
 //!   quorum: two tracks paired within 0.40, or a recording or
-//!   release-track MBID on any file. A complete close fit also passes:
+//!   release-track MBID on any file, or (fork) a pair within 0.40 whose
+//!   file and track share an ISRC. A complete close fit also passes:
 //!   no missing or unmatched tracks, a non-blank album title and artist
 //!   that pass the name gate, and every pair within [`COMPLETE_TRACK`]
 //!   (0.10) with titles that agree in full. On an untagged pair 0.10
@@ -37,8 +38,11 @@
 //!   wrong track number alone is 0.17. The titles are compared with their
 //!   bracketed parts kept and no discounts, also within 0.10, so "Song"
 //!   never completes "Song (Acoustic)" or "Song (Instrumental)", while a
-//!   remix named on both sides still does. Without either there is too
-//!   little to go on and the verdict is insufficient evidence.
+//!   remix named on both sides still does. Fork: so does a named part
+//!   fit, where the album title and artist equal the release's and every
+//!   file pairs that closely, however many tracks the files lack. Without
+//!   any of these there is too little to go on and the verdict is
+//!   insufficient evidence.
 //! - A release that fails the album title or artist gate (see `score`)
 //!   goes to review however close its tracks are.
 //! - Files the accepted release leaves unpaired send it to review past
@@ -87,9 +91,9 @@
 
 use std::cmp::Ordering;
 
-use super::model::{EditionHints, LocalAlbum, Release};
+use super::model::{EditionHints, LocalAlbum, Release, credit_text};
 use super::score::{ReleaseMatch, TrackPair};
-use super::strings::basic_dist;
+use super::strings::{basic_dist, fold};
 use crate::edition_prefs::{EditionFacts, Preferences};
 
 pub const ACCEPT_ALBUM: f64 = 0.20;
@@ -264,8 +268,9 @@ fn decide_group(
     };
     let matched = &matches[chosen];
     if rival.is_infinite()
-        && !quorum(local, matched)
+        && !quorum(local, &releases[chosen], matched)
         && !complete_fit(local, &releases[chosen], matched)
+        && !named_part_fit(local, &releases[chosen], matched)
     {
         return Verdict::Insufficient;
     }
@@ -346,6 +351,30 @@ fn complete_fit(local: &LocalAlbum, release: &Release, matched: &ReleaseMatch) -
         && !local.artist.trim().is_empty()
         && !matched.pairs.is_empty()
         && matched.missing.is_empty()
+        && matched.unmatched.is_empty()
+        && matched.names_agree
+        && matched.pairs.iter().all(|pair| {
+            pair.distance <= COMPLETE_TRACK
+                && local.tracks.get(pair.local).is_some_and(|file| {
+                    release.tracks.get(pair.track).is_some_and(|track| {
+                        basic_dist(&file.title, &track.title) <= COMPLETE_TRACK
+                    })
+                })
+        })
+}
+
+/// Fork: the files are part of the release the album names exactly. The
+/// album title and artist equal the release's (folded), nothing is left
+/// unpaired, and every file pairs within [`COMPLETE_TRACK`] with a title
+/// that agrees in full. Tracks the files lack do not count: one song of a
+/// ten-song album, filed under that album's exact name, is that album.
+/// This is the pick a person makes by searching the album name and taking
+/// the artist's release.
+fn named_part_fit(local: &LocalAlbum, release: &Release, matched: &ReleaseMatch) -> bool {
+    let named = |left: &str, right: &str| !left.trim().is_empty() && fold(left) == fold(right);
+    named(&local.title, &release.title)
+        && named(&local.artist, &credit_text(&release.artists))
+        && !matched.pairs.is_empty()
         && matched.unmatched.is_empty()
         && matched.names_agree
         && matched.pairs.iter().all(|pair| {
@@ -502,7 +531,7 @@ fn other_status(release: &Release) -> bool {
 }
 
 /// The lone-candidate quorum.
-fn quorum(local: &LocalAlbum, matched: &ReleaseMatch) -> bool {
+fn quorum(local: &LocalAlbum, release: &Release, matched: &ReleaseMatch) -> bool {
     let close = matched
         .pairs
         .iter()
@@ -513,6 +542,25 @@ fn quorum(local: &LocalAlbum, matched: &ReleaseMatch) -> bool {
             .tracks
             .iter()
             .any(|track| track.recording_mbid.is_some() || track.release_track_mbid.is_some())
+        || isrc_pair(local, release, matched)
+}
+
+/// Fork: a close pair whose file and track share an ISRC: the provider
+/// the song was asked for on names this recording.
+fn isrc_pair(local: &LocalAlbum, release: &Release, matched: &ReleaseMatch) -> bool {
+    matched.pairs.iter().any(|pair| {
+        pair.distance <= ACCEPT_TRACK
+            && local.tracks.get(pair.local).is_some_and(|file| {
+                release.tracks.get(pair.track).is_some_and(|track| {
+                    file.isrcs.iter().any(|isrc| {
+                        track
+                            .isrcs
+                            .iter()
+                            .any(|other| other.eq_ignore_ascii_case(isrc))
+                    })
+                })
+            })
+    })
 }
 
 fn needs_type_confirmation(local: &LocalAlbum, release: &Release) -> bool {
@@ -830,10 +878,17 @@ mod tests {
                 Verdict::Identified(0),
             ),
             (
-                "lone candidate, one plain track of two",
+                "lone candidate, one plain track of two, album named otherwise",
+                local(1, 0, false),
+                vec![release("group-a", "Harbour Lights", 2)],
+                Verdict::Insufficient,
+            ),
+            // Fork: one file of a longer release the album names exactly.
+            (
+                "lone candidate, one plain track of two, album named exactly",
                 local(1, 0, false),
                 vec![night(2)],
-                Verdict::Insufficient,
+                Verdict::Identified(0),
             ),
             (
                 "lone candidate, one tagged track",
