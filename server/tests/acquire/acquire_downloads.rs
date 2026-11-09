@@ -17,7 +17,7 @@ use droppedneedle_acquire::dispatch::DispatchOrigin;
 use droppedneedle_acquire::downloads::journal::Journal;
 use droppedneedle_acquire::downloads::worker::run_startup_recovery;
 use droppedneedle_acquire::held::store::{
-    EntryOrigin, GroupKey, HeldRoot, HeldRows, NewEntry, NewFile,
+    EntryOrigin, FileState, GroupKey, HeldRoot, HeldRows, NewEntry, NewFile,
 };
 use droppedneedle_acquire::reason::Reason;
 use droppedneedle_providers::health::ServiceHealth;
@@ -418,7 +418,7 @@ fn auto_retry_sweep_honors_backoff_newest_wins_and_held_gate() {
 
     // A held track pauses auto-retry for its task, while its entry is open.
     let held = HeldRows::new(&conn);
-    let (entry, _) = held
+    let (entry, file_ids) = held
         .hold(
             &NewEntry {
                 user_id: Some("u1".to_owned()),
@@ -445,6 +445,27 @@ fn auto_retry_sweep_honors_backoff_newest_wins_and_held_gate() {
         held.task_holds("orig-r1").unwrap(),
         "an entry being acted on is open"
     );
+
+    // A song whose held file was imported by hand is done: no retry.
+    conn.execute(
+        "UPDATE download_tasks SET download_type = 'track', recording_mbid = 'rec-r' WHERE id = 'orig-r1'",
+        [],
+    )
+    .unwrap();
+    let ids = |store: &DownloadStore| -> Vec<String> {
+        store
+            .list_retryable(6)
+            .unwrap()
+            .into_iter()
+            .map(|task| task.id)
+            .collect()
+    };
+    assert!(ids(&store).contains(&"orig-r1".to_owned()));
+    assert!(store.retry_anchor("orig-r1").unwrap().is_some());
+    held.resolve(entry, &[file_ids[0].unwrap()], FileState::Imported, 3)
+        .unwrap();
+    assert!(!ids(&store).contains(&"orig-r1".to_owned()));
+    assert!(store.retry_anchor("orig-r1").unwrap().is_none());
 
     // Retry spawns keep the original terminal and carry the generation.
     let spawn = plan_retry("orig-r1", TaskStatus::Failed, "retry", 1).unwrap();

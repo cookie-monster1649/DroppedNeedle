@@ -258,6 +258,9 @@ droppedneedle_kernel::sql! {
              WHERE t.status IN ('failed', 'partial') \
                AND t.origin != 'upgrade' \
                AND t.retry_count < ?1 \
+               AND NOT (t.download_type = 'track' AND EXISTS ( \
+                 SELECT 1 FROM acquire_held_files h \
+                 WHERE h.source_task_id = t.id AND h.state = 'imported')) \
                AND NOT EXISTS ( \
                  SELECT 1 FROM download_tasks n \
                  WHERE n.user_id = t.user_id \
@@ -273,6 +276,8 @@ droppedneedle_kernel::sql! {
     /// for its ask.
     pub(super) RETRY_ANCHOR = "SELECT t.status, t.retry_count, t.completed_at, t.updated_at \
              FROM download_tasks t WHERE t.id = ?1 AND t.origin != 'upgrade' \
+             AND NOT (t.download_type = 'track' AND EXISTS (SELECT 1 FROM acquire_held_files h \
+               WHERE h.source_task_id = t.id AND h.state = 'imported')) \
              AND NOT EXISTS (SELECT 1 FROM download_tasks n \
                WHERE n.user_id = t.user_id AND n.download_type = t.download_type \
                  AND (t.download_type = 'track' \
