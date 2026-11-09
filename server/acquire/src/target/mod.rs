@@ -398,7 +398,21 @@ impl Targets {
                     tracing::warn!(task_id = %task.id, %error, "asked length unreadable");
                     None
                 });
+            let key = recording.clone();
+            let album = self
+                .journal
+                .read("downloads.target.want_album", move |store| {
+                    store.want_album(&key)
+                })
+                .await
+                .ok()
+                .flatten();
             let mut target = lone(TrackReason::RecordingUnknown);
+            // Fork: the album the song was asked for on (Spotify's) goes
+            // in the first search, so a folder of that album turns up.
+            if let Some(album) = album.filter(|album| !album.eq_ignore_ascii_case(&title)) {
+                target.album_title = album;
+            }
             if let Some(track) = target.track.as_mut() {
                 track.duration_seconds = duration;
             }

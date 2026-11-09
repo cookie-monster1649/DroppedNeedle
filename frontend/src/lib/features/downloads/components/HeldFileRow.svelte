@@ -89,7 +89,10 @@
 		const by = artist ? ` by ${artist}` : '';
 		if (file.reason === 'tag_mismatch') return `Its tags say “${heard ?? 'unknown'}”${by}`;
 		if (file.reason === 'wrong_track') return `Tagged “${heard ?? 'unknown'}”${by}`;
-		const pct = file.evidence_score != null ? ` (${Math.round(file.evidence_score * 100)}%)` : '';
+		// Fork: only a score says AcoustID heard it; otherwise these are the
+		// file's own tags.
+		if (file.evidence_score == null) return `Tagged “${heard ?? 'unknown'}”${by}`;
+		const pct = ` (${Math.round(file.evidence_score * 100)}%)`;
 		return `AcoustID heard “${heard ?? 'a different recording'}”${by}${pct}`;
 	});
 
