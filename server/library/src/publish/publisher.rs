@@ -1511,12 +1511,22 @@ impl<P: SpaceProbe> Publisher<P> {
             }
             self.known.record(read.stat, &read.sha256);
             let staged_sha = if tags_change {
-                super::staging::stage_tags(&temp, &item.managed_updates, pictures.as_deref())
-                    .map_err(|error| {
-                        error
-                            .track(&item.track_id)
-                            .file(&item.source_root, &item.source_rel)
-                    })?
+                // Fork: a file coming in may have its old tag rewritten.
+                if item.adopt.is_some() {
+                    super::staging::stage_tags_import(
+                        &temp,
+                        &source,
+                        &item.managed_updates,
+                        pictures.as_deref(),
+                    )
+                } else {
+                    super::staging::stage_tags(&temp, &item.managed_updates, pictures.as_deref())
+                }
+                .map_err(|error| {
+                    error
+                        .track(&item.track_id)
+                        .file(&item.source_root, &item.source_rel)
+                })?
             } else {
                 read.sha256
             };

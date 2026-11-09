@@ -4552,3 +4552,29 @@ fn scan_and_editor_agree_on_writable_fields() {
         differences.join("\n")
     );
 }
+
+/// Fork: an imported MP3 whose ID3 frame carries flags the wrapper cannot
+/// keep is refused by the strict staged write, and written with a fresh
+/// tag by the import's write.
+#[test]
+fn an_imported_mp3_with_a_flagged_frame_gets_a_fresh_tag() {
+    use droppedneedle_library::publish::staging::{stage_tags, stage_tags_import};
+    use droppedneedle_library::publish::{TagTarget, TagUpdates};
+    let (_dir, source) = temp_copy("mp3_full_01.mp3", "fresh-tag");
+    // Set a status flag on the first frame's header.
+    let mut bytes = std::fs::read(&source).unwrap();
+    assert_eq!(&bytes[..3], b"ID3");
+    bytes[10 + 8] = 0x40;
+    std::fs::write(&source, &bytes).unwrap();
+    let temp = source.with_file_name(".staged.mp3");
+    let mut updates = TagUpdates::new();
+    updates.insert(TagTarget::Field(TagField::Title), vec!["Fresh".to_owned()]);
+
+    std::fs::copy(&source, &temp).unwrap();
+    assert!(stage_tags(&temp, &updates, None).is_err());
+
+    std::fs::copy(&source, &temp).unwrap();
+    stage_tags_import(&temp, &source, &updates, None).expect("fresh tag");
+    let (tag, _) = tags::read::read_tags(track_file(&temp)).unwrap();
+    assert_eq!(tag.title, "Fresh");
+}
