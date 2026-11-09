@@ -374,6 +374,14 @@ impl NewFile {
     }
 }
 
+/// Fork: the names a want was asked with.
+#[derive(Debug, Clone, Default)]
+pub struct WantAsk {
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub title: Option<String>,
+}
+
 /// The held list over one connection: a transaction for writes, any
 /// connection for reads.
 pub struct HeldRows<'c> {
@@ -761,6 +769,37 @@ impl<'c> HeldRows<'c> {
             });
         }
         Ok(links)
+    }
+
+    /// Fork: the names want `want_key` was asked with (artist, album,
+    /// title), as the provider (Spotify) gave them.
+    pub fn want_ask(&self, want_key: &str) -> rusqlite::Result<Option<WantAsk>> {
+        let mut statement = self.conn.prepare_cached(sql::WANT_ASK.text())?;
+        statement
+            .query_row(params![want_key], |row| {
+                Ok(WantAsk {
+                    artist: row.get(0)?,
+                    album: row.get(1)?,
+                    title: row.get(2)?,
+                })
+            })
+            .optional()
+    }
+
+    /// Fork: the year of the library album `title` by `album_artist`, when
+    /// the library has it (`Some(None)`: it has it with no year).
+    pub fn library_album_year(
+        &self,
+        album_artist: &str,
+        title: &str,
+    ) -> rusqlite::Result<Option<Option<i64>>> {
+        use droppedneedle_kernel::db::fold::fold_text;
+        let mut statement = self.conn.prepare_cached(sql::LIBRARY_ALBUM_YEAR.text())?;
+        statement
+            .query_row(params![fold_text(album_artist), fold_text(title)], |row| {
+                row.get(0)
+            })
+            .optional()
     }
 
     /// Whether a download task still has a file held in an open entry: its
