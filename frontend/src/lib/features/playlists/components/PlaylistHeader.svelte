@@ -46,6 +46,8 @@
 	import PlexIcon from '$lib/media/icons/PlexIcon.svelte';
 	import SpotifyIcon from '$lib/media/icons/SpotifyIcon.svelte';
 	import SpotifySyncControl from './SpotifySyncControl.svelte';
+	import SpotifySyncPrompt from './SpotifySyncPrompt.svelte';
+	import { PlaylistSpotifySync } from '../state/spotifySync.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import IconButton from '$lib/ui/IconButton.svelte';
 	import Input from '$lib/ui/Input.svelte';
@@ -233,6 +235,24 @@
 
 	const menuItems = $derived.by(() => {
 		const items: MenuItem[] = [];
+		if (spotifySync.state) {
+			const on = spotifySync.state.enabled;
+			items.push({
+				label: on ? 'Stop syncing with Spotify' : 'Sync with Spotify',
+				icon: on ? RefreshCwOff : RefreshCw,
+				disabled: spotifySync.saving,
+				onclick: () => void spotifySync.set(!on, false)
+			});
+			if (on) {
+				const asking = spotifySync.state.auto_request;
+				items.push({
+					label: asking ? 'Stop requesting new songs' : 'Request new songs',
+					icon: asking ? BellOff : Bell,
+					disabled: spotifySync.saving,
+					onclick: () => void spotifySync.set(true, !asking)
+				});
+			}
+		}
 		if (canEdit) {
 			items.push({ label: 'Edit name', icon: PencilLine, onclick: startEditName });
 			items.push({ label: 'Share', icon: Users, onclick: () => onshare?.() });
@@ -412,9 +432,7 @@
 							<span>Created {formatRelativeTime(new Date(playlist.created_at))}</span>
 						{/if}
 					</p>
-					{#if sourceType === 'spotify' && playlist.is_owner}
-						<SpotifySyncControl playlistId={playlist.id} />
-					{/if}
+					<SpotifySyncControl sync={spotifySync} />
 					{#if !playlist.is_owner && playlist.owner_name}
 						<p class="pl-hero__fact">
 							<span class="pl-hero__initials" aria-hidden="true">{ownerInitials}</span>

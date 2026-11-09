@@ -128,6 +128,21 @@
 		}
 	}
 
+	// Fork: "Request all songs" from the prompt after a Spotify import. The
+	// import fills the playlist in the background, so wait until its song
+	// count holds still (checked every 3 s, two minutes at most) first.
+	async function handleRequestAll() {
+		let last = -1;
+		for (let tries = 0; tries < 40; tries += 1) {
+			const fresh = await detailQuery.refetch();
+			const count = fresh.data ? toPageDetail(fresh.data).tracks.length : 0;
+			if (count > 0 && count === last) break;
+			last = count;
+			await new Promise((done) => setTimeout(done, 3000));
+		}
+		await handleRequestMissing();
+	}
+
 	function applySourcesMap(sources: Record<string, string[]>, onlyMissing = false) {
 		if (!playlist) return;
 		for (const track of playlist.tracks) {
