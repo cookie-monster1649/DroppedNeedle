@@ -1621,6 +1621,18 @@ async fn playlist_entries_link_to_the_library_tracks_they_name() {
             ("Single".to_owned(), local()),
         ]
     );
+    // Linked entries take the shape of one added from the library: the
+    // file is their local source.
+    for track in owner.tracks(&id).await.unwrap() {
+        if track.library_file_id.is_some() {
+            assert_eq!(track.source_type, "local", "{}", track.track_name);
+            assert_eq!(
+                track.track_source_id, track.library_file_id,
+                "{}",
+                track.track_name
+            );
+        }
+    }
 
     // An entry asked for by name links to the track its want's download
     // landed as, though that file's tags name it otherwise.
