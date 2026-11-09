@@ -665,6 +665,12 @@ pub struct RecordingSearchHit {
     /// Releases carrying the recording.
     #[serde(default)]
     pub releases: Vec<RecordingSearchRelease>,
+    /// Fork: the recording's length in milliseconds.
+    #[serde(default)]
+    pub length: Option<u64>,
+    /// Fork: the recording's artist credit.
+    #[serde(rename = "artist-credit", default)]
+    pub artist_credit: Vec<ArtistCreditName>,
 }
 
 /// One release a recording search hit lists.
