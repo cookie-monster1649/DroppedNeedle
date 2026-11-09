@@ -33,13 +33,19 @@
 		Sparkles,
 		Globe,
 		Lock,
-		Trash2
+		Trash2,
+		RefreshCw,
+		RefreshCwOff,
+		Bell,
+		BellOff
 	} from 'lucide-svelte';
 	import JellyfinIcon from '$lib/media/icons/JellyfinIcon.svelte';
 	import NavidromeIcon from '$lib/media/icons/NavidromeIcon.svelte';
 	import PlexIcon from '$lib/media/icons/PlexIcon.svelte';
 	import SpotifyIcon from '$lib/media/icons/SpotifyIcon.svelte';
 	import SpotifySyncControl from './SpotifySyncControl.svelte';
+	import SpotifySyncPrompt from './SpotifySyncPrompt.svelte';
+	import { PlaylistSpotifySync } from '../state/spotifySync.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import IconButton from '$lib/ui/IconButton.svelte';
 	import Input from '$lib/ui/Input.svelte';
@@ -55,6 +61,8 @@
 		ondeleteclick: () => void;
 		onplaylistupdate: (updated: PlaylistDetail) => void;
 		onshare?: (isPublic: boolean) => void;
+		/** Fork: request every song the library lacks (prompt after an import). */
+		onrequestall?: () => Promise<void>;
 	}
 
 	let {
@@ -66,7 +74,8 @@
 		onshuffleall,
 		ondeleteclick,
 		onplaylistupdate,
-		onshare
+		onshare,
+		onrequestall
 	}: Props = $props();
 
 	let ownerInitials = $derived(
@@ -209,8 +218,31 @@
 		}
 	}
 
+	// Fork: Spotify sync, for the owner of a playlist imported from Spotify.
+	const spotifySync = new PlaylistSpotifySync(() =>
+		playlist.is_owner && sourceType === 'spotify' ? playlist.id : null
+	);
+
 	const menuItems = $derived.by(() => {
 		const items: MenuItem[] = [];
+		if (spotifySync.state) {
+			const on = spotifySync.state.enabled;
+			items.push({
+				label: on ? 'Stop syncing with Spotify' : 'Sync with Spotify',
+				icon: on ? RefreshCwOff : RefreshCw,
+				disabled: spotifySync.saving,
+				onclick: () => void spotifySync.set(!on, false)
+			});
+			if (on) {
+				const asking = spotifySync.state.auto_request;
+				items.push({
+					label: asking ? 'Stop requesting new songs' : 'Request new songs',
+					icon: asking ? BellOff : Bell,
+					disabled: spotifySync.saving,
+					onclick: () => void spotifySync.set(true, !asking)
+				});
+			}
+		}
 		if (canEdit) {
 			items.push({ label: 'Edit name', icon: PencilLine, onclick: startEditName });
 			items.push({
@@ -378,9 +410,7 @@
 							<span>Created {formatRelativeTime(new Date(playlist.created_at))}</span>
 						{/if}
 					</p>
-					{#if sourceType === 'spotify' && playlist.is_owner}
-						<SpotifySyncControl playlistId={playlist.id} />
-					{/if}
+					<SpotifySyncControl sync={spotifySync} />
 					{#if !playlist.is_owner && playlist.owner_name}
 						<p class="pl-hero__fact">
 							<span class="pl-hero__initials" aria-hidden="true">{ownerInitials}</span>
@@ -425,6 +455,8 @@
 		</div>
 	</div>
 </section>
+
+<SpotifySyncPrompt sync={spotifySync} {onrequestall} />
 
 <PlaylistDiscoveryModal
 	bind:open={discoverModalOpen}
