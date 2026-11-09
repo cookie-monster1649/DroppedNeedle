@@ -179,6 +179,7 @@ pub fn local_album(files: &[LandedFile], target: &Target) -> LocalAlbum {
                 ),
                 release_mbid: usable_mbid(tag.musicbrainz_release_id.as_deref(), &mut dropped),
                 fingerprint_recordings: Vec::new(),
+                isrcs: Vec::new(),
             }
         })
         .collect();

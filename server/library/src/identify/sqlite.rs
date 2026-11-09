@@ -495,6 +495,7 @@ impl SqliteIdentifyStore {
                         release_track_mbid: row.embedded_release_track_mbid,
                         release_mbid: row.embedded_release_mbid,
                         release_group_mbid: row.embedded_release_group_mbid,
+                        isrcs: Vec::new(),
                         root_id: row.root_id,
                         relative_path: row.relative_path,
                         stat_revision: row.stat_revision,
@@ -515,6 +516,20 @@ impl SqliteIdentifyStore {
                     locked.push(track.local_track_id.clone());
                 }
                 tracks.push(track);
+            }
+            drop(stmt);
+            let mut isrcs = conn.prepare(crate::identify::sql::ALBUM_FACT_ISRCS.text())?;
+            let linked = isrcs.query_map(params![local_album_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for link in linked {
+                let (track_id, isrc) = link?;
+                if let Some(track) = tracks
+                    .iter_mut()
+                    .find(|track| track.local_track_id == track_id)
+                {
+                    track.isrcs.push(isrc.trim().to_ascii_uppercase());
+                }
             }
             Ok(Some(LocalAlbumFacts {
                 local_album_id: local_album_id.to_owned(),

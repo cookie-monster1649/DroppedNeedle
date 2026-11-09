@@ -28,6 +28,9 @@ pub struct LocalTrack {
     /// release carries (see [`super::score::heard_on_candidates`]); empty
     /// when not printed or when no candidate carries any of them.
     pub fingerprint_recordings: Vec<String>,
+    /// Fork: ISRCs linked to the file (upper case), from the provider a
+    /// song was asked for on.
+    pub isrcs: Vec<String>,
 }
 
 /// One local album: the files the library grouped together.
