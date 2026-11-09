@@ -44,6 +44,15 @@ droppedneedle_kernel::sql! {
              snapshot_id = COALESCE(?2, snapshot_id), checked_at = ?3, last_error = ?4 \
              WHERE playlist_id = ?1";
     /// Fork: a playlist owner's role and the name their requests show.
+    /// Fork: songs asked for by name not yet fetched (failed, or queued
+    /// and not started), at most `?1`: request key, owner, artist, album,
+    /// title, length, task.
+    pub(super) OPEN_WANTS = "SELECT r.musicbrainz_id_lower, r.user_id, r.artist_name, \
+             r.album_title, r.track_title, r.duration_seconds, r.download_task_id \
+             FROM request_history r JOIN download_tasks t ON t.id = r.download_task_id \
+             WHERE r.request_kind = 'track' AND r.musicbrainz_id_lower LIKE 'track:want-%' \
+               AND (t.status = 'failed' OR (t.status = 'queued' AND r.status != 'failed')) \
+             ORDER BY r.requested_at LIMIT ?1";
     pub(super) SYNC_OWNER = "SELECT role, COALESCE(username_display, username) \
              FROM auth_users WHERE id = ?1";
     /// Fork: the entries of playlist `?1`, user `?2`'s: id, recording,
