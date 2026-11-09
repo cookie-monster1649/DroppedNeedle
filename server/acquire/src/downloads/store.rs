@@ -1192,6 +1192,7 @@ impl<'conn> DownloadStore<'conn> {
     /// first. Upgrades are excluded on both sides: a failed upgrade never
     /// auto-retries, and a newer upgrade cannot suppress a user task's
     /// legitimate retry.
+    /// A song whose held file was imported by hand is done: it never retries.
     pub fn list_retryable(&self, max_retry_count: i64) -> Result<Vec<TaskRow>, StoreError> {
         self.rows(
             sql::RETRYABLE.text(),
