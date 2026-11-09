@@ -7,7 +7,10 @@
 		createRetryAllFailedMutation,
 		createStopAllRetriesMutation
 	} from '$lib/features/downloads/queries/DownloadMutations.svelte';
-	import { getDownloadsQuery } from '$lib/features/downloads/queries/DownloadQueries.svelte';
+	import {
+		getDownloadActivitySummaryQuery,
+		getDownloadsQuery
+	} from '$lib/features/downloads/queries/DownloadQueries.svelte';
 	import {
 		getHeldEntriesQuery,
 		createRecheckAllHeldMutation
@@ -74,6 +77,18 @@
 		collapseRetryChains(query.data?.items ?? []).filter((task) => !heldTaskIds.has(task.id))
 	);
 	const sections = $derived(bucketSections(tasks));
+	// Fork: the list holds only the newest 100 tasks; the activity summary
+	// counts every queued one. Queued tasks the page shows elsewhere (a
+	// scheduled retry) are not cueing.
+	const activity = getDownloadActivitySummaryQuery();
+	const cueingCount = $derived.by(() => {
+		const queued = activity.data?.queued_count;
+		if (queued == null) return sections.cueing.length;
+		const shownElsewhere = tasks.filter(
+			(task) => task.status === 'queued' && !sections.cueing.includes(task)
+		).length;
+		return Math.max(sections.cueing.length, queued - shownElsewhere);
+	});
 
 	const hero = $derived(sections.now_spinning[0] ?? null);
 	const spinningRest = $derived(sections.now_spinning.slice(1));
@@ -107,7 +122,7 @@
 			{ n: sections.wanted.length, label: 'still hunting', tone: 'wait' },
 			{ n: sections.needs_you.length, label: 'needs you', tone: 'wait' },
 			{ n: held.length, label: 'to decide', tone: 'wait' },
-			{ n: sections.cueing.length, label: 'cueing up', tone: 'quiet' },
+			{ n: cueingCount, label: 'cueing up', tone: 'quiet' },
 			{ n: crateCount, label: 'in your crate', tone: 'done' }
 		].filter((p) => p.n > 0)
 	);
@@ -234,11 +249,16 @@
 		<!-- CUEING UP -->
 		{#if sections.cueing.length > 0}
 			<section>
-				<QueueSectionHead title="Cueing up" count={sections.cueing.length} />
+				<QueueSectionHead title="Cueing up" count={cueingCount} />
 				<div class="space-y-3">
 					{#each sections.cueing as task (task.id)}
 						<DownloadItem {task} />
 					{/each}
+					{#if cueingCount > sections.cueing.length}
+						<p class="text-sm text-muted">
+							And {cueingCount - sections.cueing.length} more waiting their turn.
+						</p>
+					{/if}
 				</div>
 			</section>
 		{/if}
