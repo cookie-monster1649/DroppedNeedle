@@ -41,6 +41,7 @@
 		classifyEmptyState
 	} from '$lib/features/downloads/components/acquisitionLabels';
 
+	import TaskSampleButton from './TaskSampleButton.svelte';
 	import DownloadProgressBar from './DownloadProgressBar.svelte';
 	import DownloadReasonNote from './DownloadReasonNote.svelte';
 	import DownloadSourceStatus from './DownloadSourceStatus.svelte';
@@ -170,6 +171,7 @@
 				{#if task.year}<span class="text-muted mr-1.5 ml-0.5">·</span>{task.year}{/if}
 				{#if task.download_type === 'track' && task.track_title}
 					<span class="text-muted mr-1.5 ml-0.5">·</span>{task.track_title}
+					<TaskSampleButton {task} />
 				{/if}
 			</p>
 			<div class="row__chips">
