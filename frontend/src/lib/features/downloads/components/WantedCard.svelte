@@ -30,6 +30,7 @@
 	import StatusChip from '$lib/ui/StatusChip.svelte';
 
 	import CueCountdown from './CueCountdown.svelte';
+	import TaskSampleButton from './TaskSampleButton.svelte';
 
 	let { task }: { task: DownloadTask } = $props();
 
@@ -110,6 +111,7 @@
 				{#if task.download_type === 'track' && task.track_title}<span
 						class="text-muted mr-1.5 ml-0.5">·</span
 					>{task.track_title}{/if}
+				<TaskSampleButton {task} />
 			</p>
 		</div>
 

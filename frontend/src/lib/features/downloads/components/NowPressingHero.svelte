@@ -20,6 +20,7 @@
 	import DownloadSourceStatus from './DownloadSourceStatus.svelte';
 	import DownloadStatusBadge from './DownloadStatusBadge.svelte';
 	import VinylProgress from './VinylProgress.svelte';
+	import TaskSampleButton from './TaskSampleButton.svelte';
 
 	let { task }: { task: DownloadTask } = $props();
 
@@ -82,6 +83,7 @@
 					{#if task.year}<span class="hero__dot mr-1.5 ml-0.5">·</span>{task.year}{/if}
 					{#if task.download_type === 'track' && task.track_title}
 						<span class="hero__dot mr-1.5 ml-0.5">·</span>{task.track_title}
+						<TaskSampleButton {task} />
 					{/if}
 				</p>
 				{#if showBar}
