@@ -164,3 +164,143 @@ mod tests {
         assert!(ask(&Target::default()).is_none());
     }
 }
+
+/// Fork: a title without what versions and credits add: bracketed parts
+/// ("(feat. …)", "[Prod. …]", "(EP Version)"), a " - …" suffix and a bare
+/// "feat. …" tail.
+pub fn core_title(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut depth = 0usize;
+    for ch in title.chars() {
+        match ch {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    let lower = out.to_lowercase();
+    let mut cut = lower.len();
+    for marker in [" - ", " feat.", " feat ", " ft.", " featuring "] {
+        if let Some(at) = lower.find(marker) {
+            cut = cut.min(at);
+        }
+    }
+    lower[..cut].trim().to_owned()
+}
+
+/// Fork: whether one credited name stands for one of the asked artists:
+/// close, or one holds the other ("Robert Glasper Experiment" for "Robert
+/// Glasper", "KING" for "We Are KING").
+fn names_agree(heard: &str, asked: &str) -> bool {
+    let (heard, asked) = (heard.trim().to_lowercase(), asked.trim().to_lowercase());
+    if heard.is_empty() || asked.is_empty() {
+        return false;
+    }
+    artist_dist(&heard, &asked) <= NAME_GATE
+        || artist_subset(&heard, &asked)
+        || (heard.len() >= 3 && asked.contains(&heard))
+        || (asked.len() >= 3 && heard.contains(&asked))
+}
+
+/// Fork: whether what AcoustID heard in a file (a recording's `title` and
+/// credited `artists`) is the asked song: the titles agree once versions
+/// and credits are set aside, any heard artist stands for any asked one,
+/// and the file's length is within [`LENGTH_TOLERANCE_SECS`] of the asked
+/// length when both are known. A remix or extended mix differs in length
+/// or title and is not taken.
+pub fn heard_agrees(
+    target: &Target,
+    title: &str,
+    artists: &[String],
+    seconds: Option<f64>,
+) -> bool {
+    let Some(asked_title) = target.track_title.as_deref() else {
+        return false;
+    };
+    let (heard, asked) = (core_title(title), core_title(asked_title));
+    let titles = !heard.is_empty()
+        && (string_dist(&heard, &asked) <= NAME_GATE
+            || string_dist(title, asked_title) <= NAME_GATE);
+    if !titles {
+        return false;
+    }
+    let asked_artists: Vec<&str> = target
+        .artist_name
+        .split([',', '&'])
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    let artists_ok = artists.iter().any(|heard| {
+        names_agree(heard, &target.artist_name)
+            || asked_artists.iter().any(|asked| names_agree(heard, asked))
+    });
+    if !artists_ok {
+        return false;
+    }
+    match (target.want_seconds, seconds) {
+        (Some(asked), Some(seconds)) => (seconds - asked).abs() <= LENGTH_TOLERANCE_SECS,
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod fork_tests {
+    use super::{core_title, heard_agrees};
+    use crate::landing::specs::Target;
+
+    fn ask(artist: &str, title: &str, seconds: f64) -> Target {
+        Target {
+            artist_name: artist.to_owned(),
+            track_title: Some(title.to_owned()),
+            want_seconds: Some(seconds),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn versions_and_credits_are_set_aside() {
+        assert_eq!(core_title("Spice - EP Version"), "spice");
+        assert_eq!(core_title("Spice (EP Version)"), "spice");
+        assert_eq!(
+            core_title("Sango [Prod. By Nathaniel Geographica]"),
+            "sango"
+        );
+        assert_eq!(
+            core_title("Diddy Bop (feat. Raury & Cam O'bi)"),
+            "diddy bop"
+        );
+    }
+
+    #[test]
+    fn what_acoustid_heard_matches_the_ask_by_name() {
+        let names = |list: &[&str]| list.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let afro = ask("Robert Glasper, Erykah Badu", "Afro Blue", 308.0);
+        assert!(heard_agrees(
+            &afro,
+            "Afro Blue",
+            &names(&["Robert Glasper Experiment"]),
+            Some(308.4)
+        ));
+        let king = ask("We Are KING", "Supernatural", 240.0);
+        assert!(!heard_agrees(
+            &king,
+            "Supernatural (Extended Mix)",
+            &names(&["KING"]),
+            Some(406.0)
+        ));
+        assert!(heard_agrees(
+            &king,
+            "Supernatural",
+            &names(&["KING"]),
+            Some(241.0)
+        ));
+        let other = ask("thando", "Something", 188.0);
+        assert!(!heard_agrees(
+            &other,
+            "Wozzeck, Act I Scene 2",
+            &names(&["Paul Daniel"]),
+            Some(188.0)
+        ));
+    }
+}
