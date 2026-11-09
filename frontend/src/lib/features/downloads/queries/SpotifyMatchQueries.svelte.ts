@@ -6,7 +6,7 @@ import { api } from '$lib/api/client';
 import { v3 } from '$lib/api/v3/endpoint';
 import type { components } from '$lib/api/v3/openapi';
 
-import { heldMutation, type HeldFilesInput } from './HeldQueries.svelte';
+import { createHeldMutation, type HeldFilesInput } from './HeldQueries.svelte';
 
 export type SpotifyCandidate = components['schemas']['SpotifyCandidate'];
 
@@ -32,7 +32,7 @@ export interface HeldSpotifyMatchInput extends HeldFilesInput {
 
 /** Import the files as the Spotify song picked, tagged from Spotify. */
 export const createMatchSpotifyHeldMutation = () =>
-	heldMutation(
+	createHeldMutation(
 		(input: HeldSpotifyMatchInput) =>
 			api.v3.POST(
 				v3('/api/v3/held/{entry_id}/match-spotify', { path: { entry_id: input.entryId } }),

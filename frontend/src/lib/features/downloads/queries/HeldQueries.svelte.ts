@@ -89,7 +89,7 @@ export interface HeldMatchInput extends HeldFilesInput {
 	matchMbid: string;
 }
 
-export function heldMutation<I extends HeldFilesInput>(
+export function createHeldMutation<I extends HeldFilesInput>(
 	post: (input: I) => Promise<HeldActionResult>,
 	failure: string
 ) {
@@ -116,7 +116,7 @@ const fileBody = (input: HeldFilesInput) => ({ file_ids: input.fileIds ?? null }
 
 /** Import, Retry, "Use this version" and "Use this file" all place files this way. */
 export const createImportHeldMutation = () =>
-	heldMutation(
+	createHeldMutation(
 		(input: HeldFilesInput) =>
 			api.v3.POST(
 				v3('/api/v3/held/{entry_id}/import', { path: { entry_id: input.entryId } }),
@@ -127,7 +127,7 @@ export const createImportHeldMutation = () =>
 
 /** Curators only: import the files as the album picked. */
 export const createMatchHeldMutation = () =>
-	heldMutation(
+	createHeldMutation(
 		(input: HeldMatchInput) =>
 			api.v3.POST(v3('/api/v3/held/{entry_id}/match', { path: { entry_id: input.entryId } }), {
 				release_group_mbid: input.matchMbid,
@@ -137,7 +137,7 @@ export const createMatchHeldMutation = () =>
 	);
 
 export const createRecheckHeldMutation = () =>
-	heldMutation(
+	createHeldMutation(
 		(input: HeldFilesInput) =>
 			api.v3.POST(
 				v3('/api/v3/held/{entry_id}/recheck', { path: { entry_id: input.entryId } }),
@@ -147,7 +147,7 @@ export const createRecheckHeldMutation = () =>
 	);
 
 export const createDiscardHeldMutation = () =>
-	heldMutation(
+	createHeldMutation(
 		(input: HeldFilesInput) =>
 			api.v3.POST(
 				v3('/api/v3/held/{entry_id}/discard', { path: { entry_id: input.entryId } }),
