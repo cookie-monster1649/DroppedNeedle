@@ -109,7 +109,7 @@ pub async fn choose<H: SlskdHttp>(
         let seen = hits
             .iter()
             .any(|known| known.username == hit.username && known.filename == hit.filename);
-        if !seen && keep(&hit) {
+        if !seen && keep(&hit) && !credits_swapped(&hit.filename, &track.artist, &track.title) {
             hits.push(hit);
         }
     }

@@ -22,6 +22,9 @@ droppedneedle_kernel::sql! {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'track', ?7, ?8, 'queued', ?9, ?9)";
     /// Fork: the length a track asked for by name was asked with (`?1`:
     /// its want key), from its request row.
+    /// Fork: the album a want was asked for on (Spotify's album name).
+    pub(super) WANT_ALBUM = "SELECT album_title FROM request_history \
+             WHERE musicbrainz_id_lower = 'track:' || ?1";
     pub(super) WANT_DURATION = "SELECT duration_seconds FROM request_history \
              WHERE musicbrainz_id_lower = 'track:' || ?1";
     /// The newest live task for one album (`?1`).
