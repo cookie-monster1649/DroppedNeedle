@@ -450,6 +450,19 @@ impl<'conn> DownloadStore<'conn> {
         Ok(())
     }
 
+    /// Fork: the album name a want was asked for on, when it names one.
+    pub fn want_album(&self, want_key: &str) -> Result<Option<String>, StoreError> {
+        use rusqlite::OptionalExtension as _;
+        let album: Option<Option<String>> = self
+            .conn
+            .query_row(sql::WANT_ALBUM.text(), [want_key], |row| row.get(0))
+            .optional()?;
+        Ok(album
+            .flatten()
+            .map(|album| album.trim().to_owned())
+            .filter(|album| !album.is_empty() && album != "Single track"))
+    }
+
     /// Fork: the length, in seconds, a track asked for by name was asked
     /// with; `None` when the ask gave none or its row is gone.
     pub fn want_duration(&self, want_key: &str) -> Result<Option<f64>, StoreError> {

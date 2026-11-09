@@ -105,7 +105,7 @@ pub async fn choose<H: SlskdHttp>(
         let seen = hits
             .iter()
             .any(|known| known.username == hit.username && known.filename == hit.filename);
-        if !seen && keep(&hit) {
+        if !seen && keep(&hit) && !credits_swapped(&hit.filename, &track.artist, &track.title) {
             hits.push(hit);
         }
     }
@@ -124,4 +124,64 @@ pub async fn choose<H: SlskdHttp>(
         None
     };
     Ok(SoulseekChoice { pick, lone_reason })
+}
+
+/// Fork: whether a song search hit names the asked artist and title the
+/// wrong way round: its file name reads "X - Y" (track numbers aside) with
+/// the title part agreeing with the asked artist and not the asked title,
+/// as `Arizona - Common Souls` does for "Arizona" by Common Souls. Soulseek
+/// matches words anywhere in a path, so such a file matches every word of
+/// the search while being another artist's song.
+pub fn credits_swapped(filename: &str, artist: &str, title: &str) -> bool {
+    use crate::landing::want::core_title;
+    use droppedneedle_library::matching::score::NAME_GATE;
+    use droppedneedle_library::matching::strings::string_dist;
+    let name = filename.rsplit(['\\', '/']).next().unwrap_or(filename);
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let Some((_, tail)) = stem.rsplit_once(" - ") else {
+        return false;
+    };
+    let tail =
+        core_title(tail.trim_start_matches(|c: char| c.is_ascii_digit() || c == ' ' || c == '.'));
+    if tail.is_empty() {
+        return false;
+    }
+    let close = |a: &str, b: &str| string_dist(a, &core_title(b)) <= NAME_GATE;
+    let primary = artist.split([',', '&']).next().unwrap_or(artist).trim();
+    !close(&tail, title) && (close(&tail, artist) || close(&tail, primary))
+}
+
+#[cfg(test)]
+mod fork_tests {
+    use super::credits_swapped;
+
+    #[test]
+    fn a_file_naming_the_artist_as_its_title_is_another_song() {
+        assert!(credits_swapped(
+            r"songs\Arizona - Common Souls.mp3",
+            "Common Souls",
+            "Arizona"
+        ));
+        assert!(!credits_swapped(
+            r"Common Souls\Pyramid Lake\03 - Arizona.flac",
+            "Common Souls",
+            "Arizona"
+        ));
+        assert!(!credits_swapped(
+            r"songs\Common Souls - Arizona.mp3",
+            "Common Souls",
+            "Arizona"
+        ));
+        assert!(!credits_swapped(
+            r"x\01 Arizona.flac",
+            "Common Souls",
+            "Arizona"
+        ));
+        // A self-titled song is not a swap.
+        assert!(!credits_swapped(
+            r"x\Bad Company - Bad Company.flac",
+            "Bad Company",
+            "Bad Company"
+        ));
+    }
 }
