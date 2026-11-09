@@ -113,24 +113,32 @@ impl FoundRelease {
                     .any(|at| at.disc == track.disc && at.track == track.position)
             })
         };
+        // Fork: a song from another release of it (another edition, a
+        // soundtrack, a compilation) carries another recording id and sits
+        // at another position: its title still names it. The length check
+        // (`wrong_track`) guards the title match.
+        let by_title = || {
+            let title = target.track_title.as_deref()?;
+            self.scored
+                .pairs
+                .iter()
+                .filter(|pair| string_dist(&track_of(pair).title, title) <= 0.2)
+                .min_by(|a, b| a.distance.total_cmp(&b.distance))
+        };
         if let Some(recording) = target.recording_mbid.as_deref() {
             return self
                 .scored
                 .pairs
                 .iter()
                 .find(|pair| track_of(pair).recording_id.eq_ignore_ascii_case(recording))
-                .or_else(by_position);
+                .or_else(by_position)
+                .or_else(by_title);
         }
         if let Some(pair) = by_position() {
             return Some(pair);
         }
-        if let Some(title) = target.track_title.as_deref() {
-            return self
-                .scored
-                .pairs
-                .iter()
-                .filter(|pair| string_dist(&track_of(pair).title, title) <= 0.2)
-                .min_by(|a, b| a.distance.total_cmp(&b.distance));
+        if target.track_title.is_some() {
+            return by_title();
         }
         match self.scored.pairs.as_slice() {
             [only] => Some(only),
@@ -935,7 +943,60 @@ pub(crate) fn is_various(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::position_in_name;
+    use super::{FoundRelease, position_in_name};
+    use crate::landing::specs::Target;
+    use droppedneedle_library::matching::score::TrackPair;
+    use droppedneedle_library::matching::{Distance, Release, ReleaseMatch, ReleaseTrack, Support};
+
+    /// Fork: a song asked for by recording id, landed from another release
+    /// of it (its own recording id, another position), is found by title.
+    #[test]
+    fn the_requested_track_falls_back_to_its_title() {
+        let track = |title: &str, recording: &str, position: u32| ReleaseTrack {
+            title: title.to_owned(),
+            recording_id: recording.to_owned(),
+            disc: 1,
+            position,
+            ..Default::default()
+        };
+        let pair = |index: usize| TrackPair {
+            local: index,
+            track: index,
+            distance: 0.1,
+            support: Support::EmbeddedId,
+        };
+        let found = FoundRelease {
+            release: Release {
+                id: "soundtrack".to_owned(),
+                tracks: vec![
+                    track("Intro", "r-intro", 1),
+                    track("Lazy River", "r-other", 8),
+                ],
+                ..Default::default()
+            },
+            scored: ReleaseMatch {
+                distance: Distance::default(),
+                pairs: vec![pair(0), pair(1)],
+                unmatched: Vec::new(),
+                missing: Vec::new(),
+                conflicts: Vec::new(),
+                names_agree: true,
+                disputed: Vec::new(),
+                overruled: Vec::new(),
+            },
+        };
+        let target = |title: &str| Target {
+            is_track: true,
+            recording_mbid: Some("r-wanted".to_owned()),
+            track_title: Some(title.to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            found.requested_pair(&target("Lazy River")).map(|p| p.track),
+            Some(1)
+        );
+        assert!(found.requested_pair(&target("Night Train")).is_none());
+    }
 
     #[test]
     fn positions_come_from_names_and_disc_folders() {

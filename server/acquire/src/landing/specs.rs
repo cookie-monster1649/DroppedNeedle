@@ -802,6 +802,17 @@ impl ImportSpec for PinnedEdition {
         let Some(pin) = subject.target.release_mbid.as_deref() else {
             return Verdict::accept();
         };
+        // Fork: a single song asked for is the song, whichever edition it
+        // comes from; once the requested track is found the edition is
+        // moot (`right_track` and the length check judge the file).
+        if subject.target.is_track
+            && subject
+                .matched
+                .and_then(MatchSummary::best)
+                .is_some_and(|found| found.requested_pair(subject.target).is_some())
+        {
+            return Verdict::accept();
+        }
         let pinned = subject
             .matched
             .and_then(|matched| matched.best())

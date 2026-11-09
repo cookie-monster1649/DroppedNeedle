@@ -1167,6 +1167,9 @@ impl LandingService {
                 Some(rejection.detail.clone()),
             ),
         };
+        // Fork: the reason goes to the log too, not only the decision table.
+        let why = reason_code.map(|code| code.to_string()).unwrap_or_default();
+        let why_detail = detail.clone().unwrap_or_default();
         let row = ImportDecisionRow {
             task_id: task.id.clone(),
             attempt_id: attempt_id.map(str::to_owned),
@@ -1223,6 +1226,8 @@ impl LandingService {
             outcome = outcome.as_str(),
             imported,
             held,
+            reason = %why,
+            detail = %why_detail,
             "download landing decided"
         );
         LandingReport {
