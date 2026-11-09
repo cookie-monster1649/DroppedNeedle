@@ -8657,6 +8657,55 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
     assert_eq!(links, vec!["3Ty7OTBNSigGEpeW2PqcsC".to_owned()]);
 }
 
+/// Fork: an album asked for as one edition lands as whichever edition of
+/// it arrived: a longer pressing of the group, tagged as itself, imports
+/// against its own tracklist instead of being turned away for not being
+/// the pin.
+#[tokio::test]
+async fn another_edition_of_the_asked_album_lands_as_itself() {
+    let lengths = fixture_lengths();
+    let pinned = edition(32, 0, 1, &[&[0]], &lengths);
+    let mut deluxe = edition(32, 0, 3, &[&[0, 1]], &lengths);
+    for (n, track) in deluxe.tracks.iter_mut().enumerate() {
+        track.recording_id = mb(32, 5, n as u16);
+    }
+    let group = pinned.release_group_id.clone();
+    let rig = join_rig(vec![pinned.clone(), deluxe.clone()]).await;
+    let paths: Vec<PathBuf> = (0..2)
+        .map(|index| {
+            let path = rig.landed("t-deluxe", &deluxe, index, FIXTURES[index]);
+            let track = &deluxe.tracks[index];
+            let tag = |field, value: &str| TagEdit::new(field, vec![value.to_owned()]);
+            save_tags(
+                &path,
+                &[
+                    tag(TagField::MusicBrainzReleaseId, &deluxe.id),
+                    tag(TagField::MusicBrainzReleaseGroupId, &group),
+                    tag(TagField::MusicBrainzRecordingId, &track.recording_id),
+                    tag(TagField::MusicBrainzReleaseTrackId, &track.id),
+                ],
+            )
+            .expect("ids tagged");
+            path
+        })
+        .collect();
+    rig.ask(
+        "t-deluxe",
+        &group,
+        &pinned.title,
+        "user",
+        Some(&pinned.id),
+        None,
+        &[],
+    )
+    .await;
+    rig.land(paths).await;
+    assert_eq!(
+        decisions(&rig.acquire, "t-deluxe"),
+        vec![("imported".to_owned(), None)]
+    );
+}
+
 /// Fork: with a pinned edition, a copy tagged as a sibling edition of the
 /// same group (its own recordings in MusicBrainz, as a digital and a CD
 /// release often have) whose tracks line up is placed as the pin instead of
