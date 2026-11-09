@@ -1,11 +1,15 @@
 <script module lang="ts">
 	import { v3 } from '$lib/api/v3/endpoint';
+	import { audioFocus } from '$lib/features/player/state/audioFocus.svelte';
 	// Only one preview plays at a time - starting one pauses whatever was playing, so two
 	// files never overlap. Separate from the main player: listening never touches the queue.
 	let activePreview: HTMLAudioElement | null = null;
 	function claimPreview(el: HTMLAudioElement): void {
 		if (activePreview && activePreview !== el) activePreview.pause();
 		activePreview = el;
+		// Fork: share the one-sound rule with the sample button, so the held
+		// file and the requested song's sample take turns.
+		audioFocus.claim('held-file', () => el.pause());
 	}
 </script>
 
@@ -14,6 +18,7 @@
 	import { Check, Disc3, Pause, Play, RotateCcw, Trash2 } from 'lucide-svelte';
 
 	import { getApiUrl } from '$lib/api/api-utils';
+	import HeldSampleButton from './HeldSampleButton.svelte';
 	import {
 		createDiscardHeldMutation,
 		createImportHeldMutation,
@@ -196,6 +201,7 @@
 		<span class="shrink-0 text-[11px] tabular-nums text-muted">
 			{fmt(currentTime)} / {fmt(total)}
 		</span>
+		<HeldSampleButton {entry} {file} />
 		<audio
 			bind:this={audioEl}
 			preload="none"
