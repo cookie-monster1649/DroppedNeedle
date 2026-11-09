@@ -60,6 +60,10 @@ const PRUNE_BATCH: i64 = 200;
 
 /// Entries one pass retries at most; the rest wait for the next.
 const RETRY_BATCH: i64 = 20;
+/// Fork: held wants checked against their ask per pass. A file that
+/// does not agree stays unpaired, so a small batch would check the same
+/// first entries forever.
+const UNPAIRED_BATCH: i64 = 500;
 
 /// Why an action on the held list did not happen. The sentences are shown
 /// as they are.
@@ -1368,10 +1372,21 @@ impl HeldService {
             }
         };
         let mut imported: Vec<i64> = Vec::new();
+        let mut owned: Vec<i64> = Vec::new();
         let mut reheld: Vec<(i64, Reason, String)> = Vec::new();
         for (file, outcome) in files.iter().zip(&placement.outcomes) {
             match outcome {
                 Outcome::Imported { .. } => imported.push(file.id),
+                // Fork: the held list's own retry found the song in its
+                // place in the library: the copy is settled as owned.
+                Outcome::AlreadyOwned { .. } if batch.gate == Gate::HeldRetry => {
+                    tracing::info!(
+                        entry_id = entry.id,
+                        file_id = file.id,
+                        "held file: the library already has it"
+                    );
+                    owned.push(file.id);
+                }
                 Outcome::Held { reason, detail, .. } => {
                     // A file the person chose to replace yours stays chosen
                     // when your copy could not be taken away: once it can,
@@ -1401,11 +1416,13 @@ impl HeldService {
         let (entry_id, item, now) = (entry.id, entry.drop_item_id, self.now());
         let count = imported.len();
         let done = imported.clone();
+        let settled = owned.clone();
         self.write("held.import", move |rows, _| {
             if let Some(item) = item {
                 rows.add_item_imports(item, count)?;
             }
             rows.resolve(entry_id, &done, FileState::Imported, now)?;
+            rows.resolve(entry_id, &settled, FileState::AlreadyOwned, now)?;
             for (id, reason, detail) in &reheld {
                 rows.rehold(*id, *reason, Some(detail))?;
             }
@@ -1416,9 +1433,10 @@ impl HeldService {
         acted.imported += count;
         let went_in: Vec<HeldFile> = files
             .iter()
-            .filter(|file| imported.contains(&file.id))
+            .filter(|file| imported.contains(&file.id) || owned.contains(&file.id))
             .cloned()
             .collect();
+        acted.owned += owned.len();
         self.consume(entry, &went_in).await;
         if count > 0 {
             tracing::info!(entry_id = entry.id, files = count, "held files imported");
@@ -1860,7 +1878,7 @@ impl HeldService {
     async fn pair_wants(&self) {
         let entries = match self
             .read("held.unpaired_wants", |rows| {
-                rows.unpaired_wants(RETRY_BATCH)
+                rows.unpaired_wants(UNPAIRED_BATCH)
             })
             .await
         {
@@ -1915,7 +1933,9 @@ impl HeldService {
                 let Some(landed) = probe_held(&path).await else {
                     continue;
                 };
-                if !crate::landing::want::agrees(&target, &landed) {
+                if !crate::landing::want::agrees(&target, &landed)
+                    && !self.heard_as_ask(file.id, &target, &landed).await
+                {
                     continue;
                 }
                 let pairing = Pairing {
@@ -1943,6 +1963,84 @@ impl HeldService {
                 }
             }
         }
+    }
+
+    /// Fork: whether AcoustID hears the asked song in a held want file:
+    /// the recordings heard in it are looked up on the releases it is
+    /// heard on, and one whose title and artists agree with the ask
+    /// (`landing::want::heard_agrees`) pairs it. Each file is asked once
+    /// per run, so a file AcoustID cannot place is not looked up again on
+    /// every pass.
+    async fn heard_as_ask(
+        &self,
+        file_id: i64,
+        target: &specs::Target,
+        landed: &LandedFile,
+    ) -> bool {
+        static ASKED: std::sync::OnceLock<Mutex<HashSet<i64>>> = std::sync::OnceLock::new();
+        let asked = ASKED.get_or_init(|| Mutex::new(HashSet::new()));
+        if !asked
+            .lock()
+            .map(|mut set| set.insert(file_id))
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        let library = self.library();
+        let files = vec![("0".to_owned(), landed.path.clone())];
+        let priority = RequestPriority::BackgroundSync;
+        let Ok(recordings) = library.fingerprints(files.clone(), priority).await else {
+            // AcoustID unreachable: ask again on a later pass.
+            if let Ok(mut set) = asked.lock() {
+                set.remove(&file_id);
+            }
+            return false;
+        };
+        let heard: HashSet<String> = recordings
+            .values()
+            .flatten()
+            .map(|id| id.to_ascii_lowercase())
+            .collect();
+        if heard.is_empty() {
+            return false;
+        }
+        let Ok(releases) = library.fingerprint_releases(files, priority).await else {
+            return false;
+        };
+        let mut ids: Vec<String> = releases.values().flatten().cloned().collect();
+        ids.dedup();
+        for id in ids.into_iter().take(5) {
+            let Ok(Some(release)) = library.release(&id, priority).await else {
+                continue;
+            };
+            for track in &release.tracks {
+                if !heard.contains(&track.recording_id.to_ascii_lowercase()) {
+                    continue;
+                }
+                let credits = if track.artists.is_empty() {
+                    &release.artists
+                } else {
+                    &track.artists
+                };
+                let names: Vec<String> = credits.iter().map(|artist| artist.name.clone()).collect();
+                if crate::landing::want::heard_agrees(
+                    target,
+                    &track.title,
+                    &names,
+                    landed.header.duration_seconds,
+                ) {
+                    tracing::info!(
+                        file_id,
+                        heard_title = %track.title,
+                        heard_artist = %names.join(", "),
+                        "held want file: AcoustID hears the asked song"
+                    );
+                    return true;
+                }
+            }
+        }
+        tracing::info!(file_id, "held want file: AcoustID hears another song");
+        false
     }
 
     /// Retry each due entry's files held for a library reason, exactly as

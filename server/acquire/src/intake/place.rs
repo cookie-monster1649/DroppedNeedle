@@ -669,6 +669,17 @@ async fn import(
     let imported = std::mem::take(&mut planned.import);
     for (index, (file, track, replaces)) in imported.iter().enumerate() {
         match (skipped.get(&index), blocked.get(&index)) {
+            // Fork: the song's own place in the library is taken, so the
+            // library has it: an automatic landing (or the held list's own
+            // retry) settles the copy as owned instead of asking a person.
+            // A person's own import is still told.
+            (Some(detail), _)
+                if detail.starts_with(droppedneedle_library::import::LIBRARY_HAS_IT_AT)
+                    && batch.gate != Gate::PersonChoseFile
+                    && replaces.is_empty() =>
+            {
+                planned.outcomes[*file] = Outcome::AlreadyOwned { track: *track };
+            }
             (Some(detail), _) => {
                 planned.hold(*file, Some(*track), Reason::TargetOccupied, detail.clone());
             }

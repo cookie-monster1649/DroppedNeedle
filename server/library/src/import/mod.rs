@@ -69,6 +69,10 @@
 //! snapshot and no first-management baseline: the files' first library
 //! state is the one the import wrote.
 
+/// Fork: how a skip begins when the file at the destination is a library
+/// track, so the landing can settle the copy as owned.
+pub const LIBRARY_HAS_IT_AT: &str = "the library already has this track at ";
+
 pub mod naming;
 pub(crate) mod sql;
 
@@ -829,7 +833,27 @@ impl Imports {
                     placement.dest_rel
                 ))
             } else if occupied {
-                Some(format!("a file already sits at {}", placement.dest_rel))
+                // Fork: a library track indexed at the destination means the
+                // library has this song; anything else there is a stray file.
+                let indexed = self
+                    .db
+                    .read_blocking("import.occupant", |conn| {
+                        use rusqlite::OptionalExtension as _;
+                        Ok::<_, PublishError>(
+                            conn.query_row(
+                                crate::import::sql::PLANNED_TRACK_ID.text(),
+                                rusqlite::params![root.id, placement.dest_rel],
+                                |row| row.get::<_, Availability>(2),
+                            )
+                            .optional()?,
+                        )
+                    })
+                    .map_err(store_fault)?;
+                Some(if indexed == Some(Availability::Indexed) {
+                    format!("{LIBRARY_HAS_IT_AT}{}", placement.dest_rel)
+                } else {
+                    format!("a file already sits at {}", placement.dest_rel)
+                })
             } else {
                 match self
                     .db
