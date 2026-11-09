@@ -1,10 +1,16 @@
 > [!WARNING]
-> **This is an AI vibe-coded fork** of [DroppedNeedle](https://github.com/DroppedNeedle/DroppedNeedle), built with AI coding tools rather than written by hand, and not affiliated with or supported by the upstream project. It adds deeper Spotify integration:
+> **This is an AI vibe-coded fork** of [DroppedNeedle](https://github.com/DroppedNeedle/DroppedNeedle), built with AI coding tools rather than written by hand, and not affiliated with or supported by the upstream project. A full list of modifications can be seen in the [commit history](https://github.com/cookie-monster1649/DroppedNeedle/commits/nuc/v3.0.0-beta.4/). The main ones:
 >
 > - **Spotify metadata:** songs from Spotify import with Spotify's title, artist, album, ISRC and Spotify link, even when MusicBrainz doesn't know them. A download that agrees with Spotify's details imports by itself, and held files can be matched to a Spotify song by hand.
 > - **Playlist syncing:** playlists imported from Spotify are labelled as such, can follow Spotify, and new songs added there are requested automatically.
 > - **Playlist status:** each song shows whether it's in your library, missing, fetching, waiting for a decision or failed, with a request button per row.
-> - **And more:** track requests without a MusicBrainz ID, playlist songs linking to library copies as they land, and fixes to edition and match handling.
+> - **Fewer false rejections:** a requested song imports from whichever release it comes from (a soundtrack, a compilation, another edition), and a junk album-artist tag no longer holds it back. An album accepts any edition of itself, with missing tracks counted against the edition that arrived.
+> - **Editions on the downloads page:** a copy that holds the whole of another edition says so, showing the requested and the available edition, and "Use this edition" switches the request to it.
+> - **Better identification:** partial albums match MusicBrainz by their exact name or by ISRC.
+> - **Album tools:** "Merge albums" folds every copy of a release into one, keeping the best-quality file of each song. "In Library · 1/15" is a button that requests the missing tracks.
+> - **Faster queue:** several Soulseek searches run at once, and the queue counts what is waiting correctly.
+> - **Previews:** a 30-second sample button on song downloads and on held files, to check a song by ear.
+> - **And more:** track requests without a MusicBrainz ID, playlist songs linking to library copies as they land, and rejection reasons in the logs.
 >
 > The fork's plan and notes are in [docs/fork/PLAN.md](docs/fork/PLAN.md). Report problems with this fork here, not upstream.
 
