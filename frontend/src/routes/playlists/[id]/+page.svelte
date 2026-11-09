@@ -31,7 +31,7 @@
 	} from '$lib/features/playlists/queries/playlistV3Adapter';
 	import { queryClient } from '$lib/queries/QueryClient';
 	import { withBasePath } from '$lib/utils/basePath';
-	import { Music, Download, Lock } from 'lucide-svelte';
+	import { Music, Download, Lock, Loader } from 'lucide-svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import type { PageData } from './$types';
 	import PlaylistHeader from '$lib/features/playlists/components/PlaylistHeader.svelte';
@@ -68,9 +68,24 @@
 	let isOwner = $derived(playlist?.is_owner ?? false);
 	let canDelete = $derived(playlist?.can_delete ?? false);
 
-	let missingPlan = $derived(
-		playlist ? planMissingRequests(playlist.tracks) : { tracks: [], wants: [] }
+	// Fork: a missing song already requested (requested, fetching, held, or
+	// landed and not yet linked) is being found; only the rest are offered.
+	const FINDING: ReadonlySet<PlaylistRowState> = new Set([
+		'requested',
+		'fetching',
+		'held',
+		'imported'
+	]);
+	const isFinding = (track: PlaylistTrack) => {
+		const state = rowStates?.get(track.id);
+		return state !== undefined && FINDING.has(state);
+	};
+	let requestable = $derived(playlist ? playlist.tracks.filter((t) => !isFinding(t)) : []);
+	let findingPlan = $derived(
+		playlist ? planMissingRequests(playlist.tracks.filter(isFinding)) : { tracks: [], wants: [] }
 	);
+	let findingCount = $derived(findingPlan.tracks.length + findingPlan.wants.length);
+	let missingPlan = $derived(planMissingRequests(requestable));
 	let missingCount = $derived(missingPlan.tracks.length + missingPlan.wants.length);
 	let missingLabel = $derived(`${missingCount} ${missingCount === 1 ? 'track' : 'tracks'}`);
 
@@ -114,7 +129,7 @@
 		if (requesting || !playlist) return;
 		requesting = true;
 		try {
-			const result = await requestMissingTracks(playlist.tracks);
+			const result = await requestMissingTracks(requestable);
 			toastStore.show({ message: result.message, type: 'success' });
 			void loadRowStates(playlist.id);
 		} catch {
@@ -350,23 +365,40 @@
 		/>
 
 		<div class="mx-auto max-w-7xl space-y-6 px-4 pb-10 sm:px-6 lg:px-8">
-			{#if isOwner && missingCount > 0}
+			{#if isOwner && (missingCount > 0 || findingCount > 0)}
 				<div
 					class="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-box border border-warning/60 bg-warning/8 px-4 py-3"
 				>
 					<Download class="size-5 shrink-0 text-warning" aria-hidden="true" />
 					<p class="min-w-0 flex-1 basis-48 text-sm font-medium">
-						{missingLabel} not in your library
+						{#if missingCount > 0}
+							{missingLabel} not in your library
+						{:else}
+							Not in your library yet
+						{/if}
 					</p>
-					<Button
-						variant="outline"
-						size="display-sm"
-						icon={Download}
-						loading={requesting}
-						onclick={() => void handleRequestMissing()}
-					>
-						Request {missingLabel}
-					</Button>
+					{#if findingCount > 0}
+						<Button
+							variant="ghost"
+							size="display-sm"
+							icon={Loader}
+							href={withBasePath('/downloads')}
+						>
+							Finding {findingCount}
+							{findingCount === 1 ? 'track' : 'tracks'}
+						</Button>
+					{/if}
+					{#if missingCount > 0}
+						<Button
+							variant="outline"
+							size="display-sm"
+							icon={Download}
+							loading={requesting}
+							onclick={() => void handleRequestMissing()}
+						>
+							Request {missingLabel}
+						</Button>
+					{/if}
 				</div>
 			{/if}
 
