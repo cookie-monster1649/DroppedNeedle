@@ -12,6 +12,7 @@ function summary(active: number, held: number) {
 		active_count: active,
 		held_count: held,
 		failed_count: 0,
+		queued_count: 0,
 		landed_release_group_mbids: []
 	};
 }
