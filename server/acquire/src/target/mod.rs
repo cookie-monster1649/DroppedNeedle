@@ -47,6 +47,9 @@ pub struct TrackWant {
     pub no_album: Option<TrackReason>,
 }
 
+/// Fork: how many other editions' tracklists a search reads at most.
+pub const OTHER_EDITIONS: usize = 5;
+
 /// What to search for and how to judge the results.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchTarget {
@@ -148,6 +151,63 @@ impl Targets {
                 Vec::new()
             }
         }
+    }
+
+    /// Fork: the other editions of a release group with their tracklists,
+    /// for showing which edition a found copy is. Official ones first,
+    /// then MusicBrainz's order; at most [`OTHER_EDITIONS`] tracklists
+    /// are read, one per distinct track count. Empty when MusicBrainz
+    /// cannot list them.
+    pub async fn other_editions(
+        &self,
+        release_group_mbid: &str,
+        pinned: &str,
+    ) -> Vec<crate::search_jobs::candidates::EditionTracklist> {
+        let mut listed = match self.lookup.group_editions(release_group_mbid).await {
+            Ok(listed) => listed,
+            Err(error) => {
+                tracing::warn!(release_group_mbid, %error, "other editions unavailable");
+                return Vec::new();
+            }
+        };
+        listed.retain(|edition| {
+            edition.track_count > 0 && !edition.release_mbid.eq_ignore_ascii_case(pinned)
+        });
+        listed.sort_by_key(|edition| {
+            !edition
+                .status
+                .as_deref()
+                .is_some_and(|status| status.eq_ignore_ascii_case("official"))
+        });
+        let mut counts = std::collections::HashSet::new();
+        let mut found = Vec::new();
+        for edition in listed {
+            if found.len() >= OTHER_EDITIONS || !counts.insert(edition.track_count) {
+                continue;
+            }
+            let tracks = match self.lookup.release(&edition.release_mbid).await {
+                Ok(Some(release)) => expected_tracks(&release),
+                _ => continue,
+            };
+            if tracks.is_empty() {
+                continue;
+            }
+            found.push(crate::search_jobs::candidates::EditionTracklist {
+                info: crate::search_jobs::candidates::OtherEdition {
+                    release_mbid: edition.release_mbid.to_ascii_lowercase(),
+                    title: edition.title,
+                    date: edition.date,
+                    country: edition.country,
+                    formats: edition.media_formats,
+                    track_count: tracks.len(),
+                    disambiguation: edition
+                        .disambiguation
+                        .filter(|text| !text.trim().is_empty()),
+                },
+                tracks,
+            });
+        }
+        found
     }
 
     /// Log that a track came from a lone-track share, and why.

@@ -98,6 +98,9 @@ pub enum CandidateNoteCode {
     Weak,
     /// A download of this copy for the album was turned down before.
     TurnedDownBefore,
+    /// Fork: the folder holds the whole of another edition of the album
+    /// (`other_edition`), not the one asked for.
+    OtherEdition,
 }
 
 /// Why a candidate sits where it does: one stable code and one sentence.
@@ -178,6 +181,108 @@ pub struct SearchCandidateView {
     pub grabs: Option<i64>,
     /// Plugin: the plugin's own score for it, from 0 to 1.
     pub score: Option<f64>,
+    /// Fork: Soulseek: the folder misses the edition asked for but holds
+    /// the whole of this other edition of the album. Picking it with this
+    /// edition switches the request to it.
+    #[serde(default)]
+    pub other_edition: Option<OtherEdition>,
+}
+
+/// Fork: another edition of the asked album, as the downloads page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct OtherEdition {
+    /// Release MBID, lowercase.
+    pub release_mbid: String,
+    pub title: String,
+    /// Release date as MusicBrainz gives it.
+    pub date: Option<String>,
+    pub country: Option<String>,
+    /// Media formats ("CD", "Digital Media").
+    pub formats: Vec<String>,
+    /// Audio tracks on it.
+    pub track_count: usize,
+    /// MusicBrainz's note telling it apart ("deluxe edition").
+    pub disambiguation: Option<String>,
+}
+
+/// Fork: another edition with its tracklist, to judge folders against.
+#[derive(Debug, Clone)]
+pub struct EditionTracklist {
+    pub info: OtherEdition,
+    pub tracks: Vec<crate::downloads::plan::ExpectedTrack>,
+}
+
+/// Fork: whether any Soulseek folder misses the edition asked for, so the
+/// other editions are worth reading.
+pub fn wants_other_editions(candidates: &[Candidate]) -> bool {
+    candidates.iter().any(|candidate| {
+        matches!(candidate.pin, Pin::Soulseek { .. })
+            && matches!(
+                candidate.view.note.code,
+                CandidateNoteCode::Incomplete | CandidateNoteCode::Lengths
+            )
+    })
+}
+
+/// Fork: name, on each Soulseek folder that misses the edition asked for,
+/// the first other edition it holds whole (every track, every length).
+pub fn mark_other_editions(candidates: &mut [Candidate], editions: &[EditionTracklist]) {
+    let policy = crate::slskd::policy::DownloadPolicy::default();
+    for candidate in candidates {
+        let Pin::Soulseek {
+            username, folder, ..
+        } = &candidate.pin
+        else {
+            continue;
+        };
+        if !matches!(
+            candidate.view.note.code,
+            CandidateNoteCode::Incomplete | CandidateNoteCode::Lengths
+        ) {
+            continue;
+        }
+        let hits: Vec<SearchResult> = candidate
+            .view
+            .files
+            .iter()
+            .map(|file| SearchResult {
+                username: username.clone(),
+                filename: file.filename.clone(),
+                parent_directory: folder.clone(),
+                size: file.size,
+                extension: file.extension.clone(),
+                bitrate: file.bitrate,
+                bit_depth: None,
+                sample_rate: None,
+                duration: file.duration_seconds,
+                has_free_slot: false,
+                upload_speed: 0,
+                queue_length: 0,
+            })
+            .collect();
+        let fits = |edition: &EditionTracklist| {
+            let request = crate::slskd::folders::RankRequest {
+                tracklist: &edition.tracks,
+                wanted: &[],
+                single_track: false,
+            };
+            crate::slskd::folders::rank_listing(&hits, request, &policy)
+                .first()
+                .is_some_and(|pick| {
+                    pick.total > 0 && pick.coverage == pick.total && pick.duration_misses == 0
+                })
+        };
+        if let Some(edition) = editions.iter().find(|edition| fits(edition)) {
+            candidate.view.note = CandidateNote::new(
+                CandidateNoteCode::OtherEdition,
+                format!(
+                    "Holds all {} tracks of another edition, not the one asked for.",
+                    edition.info.track_count
+                ),
+            );
+            candidate.view.other_edition = Some(edition.info.clone());
+        }
+    }
 }
 
 /// One file of a pinned Soulseek folder.
@@ -358,6 +463,7 @@ impl Candidate {
                 posted_at: None,
                 grabs: None,
                 score: None,
+                other_edition: None,
             },
             pin,
         }
@@ -422,6 +528,7 @@ impl Candidate {
                 posted_at: release.usenet_date,
                 grabs: release.grabs,
                 score: None,
+                other_edition: None,
             },
             pin: Pin::Release {
                 identity: usenet_identity(&release.title, release.size_bytes),
@@ -498,6 +605,7 @@ impl Candidate {
                 posted_at: release.usenet_date,
                 grabs: None,
                 score: Some(score),
+                other_edition: None,
             },
         }
         .refused(refusal)

@@ -117,6 +117,9 @@ pub struct PickedTask {
     /// The person confirmed a candidate outside the quality band: the
     /// task's plan keeps its files whatever their quality.
     pub quality_waived: bool,
+    /// Fork: the other edition the person took the copy as; a parked
+    /// request switches to it.
+    pub edition: Option<String>,
 }
 
 /// Why a pick was refused inside its transaction.
@@ -493,6 +496,22 @@ impl JobStore {
                     store.set_task_plan(task_id, &plan, at)
                 };
                 if let Some(task_id) = parked {
+                    if let Some(edition) = picked.edition.as_deref() {
+                        // Fork: the request becomes the edition the copy
+                        // holds; the old edition's tracklist goes with it.
+                        let mut details = store.task_details(&task_id).map_err(store_error)?;
+                        details.release_mbid = Some(edition.to_owned());
+                        store
+                            .set_task_details(&task_id, &details, at)
+                            .map_err(store_error)?;
+                        let mut plan = store.task_plan(&task_id).map_err(store_error)?;
+                        plan.release_mbid = Some(edition.to_owned());
+                        plan.expected_tracks.clear();
+                        plan.album_wanted.clear();
+                        store
+                            .set_task_plan(&task_id, &plan, at)
+                            .map_err(store_error)?;
+                    }
                     store
                         .link_candidate(
                             &task_id,

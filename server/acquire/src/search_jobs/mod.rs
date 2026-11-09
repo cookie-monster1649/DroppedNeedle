@@ -30,7 +30,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use self::candidates::{Candidate, CandidateRefusal, Pin};
+use self::candidates::{
+    Candidate, CandidateRefusal, Pin, mark_other_editions, wants_other_editions,
+};
 use self::store::{JobPayload, JobRow, JobStatus, JobStore, NewJob, PickRefusal, PickedTask};
 use super::dispatch::DispatchOrigin;
 use super::downloads::journal::Journal;
@@ -319,7 +321,15 @@ impl SearchJobs {
             track: None,
         };
         let sources = self.worker.sources_now();
-        let (candidates, failed) = search_sources(&sources, &target, &job.id).await;
+        let (mut candidates, failed) = search_sources(&sources, &target, &job.id).await;
+        if let (Some(group), Some(pin)) = (
+            job.release_group_mbid.as_deref(),
+            job.release_mbid.as_deref(),
+        ) && wants_other_editions(&candidates)
+        {
+            let editions = self.targets.other_editions(group, pin).await;
+            mark_other_editions(&mut candidates, &editions);
+        }
         let count = candidates.len();
         let (status, reason) = if count == 0 && failed > 0 && failed == sources.len() {
             (JobStatus::Failed, Some(SearchReason::SourcesFailed.code()))
@@ -416,6 +426,27 @@ impl SearchJobs {
         candidate_index: usize,
         confirm_policy_break: bool,
     ) -> Result<String, SearchJobError> {
+        self.pick_edition(
+            principal,
+            job_id,
+            candidate_index,
+            confirm_policy_break,
+            None,
+        )
+        .await
+    }
+
+    /// Fork: [`Self::pick`], optionally taking the candidate as the other
+    /// edition it holds (its `other_edition`): the download, and a request
+    /// parked on the search, switch to that edition.
+    pub async fn pick_edition(
+        &self,
+        principal: &Principal,
+        job_id: &str,
+        candidate_index: usize,
+        confirm_policy_break: bool,
+        edition: Option<String>,
+    ) -> Result<String, SearchJobError> {
         let row = self.owned(principal, job_id, false).await?;
         if row.status != JobStatus::Completed {
             return Err(SearchJobError::Conflict(not_open(Some(row.status))));
@@ -438,6 +469,23 @@ impl SearchJobs {
         {
             return Err(SearchJobError::PolicyBreak(refusal));
         }
+        let edition = match edition.map(|mbid| mbid.trim().to_ascii_lowercase()) {
+            None => None,
+            Some(mbid)
+                if candidate
+                    .view
+                    .other_edition
+                    .as_ref()
+                    .is_some_and(|other| other.release_mbid == mbid) =>
+            {
+                Some(mbid)
+            }
+            Some(_) => {
+                return Err(SearchJobError::Invalid(
+                    "This copy does not hold that edition.".to_owned(),
+                ));
+            }
+        };
         let source = candidate.view.source.clone();
         if !self
             .worker
@@ -466,7 +514,7 @@ impl SearchJobs {
                 retry_count: 0,
             },
             details: TaskDetails {
-                release_mbid: payload.release_mbid.clone(),
+                release_mbid: edition.clone().or_else(|| payload.release_mbid.clone()),
                 year: row.year,
                 ..TaskDetails::default()
             },
@@ -477,6 +525,7 @@ impl SearchJobs {
             source,
             candidate_index: i64::try_from(candidate_index).unwrap_or(i64::MAX),
             quality_waived: candidate.waives_quality(),
+            edition,
         };
         match self
             .store
