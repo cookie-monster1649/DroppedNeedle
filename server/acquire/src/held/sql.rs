@@ -182,7 +182,10 @@ droppedneedle_kernel::sql! {
     /// with a track.
     pub(super) fragment RETRIES = "(f.state = 'held' AND (f.reason IN " + LIBRARY_REASONS + " \
              OR (f.reason = 'acoustid_unavailable' AND f.root IN ('drop', 'import')) \
-             OR (f.reason = 'no_release' AND f.recording_mbid LIKE 'want-%')) \
+             OR (f.reason = 'no_release' AND f.recording_mbid LIKE 'want-%') \
+             OR (f.reason = 'no_release' AND COALESCE(f.release_track_mbid, '') != '' \
+                 AND (SELECT w.recording_mbid FROM acquire_held_entries w \
+                      WHERE w.id = f.entry_id) LIKE 'want-%')) \
              AND (COALESCE(f.release_track_mbid, '') != '' \
                   OR COALESCE(f.recording_mbid, '') != ''))";
     /// Entries waiting for a person with a file retried by itself, due at

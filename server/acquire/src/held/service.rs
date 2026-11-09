@@ -1242,8 +1242,16 @@ impl HeldService {
         // its files go in as tagged, on a release made from the ask.
         // Fork: a release a person chose outside MusicBrainz (a Spotify
         // song) takes the files one per track, as a want's does.
+        // Fork: a want's file AcoustID placed on a MusicBrainz release
+        // goes onto that release, as a track of its album.
+        let on_release = first
+            .pairing
+            .release_track_mbid
+            .as_deref()
+            .is_some_and(|id| !id.is_empty());
         let want = chosen.is_some()
-            || entry.origin == EntryOrigin::Download
+            || !on_release
+                && entry.origin == EntryOrigin::Download
                 && entry
                     .recording_mbid
                     .as_deref()
@@ -1933,19 +1941,24 @@ impl HeldService {
                 let Some(landed) = probe_held(&path).await else {
                     continue;
                 };
-                if !crate::landing::want::agrees(&target, &landed)
-                    && !self.heard_as_ask(file.id, &target, &landed).await
-                {
-                    continue;
-                }
-                let pairing = Pairing {
+                let heard = if crate::landing::want::agrees(&target, &landed) {
+                    None
+                } else {
+                    match self.heard_as_ask(file.id, &target, &landed).await {
+                        Some(heard) => Some(heard),
+                        None => continue,
+                    }
+                };
+                // Fork: a file AcoustID placed on a MusicBrainz release
+                // files onto it, as a track of that album.
+                let pairing = heard.unwrap_or_else(|| Pairing {
                     recording_mbid: Some(key.clone()),
                     track_number: Some(1),
                     disc_number: Some(1),
                     track_title: target.track_title.clone(),
                     expected_duration_seconds: target.want_seconds,
                     ..Pairing::default()
-                };
+                });
                 let file_id = file.id;
                 match self
                     .write("held.pair_want", move |rows, _| {
@@ -1976,7 +1989,7 @@ impl HeldService {
         file_id: i64,
         target: &specs::Target,
         landed: &LandedFile,
-    ) -> bool {
+    ) -> Option<Pairing> {
         static ASKED: std::sync::OnceLock<Mutex<HashSet<i64>>> = std::sync::OnceLock::new();
         let asked = ASKED.get_or_init(|| Mutex::new(HashSet::new()));
         if !asked
@@ -1984,7 +1997,7 @@ impl HeldService {
             .map(|mut set| set.insert(file_id))
             .unwrap_or(false)
         {
-            return false;
+            return None;
         }
         let library = self.library();
         let files = vec![("0".to_owned(), landed.path.clone())];
@@ -1994,7 +2007,7 @@ impl HeldService {
             if let Ok(mut set) = asked.lock() {
                 set.remove(&file_id);
             }
-            return false;
+            return None;
         };
         let heard: HashSet<String> = recordings
             .values()
@@ -2002,10 +2015,10 @@ impl HeldService {
             .map(|id| id.to_ascii_lowercase())
             .collect();
         if heard.is_empty() {
-            return false;
+            return None;
         }
         let Ok(releases) = library.fingerprint_releases(files, priority).await else {
-            return false;
+            return None;
         };
         let mut ids: Vec<String> = releases.values().flatten().cloned().collect();
         ids.dedup();
@@ -2035,12 +2048,20 @@ impl HeldService {
                         heard_artist = %names.join(", "),
                         "held want file: AcoustID hears the asked song"
                     );
-                    return true;
+                    return Some(Pairing {
+                        release_mbid: Some(release.id.clone()),
+                        release_track_mbid: Some(track.id.clone()),
+                        recording_mbid: Some(track.recording_id.clone()),
+                        disc_number: Some(i64::from(track.disc.max(1))),
+                        track_number: Some(i64::from(track.position)),
+                        track_title: Some(track.title.clone()),
+                        expected_duration_seconds: track.length_ms.map(|ms| ms as f64 / 1000.0),
+                    });
                 }
             }
         }
         tracing::info!(file_id, "held want file: AcoustID hears another song");
-        false
+        None
     }
 
     /// Retry each due entry's files held for a library reason, exactly as
