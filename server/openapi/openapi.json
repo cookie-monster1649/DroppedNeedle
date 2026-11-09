@@ -40307,7 +40307,8 @@
           "title_unclear",
           "strong",
           "weak",
-          "turned_down_before"
+          "turned_down_before",
+          "other_edition"
         ]
       },
       "CandidateRefusal": {
@@ -54590,6 +54591,57 @@
           }
         }
       },
+      "OtherEdition": {
+        "type": "object",
+        "description": "Fork: another edition of the asked album, as the downloads page shows it.",
+        "required": [
+          "release_mbid",
+          "title",
+          "formats",
+          "track_count"
+        ],
+        "properties": {
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release date as MusicBrainz gives it."
+          },
+          "disambiguation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MusicBrainz's note telling it apart (\"deluxe edition\")."
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Media formats (\"CD\", \"Digital Media\")."
+          },
+          "release_mbid": {
+            "type": "string",
+            "description": "Release MBID, lowercase."
+          },
+          "title": {
+            "type": "string"
+          },
+          "track_count": {
+            "type": "integer",
+            "description": "Audio tracks on it.",
+            "minimum": 0
+          }
+        }
+      },
       "OwnedRelease": {
         "type": "object",
         "description": "One release group of an artist's discography that the library holds.",
@@ -56478,6 +56530,13 @@
           "confirm_policy_break": {
             "type": "boolean",
             "description": "Download it even though it is outside the download settings (its\n`refusal` is not empty). Without it such a pick answers 409."
+          },
+          "edition": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fork: take the copy as the other edition it holds (its\n`other_edition.release_mbid`); the request switches to it."
           }
         }
       },
@@ -64087,6 +64146,17 @@
           "note": {
             "$ref": "#/components/schemas/CandidateNote",
             "description": "Why, in one sentence."
+          },
+          "other_edition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OtherEdition"
+              }
+            ],
+            "description": "Fork: Soulseek: the folder misses the edition asked for but holds\nthe whole of this other edition of the album. Picking it with this\nedition switches the request to it."
           },
           "posted_at": {
             "type": [
