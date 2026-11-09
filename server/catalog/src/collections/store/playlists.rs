@@ -466,6 +466,8 @@ impl PlaylistStore {
                 }
                 drop(track_of);
                 tx.execute(sql::MARK_LINKED_LOCAL.text(), [])?;
+                tx.execute(sql::FILL_LINKED_LOCAL.text(), [])?;
+                tx.execute(sql::FILL_LINKED_COVER.text(), [])?;
                 Ok(linked)
             })
             .await
