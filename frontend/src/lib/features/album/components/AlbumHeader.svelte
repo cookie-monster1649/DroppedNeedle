@@ -31,6 +31,7 @@
 		type EditionRequestPick
 	} from '$lib/features/library/components/edition/editionSheetState.svelte';
 	import AlbumDownloadButton from './AlbumDownloadButton.svelte';
+	import RequestRestButton from './RequestRestButton.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import ContextMenu, { type MenuItem } from '$lib/ui/ContextMenu.svelte';
 	import RatingStars from '$lib/ui/RatingStars.svelte';
@@ -315,6 +316,13 @@
 				<StatusChip tone="error" size="md" icon={TriangleAlert}>Unmatched files only</StatusChip>
 			{:else if libraryComplete || !editionCounts}
 				<StatusChip size="md" icon={Check}>In Library</StatusChip>
+			{:else if authStore.isTrusted && downloadClientConfigured}
+				<RequestRestButton
+					mbid={releaseGroupMbid || album.musicbrainz_id}
+					copyId={localCopies[0]?.id}
+					kept={editionCounts.kept}
+					total={editionCounts.total}
+				/>
 			{:else}
 				<StatusChip tone="warning" size="md" icon={Check}>
 					In Library · {editionCounts.kept}/{editionCounts.total}
