@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { Check, Disc3, ExternalLink, FileUp, FolderTree, Play } from 'lucide-svelte';
+	import { Check, Disc3, ExternalLink, FileUp, FolderTree, Play, Trash2 } from 'lucide-svelte';
 	import AlbumImage from '$lib/media/AlbumImage.svelte';
 	import NoFilesBadge from '$lib/features/library/components/NoFilesBadge.svelte';
 	import LocalIdentityBadge from '$lib/features/library/components/LocalIdentityBadge.svelte';
@@ -38,6 +38,14 @@
 	} from '$lib/features/library/queries/EditionQueries.svelte';
 	import { notesByFile } from './albumEdition';
 	import AddToPlaylistModal from '$lib/features/playlists/components/AddToPlaylistModal.svelte';
+	import RemoveTrackFileDialog from './RemoveTrackFileDialog.svelte';
+	import ConfirmDialog from '$lib/ui/ConfirmDialog.svelte';
+	import {
+		createRemoveLibraryAlbumMutation,
+		createRemoveLibraryTrackMutation
+	} from '$lib/features/library/queries/LibraryMutations.svelte';
+	import { isStaleRevision } from '$lib/api/errors';
+	import { toastStore } from '$lib/stores/toast';
 	import { getTrackContextMenuItems } from './albumPlaybackHandlers';
 	import type { QueueItem } from '$lib/features/player/playback/types';
 	import { authStore } from '$lib/stores/authStore.svelte';
@@ -129,8 +137,73 @@
 			null,
 			null,
 			playlistModal,
-			downloadAllowed
+			downloadAllowed,
+			authStore.isTrusted ? () => openRemoveFile(track) : undefined
 		);
+	}
+
+	// Fork: remove a wrong file, or the whole album, as on a MusicBrainz
+	// album page. The files go to the recycle bin; a playlist song whose file
+	// is removed is marked not to be fetched again until it is put back.
+	const removeTrack = createRemoveLibraryTrackMutation();
+	let removeFileTarget = $state<TrackView | null>(null);
+	let removeFileError = $state<string | null>(null);
+
+	function openRemoveFile(track: TrackView): void {
+		removeFileError = null;
+		removeFileTarget = track;
+	}
+
+	function confirmRemoveFile(): void {
+		const target = removeFileTarget;
+		if (!target || removeTrack.isPending) return;
+		removeTrack.mutate(
+			{
+				fileId: target.id,
+				expectedRevision: target.row_revision,
+				albumMbid: target.release_group_mbid ?? albumId,
+				albumId
+			},
+			{
+				onSuccess: () => {
+					removeFileTarget = null;
+					void tracksQuery.refetch();
+					void albumQuery.refetch();
+					toastStore.show({ message: 'File removed', type: 'success' });
+				},
+				onError: (error) => {
+					if (isStaleRevision(error)) {
+						removeFileTarget = null;
+						void tracksQuery.refetch();
+						toastStore.show({ message: error.message, type: 'error' });
+						return;
+					}
+					removeFileError = "Couldn't remove this file";
+				}
+			}
+		);
+	}
+
+	const removeAlbum = createRemoveLibraryAlbumMutation();
+	let removingAlbum = $state(false);
+
+	async function confirmRemoveAlbum(): Promise<void> {
+		if (!album) return;
+		try {
+			await removeAlbum.mutateAsync({
+				mbid: album.release_group_mbid ?? album.id,
+				albumId: album.id,
+				expectedRevision: album.row_revision,
+				expectedListingRevision: album.listing_revision,
+				stopWanted: true
+			});
+		} catch (e) {
+			throw new Error(e instanceof Error && e.message ? e.message : "Couldn't remove this album", {
+				cause: e
+			});
+		}
+		toastStore.show({ message: 'Album removed', type: 'success' });
+		await goto(withBasePath('/library'));
 	}
 
 	const formatLabel = $derived.by(() => {
@@ -160,7 +233,8 @@
 					label: 'Reset manual grouping...',
 					icon: FolderTree,
 					onclick: () => organization?.start('reset')
-				}
+				},
+				{ label: 'Remove album...', icon: Trash2, onclick: () => (removingAlbum = true) }
 			);
 		}
 		if (authStore.isTrusted && album?.identity_state === 'local_only') {
@@ -381,6 +455,35 @@
 		<AddToPlaylistModal bind:this={playlistModal} />
 	{/if}
 </div>
+
+{#if removeFileTarget}
+	<RemoveTrackFileDialog
+		trackTitle={removeFileTarget.title}
+		removing={removeTrack.isPending}
+		error={removeFileError}
+		onconfirm={confirmRemoveFile}
+		onclose={() => {
+			if (!removeTrack.isPending) removeFileTarget = null;
+		}}
+	/>
+{/if}
+
+{#if album}
+	<ConfirmDialog
+		bind:open={removingAlbum}
+		title="Remove Album"
+		confirmLabel="Remove"
+		tone="danger"
+		onconfirm={confirmRemoveAlbum}
+		oncancel={() => (removingAlbum = false)}
+	>
+		<p class="text-muted">
+			Remove <span class="font-semibold text-base-content">{album.title}</span> by
+			<span class="font-semibold text-base-content">{album.artist_name}</span> from your library? Its
+			files go to the recycle bin. Playlist songs it held are not fetched again until they are put back.
+		</p>
+	</ConfirmDialog>
+{/if}
 
 <style>
 	.dn-album-page {

@@ -213,6 +213,33 @@ droppedneedle_kernel::sql! {
          WHERE library_file_id IS NOT NULL AND source_type = 'local' \
          AND length(COALESCE(album_id, '')) = 36 \
          AND COALESCE(cover_url, '') NOT LIKE '/api/v3/covers/release-group/' || lower(album_id) || '%'";
+    /// Fork: entries linked to a file a person removed (gone from the
+    /// library with a `remove_track` action): entry, playlist, artist,
+    /// title, Spotify track and file.
+    pub(super) LINKED_REMOVED = "SELECT p.id, p.playlist_id, p.artist_name, p.track_name, \
+         x.spotify_track_id, p.library_file_id FROM catalog_playlist_tracks p \
+         JOIN local_tracks t ON t.id = p.library_file_id \
+         LEFT JOIN catalog_playlist_entry_identities x ON x.entry_id = p.id \
+         WHERE t.availability != 'indexed' AND EXISTS (SELECT 1 \
+         FROM library_catalog_actions a WHERE a.local_track_id = t.id \
+         AND a.action_kind = 'remove_track')";
+    /// Fork: mark song `?2` (want key) of playlist `?1` not to be fetched
+    /// again, with its Spotify track `?3`, removed file `?4` and time `?5`.
+    pub(super) DECLINE = "INSERT INTO catalog_playlist_declines (playlist_id, name_key, \
+         spotify_track_id, library_file_id, declined_at) VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(playlist_id, name_key) DO UPDATE SET \
+         spotify_track_id = COALESCE(excluded.spotify_track_id, spotify_track_id), \
+         library_file_id = excluded.library_file_id, declined_at = excluded.declined_at";
+    /// Fork: unlink entry `?1` from its removed file, the library no longer
+    /// among its sources.
+    pub(super) UNLINK_REMOVED = "UPDATE catalog_playlist_tracks SET library_file_id = NULL, \
+         available_sources = (SELECT json_group_array(s.value) FROM json_each( \
+           CASE WHEN json_valid(available_sources) THEN available_sources ELSE '[]' END) s \
+           WHERE s.value != 'local') \
+         WHERE id = ?1";
+    /// Fork: a removed file put back from the recycle bin lifts its mark.
+    pub(super) UNDECLINE_RESTORED = "DELETE FROM catalog_playlist_declines \
+         WHERE library_file_id IN (SELECT id FROM local_tracks WHERE availability = 'indexed')";
     /// Fork: an entry's provider ids (`catalog_playlist_entry_identities`).
     pub(super) INSERT_ENTRY_IDENTITY = "INSERT INTO catalog_playlist_entry_identities \
          (entry_id, spotify_track_id, isrc, spotify_album_id) VALUES (?1, ?2, ?3, ?4)";

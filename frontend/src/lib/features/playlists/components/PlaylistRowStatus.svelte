@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Fork: a playlist song the library doesn't play, shown the way the album
-	// page shows a missing track (AlbumTrackList's edition badges, its "held"
+	// page shows a missing track (AlbumTrackList's edition badges, a removed song's mark, its "held"
 	// button and TrackRequestButton's download icon), so the two read alike.
 	import { Download, TriangleAlert } from 'lucide-svelte';
 
@@ -37,6 +37,12 @@
 		<span class="badge badge-sm badge-info badge-outline">Fetching</span>
 	{:else if status === 'failed'}
 		<span class="badge badge-sm badge-error badge-outline">Failed</span>
+	{:else if status === 'removed'}
+		<span
+			class="badge badge-sm badge-ghost"
+			title="Its file was removed; it won't be fetched again. Put the file back from the album's recycle bin to undo."
+			>Removed</span
+		>
 	{:else if status === 'held'}
 		<Button
 			variant="ghost"
