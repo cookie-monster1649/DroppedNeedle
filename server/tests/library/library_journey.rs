@@ -7891,6 +7891,225 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
+/// Fork: "Use Deezer's title and artist" writes an accepted Deezer match's
+/// names into the album's files through the edition tag write, with no
+/// MusicBrainz id, and the scan that reads them back keeps the album's id,
+/// so its match stays. Its undo puts the file's own names back.
+#[tokio::test]
+async fn an_accepted_deezer_match_writes_its_names_into_the_files() {
+    use droppedneedle_library::provider_match::ProviderMatches;
+    use droppedneedle_library::tags::{TagField, read_fields};
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::test_support::ScriptedWire;
+
+    let rig = Rig::start("lib-deezer-tags").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-d/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let file = music.join("album-d/01.flac");
+    let track = rig
+        .scan_store
+        .track_at("music", "album-d/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    app.seed_with(
+        "INSERT INTO library_album_match_state (local_album_id, state, reason_code, \
+         candidates_json, updated_at) VALUES (?1, 'unmatched', 'NO_CANDIDATE', '[]', 1)",
+        rusqlite::params![album],
+    )
+    .await;
+    let (status, detail) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let (status, tracks) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracks}");
+    let held = &tracks["items"][0];
+    let seconds = held["duration_seconds"].as_f64().unwrap_or(200.0).round() as i64;
+
+    let wire = Arc::new(ScriptedWire::new());
+    let json_type = [("content-type", "application/json")];
+    wire.answer(
+        "http://127.0.0.1:9/deezer/search/album",
+        200,
+        &json_type,
+        json!({"data": [{"id": 42, "title": detail["title"], "nb_tracks": 1,
+            "artist": {"id": 7, "name": detail["artist_name"]}}]})
+        .to_string(),
+    );
+    wire.answer(
+        "http://127.0.0.1:9/deezer/album/42",
+        200,
+        &json_type,
+        json!({
+            "id": 42, "title": detail["title"], "label": "Own Label",
+            "release_date": "2019-05-03", "record_type": "album",
+            "artist": {"id": 7, "name": detail["artist_name"]},
+            "tracks": {"data": [
+                {"id": 1001, "title": held["title"], "duration": seconds}
+            ]}
+        })
+        .to_string(),
+    );
+    let matches = ProviderMatches::new(
+        droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+            .expect("database opens"),
+        Providers::unpaced(wire.clone()).previews.clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+    assert_eq!(matches.suggest_some(10).await, Ok(1));
+    // Deezer names the album and its track otherwise than the tags do.
+    app.seed_with(
+        "UPDATE library_album_provider_matches SET title = 'Deezer Title', \
+         artist_name = 'Deezer Artist', \
+         tracks_json = json_set(tracks_json, '$[0].title', ?2) WHERE local_album_id = ?1",
+        rusqlite::params![
+            album,
+            format!("{} (Deezer)", held["title"].as_str().unwrap_or(""))
+        ],
+    )
+    .await;
+    let (status, body) = app
+        .call(
+            "PUT",
+            &format!("/api/v3/library/albums/{album}/provider-match"),
+            &headers,
+            Some(json!({"accept": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The folder writes tags by hand with the Picard profile.
+    let page = "/api/v3/settings/library-management";
+    let (code, saved) = app.call("GET", page, &headers, None).await;
+    assert_eq!(code, StatusCode::OK, "{saved}");
+    let mut settings = saved.clone();
+    settings
+        .as_object_mut()
+        .expect("settings")
+        .remove("settings_revision");
+    settings["root_assignments"] = json!([{
+        "root_id": "music",
+        "profile_id": droppedneedle_library::management::settings::PICARD_ORGANIZER_PROFILE_ID,
+        "enabled": false,
+        "overrides": {"metadata_enabled": true},
+    }]);
+    let (code, body) = app
+        .call(
+            "PUT",
+            page,
+            &headers,
+            Some(json!({
+                "settings": settings,
+                "expected_settings_revision": saved["settings_revision"],
+            })),
+        )
+        .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+
+    let tags = format!("/api/v3/library/albums/{album}/edition/tags");
+    // Only the match the album holds now, at revision 0.
+    let (code, body) = app
+        .call(
+            "POST",
+            &tags,
+            &headers,
+            Some(json!({"release_mbid": "deezer:41", "expected_identity_revision": 0})),
+        )
+        .await;
+    assert_eq!(code, StatusCode::CONFLICT, "{body}");
+    let (code, queued) = app
+        .call(
+            "POST",
+            &tags,
+            &headers,
+            Some(json!({"release_mbid": "deezer:42", "expected_identity_revision": 0})),
+        )
+        .await;
+    assert_eq!(code, StatusCode::OK, "{queued}");
+    let job = queued["job_id"].as_str().expect("job id").to_owned();
+    let uri = format!("{tags}/{job}");
+    let planned = settled_tag_write(app, &headers, &uri).await;
+    let files = planned["files"].as_array().expect("files");
+    assert_eq!(files.len(), 1, "{planned}");
+    assert!(files[0]["blocked"].is_null(), "{planned}");
+    let before = read_fields(track_file(&file)).expect("fields read");
+    write_planned(app, &headers, &uri, &queued["preview_token"]).await;
+
+    let written = read_fields(track_file(&file)).expect("fields read");
+    let one = |field: TagField| {
+        written
+            .get(&field)
+            .and_then(|values| values.first())
+            .cloned()
+    };
+    assert_eq!(one(TagField::Album).as_deref(), Some("Deezer Title"));
+    assert_eq!(one(TagField::AlbumArtist).as_deref(), Some("Deezer Artist"));
+    assert_eq!(
+        one(TagField::Title),
+        Some(format!("{} (Deezer)", held["title"].as_str().unwrap_or("")))
+    );
+    assert_eq!(one(TagField::Date).as_deref(), Some("2019-05-03"));
+    assert_eq!(one(TagField::Label).as_deref(), Some("Own Label"));
+    for field in [
+        TagField::MusicBrainzReleaseId,
+        TagField::MusicBrainzReleaseGroupId,
+        TagField::MusicBrainzRecordingId,
+        TagField::MusicBrainzReleaseTrackId,
+    ] {
+        assert_eq!(
+            written.get(&field),
+            before.get(&field),
+            "{field:?} is left as it was"
+        );
+    }
+
+    // The write asks for a scan, which reads the new names back onto the
+    // same album.
+    let album_uri = format!("/api/v3/library/albums/{album}");
+    let detail = app
+        .until("the scan reads the new names", || {
+            let (album_uri, headers) = (album_uri.clone(), headers);
+            async move {
+                let (status, detail) = app.call("GET", &album_uri, &headers, None).await;
+                (status == StatusCode::OK && detail["title"] == json!("Deezer Title"))
+                    .then_some(detail)
+            }
+        })
+        .await;
+    let after = track_album(app, &headers, &track).await;
+    assert_eq!(after, album, "the album keeps its id");
+    assert_eq!(detail["artist_name"], json!("Deezer Artist"), "{detail}");
+    assert_eq!(
+        detail["provider_match"]["provider_album_id"],
+        json!("42"),
+        "the match stays: {detail}"
+    );
+
+    // Its undo puts the file's own names back.
+    undo_written(app, &headers, &tags, &job).await;
+    let undone = read_fields(track_file(&file)).expect("fields read");
+    assert_eq!(undone.get(&TagField::Album), before.get(&TagField::Album));
+    assert_eq!(undone.get(&TagField::Title), before.get(&TagField::Title));
+}
+
 /// Fork: an artist with no MusicBrainz link gets the MusicBrainz artist of
 /// the same name as a suggestion in Check albums, and Deezer's artist of
 /// that name as its picture and page; "Not it" turns the suggestion down

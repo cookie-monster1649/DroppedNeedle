@@ -2,11 +2,14 @@
 	Fork: an album MusicBrainz doesn't know, as the catalogue it was matched
 	to (Deezer) has it: its label, release date, type and genres, and its
 	whole track list. Tracks the library holds play from here; tracks it
-	lacks are marked Missing, with Want to ask for them by name.
+	lacks are marked Missing, with Want to ask for them by name. An admin
+	can write Deezer's names into the files ("Use Deezer's title and
+	artist"), previewed, written and undone like an edition's tags.
 -->
 <script lang="ts">
 	import { ExternalLink, Play } from 'lucide-svelte';
 	import Button from '$lib/ui/Button.svelte';
+	import TagWritePreview from '$lib/features/library/components/edition/TagWritePreview.svelte';
 	import PaperPanel from '$lib/ui/PaperPanel.svelte';
 	import { formatDurationSec } from '$lib/utils/formatting';
 	import { toastStore } from '$lib/stores/toast';
@@ -20,9 +23,15 @@
 		match: ProviderMatch;
 		/** Play the album's file `trackId`. */
 		onplay: (trackId: string) => void;
+		/** The album, when the viewer may write Deezer's names into its files. */
+		retag?: { userId: string | null | undefined; localId: string } | null;
 	}
 
-	let { match, onplay }: Props = $props();
+	let { match, onplay, retag = null }: Props = $props();
+
+	let retagging = $state(false);
+	const RETAG_SENTENCE =
+		"Writes Deezer's album, album artist, artist, title, track number, date, ISRC and label into this album's files, and no MusicBrainz ids. The album takes the new names once its folder is scanned, which starts by itself.";
 
 	const want = createWantTrackMutation();
 	let asking = $state<string | null>(null);
@@ -83,6 +92,23 @@
 			rel="noreferrer">Open on Deezer</Button
 		>
 	</div>
+	{#if retag}
+		{#if retagging}
+			<div class="rounded-box border border-base-content/10 bg-base-100 p-3">
+				<TagWritePreview
+					album={retag}
+					edition={{ releaseMbid: `deezer:${match.provider_album_id}`, identityRevision: 0 }}
+					placing={false}
+					placingSentenceId="provider-tags-sentence"
+					sentence={RETAG_SENTENCE}
+				/>
+			</div>
+		{:else}
+			<Button variant="outline" size="sm" onclick={() => (retagging = true)}
+				>Use Deezer's title and artist</Button
+			>
+		{/if}
+	{/if}
 	{#if match.genres.length}
 		<ul class="flex flex-wrap gap-1.5" aria-label="Album genres">
 			{#each match.genres as genre (genre)}

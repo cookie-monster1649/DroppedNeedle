@@ -33,9 +33,11 @@
 		placing: boolean;
 		/** The id of the sentence that says why the preview waits. */
 		placingSentenceId: string;
+		/** Fork: what writing does, in place of the edition's sentence. */
+		sentence?: string;
 	}
 
-	let { album, edition, placing, placingSentenceId }: Props = $props();
+	let { album, edition, placing, placingSentenceId, sentence }: Props = $props();
 
 	const preview = createPreviewEditionTagsMutation();
 	const write = createWriteEditionTagsMutation();
@@ -183,7 +185,7 @@
 		</span>
 	{:else}
 		<span class="text-base-content/80"
-			>{undone ? 'The old tags are back.' : tagsSentence('manual')}</span
+			>{undone ? 'The old tags are back.' : (sentence ?? tagsSentence('manual'))}</span
 		>
 		{#if planned}
 			{#if changed.length}

@@ -45967,11 +45967,11 @@
           "expected_identity_revision": {
             "type": "integer",
             "format": "int64",
-            "description": "The `identity_revision` the edition status showed."
+            "description": "The `identity_revision` the edition status showed; 0 for a\n`deezer:` edition."
           },
           "release_mbid": {
             "type": "string",
-            "description": "The album's edition, as the edition status showed it."
+            "description": "The album's edition, as the edition status showed it. Fork: for an\nalbum with an accepted Deezer match and no MusicBrainz link,\n`deezer:` and the match's `provider_album_id`, which writes the\nmatch's album, album artist, artist, title, track number, date,\nISRC and label, and no MusicBrainz id."
           }
         }
       },

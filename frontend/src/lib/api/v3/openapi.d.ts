@@ -14467,10 +14467,17 @@ export interface components {
         EditionTagsBody: {
             /**
              * Format: int64
-             * @description The `identity_revision` the edition status showed.
+             * @description The `identity_revision` the edition status showed; 0 for a
+             *     `deezer:` edition.
              */
             expected_identity_revision: number;
-            /** @description The album's edition, as the edition status showed it. */
+            /**
+             * @description The album's edition, as the edition status showed it. Fork: for an
+             *     album with an accepted Deezer match and no MusicBrainz link,
+             *     `deezer:` and the match's `provider_album_id`, which writes the
+             *     match's album, album artist, artist, title, track number, date,
+             *     ISRC and label, and no MusicBrainz id.
+             */
             release_mbid: string;
         };
         /** @description A tag write as the edition sheet shows it. */

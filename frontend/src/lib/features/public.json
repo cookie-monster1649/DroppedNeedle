@@ -72,6 +72,7 @@
 		"components/LocalIdentityBadge.svelte",
 		"components/NoFilesBadge.svelte",
 		"components/edition/EditionPlate.svelte",
+		"components/edition/TagWritePreview.svelte",
 		"components/edition/editionCopy.ts",
 		"components/edition/editionSheetState.svelte.ts",
 		"queries/EditionQueries.svelte.ts",

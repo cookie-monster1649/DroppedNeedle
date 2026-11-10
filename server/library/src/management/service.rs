@@ -1986,6 +1986,7 @@ impl Management {
                         Ok::<_, ManagementError>(())
                     },
                 )?;
+                self.rescan_after_provider_write(&snapshot);
                 return Ok(());
             };
             let Some((failure, bundle_id, mut result)) =
@@ -2211,7 +2212,13 @@ impl Management {
             });
         let (gate, (revision, tracks)) =
             state.map_err(|error| Refused::unread(error, &first.album_id, "album state"))?;
-        if let Some(reason) = gate {
+        // Fork: a write from an accepted Deezer match is for an album
+        // nothing on MusicBrainz fits; the seal checks the match still holds.
+        let provider_write = snapshot
+            .intent()
+            .edition
+            .is_some_and(|pin| crate::provider_match::edition::is_edition_id(&pin.release_mbid));
+        if let Some(reason) = gate.filter(|_| !provider_write) {
             return Err(reason.into());
         }
         let planned: std::collections::BTreeSet<&str> = items

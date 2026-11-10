@@ -693,7 +693,15 @@ pub fn seal_rows(
         {
             return Err(changed());
         }
-        let album_release_group_mbid = row.album_release_group_mbid.clone().ok_or_else(changed)?;
+        // Fork: an album written from its accepted Deezer match has no
+        // MusicBrainz identity; its seal holds none.
+        let album_release_group_mbid = match row.album_release_group_mbid.clone() {
+            Some(group) => group,
+            None if crate::provider_match::edition::is_edition_id(&item.identity.release_mbid) => {
+                String::new()
+            }
+            None => return Err(changed()),
+        };
         item.sealed = Some(SealedRow {
             album_id: row.album_id.clone(),
             stat_revision: row.stat_revision.clone(),
@@ -723,9 +731,12 @@ pub(crate) fn first_moved<'a>(
                     && row.availability == Availability::Indexed
                     && row.stat_revision == seal.row.stat_revision
                     && row.album_id == seal.row.album_id
-                    && row.album_revision == Some(seal.album_identity_revision as i64)
-                    && row.album_release_group_mbid.as_deref()
-                        == Some(seal.row.album_release_group_mbid.as_str())
+                    // No identity reads as revision 0 and no release
+                    // group: only a Deezer write seals those (fork), and a
+                    // MusicBrainz identity starts at revision 1.
+                    && row.album_revision.unwrap_or(0) == seal.album_identity_revision as i64
+                    && row.album_release_group_mbid.as_deref().unwrap_or("")
+                        == seal.row.album_release_group_mbid.as_str()
                     && row.album_release_mbid == seal.row.album_release_mbid
                     && row.mapping_revision == mapping
                     && row.recording_mbid == seal.row.recording_mbid

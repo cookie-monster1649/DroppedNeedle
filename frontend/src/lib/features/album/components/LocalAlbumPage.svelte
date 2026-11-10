@@ -445,7 +445,11 @@
 			</section>
 
 			{#if album.provider_match && !album.release_group_mbid}
-				<ProviderAlbumTracks match={album.provider_match} onplay={playFile} />
+				<ProviderAlbumTracks
+					match={album.provider_match}
+					onplay={playFile}
+					retag={authStore.isAdmin ? { userId: authStore.user?.id, localId: album.id } : null}
+				/>
 			{/if}
 
 			{#if authStore.isAdmin}
