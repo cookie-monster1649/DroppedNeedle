@@ -44895,6 +44895,46 @@
           }
         }
       },
+      "DuplicateAlbumView": {
+        "type": "object",
+        "description": "Fork: one album of a duplicate group.",
+        "required": [
+          "album_id",
+          "title",
+          "artist_name",
+          "row_revision",
+          "tracks"
+        ],
+        "properties": {
+          "album_id": {
+            "type": "string"
+          },
+          "artist_name": {
+            "type": "string"
+          },
+          "release_group_mbid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album's MusicBrainz release group, when it is matched."
+          },
+          "row_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Echoed by the merge routes."
+          },
+          "title": {
+            "type": "string"
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateTrackView"
+            }
+          }
+        }
+      },
       "DuplicateCandidate": {
         "type": "object",
         "required": [

@@ -12,7 +12,9 @@ import {
 	editionPlansChanged,
 	type Effect,
 	favoritesChanged,
+	localChanged,
 	identityPreparationsChanged,
+	libraryCountsChanged,
 	playlistsChanged,
 	ratingsChanged,
 	repairsChanged
@@ -31,6 +33,7 @@ import { LibraryQueryKeyFactory } from '$lib/features/library/queries/LibraryQue
 import { queryClient } from '$lib/queries/QueryClient';
 import { PROVIDER } from '$lib/queries/persistedCache';
 import { authStore } from '$lib/stores/authStore.svelte';
+import { createUuid } from '$lib/utils/uuid';
 import { AlbumQueryKeyFactory } from '$lib/features/album/queries/AlbumQueryKeyFactory';
 
 // Choosing an edition is for curators; the list of a group's editions is
@@ -392,6 +395,71 @@ export const getWaitingAlbumsQuery = (
 			getNextPageParam: (lastPage: WaitingAlbums) => lastPage.next_cursor ?? undefined
 		};
 	});
+
+// Fork: albums the library holds twice, for Check albums' Duplicates tab.
+export type DuplicateGroup = components['schemas']['DuplicateGroupView'];
+
+export const getDuplicateAlbumsQuery = (getUserId: Getter<EditionUserId>) =>
+	createQuery(() => ({
+		queryKey: LibraryQueryKeyFactory.catalog.unconfirmed(getUserId(), 'duplicates'),
+		enabled: !!getUserId() && authStore.isTrusted,
+		queryFn: ({ signal }): Promise<components['schemas']['DuplicatesView']> =>
+			api.v3.GET(v3('/api/v3/library/duplicates'), { signal })
+	}));
+
+// Fork: tidy one duplicate group: merge the other albums into the kept
+// one (preview, then apply its token), then send the surplus copies to the
+// recycle bin with the revisions the merge left them.
+export function createTidyDuplicateGroupMutation() {
+	return createAppMutation(() => ({
+		mutationFn: async (group: DuplicateGroup): Promise<void> => {
+			const keep = group.albums[0];
+			const others = group.albums.slice(1);
+			if (others.length) {
+				const request = {
+					track_ids: others.flatMap((album) => album.tracks.map((track) => track.track_id)),
+					expected_album_revisions: Object.fromEntries(
+						group.albums.map((album) => [album.album_id, album.row_revision])
+					),
+					target_album_id: keep.album_id,
+					identity_choice: 'detach' as const
+				};
+				const preview = await api.v3.POST(v3('/api/v3/library/albums/merge-preview'), request);
+				await api.v3.POST(v3('/api/v3/library/albums/merge'), {
+					...request,
+					preview_token: preview.preview_token,
+					idempotency_key: createUuid()
+				});
+			}
+			if (!group.surplus_track_ids.length) return;
+			const tracks = await api.v3.GET(
+				v3('/api/v3/library/albums/{id}/tracks', {
+					path: { id: keep.album_id },
+					query: { limit: 500 }
+				})
+			);
+			for (const id of group.surplus_track_ids) {
+				const track = tracks.items.find((item) => item.id === id);
+				if (!track) continue;
+				await api.v3.DELETE(
+					v3('/api/v3/library/tracks/{id}', {
+						path: { id },
+						query: { expected_revision: track.row_revision }
+					})
+				);
+			}
+		},
+		effects: () => {
+			const userId = authStore.user?.id;
+			return [
+				catalogChanged(userId),
+				albumRemovalsChanged(userId),
+				libraryCountsChanged(userId),
+				localChanged()
+			];
+		}
+	}));
+}
 
 type EditionTarget = { userId: EditionUserId; localId: string; rgMbid?: string };
 // The edition status's `identity_revision` the action was decided on.

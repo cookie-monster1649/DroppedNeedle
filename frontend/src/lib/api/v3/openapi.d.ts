@@ -13884,6 +13884,20 @@ export interface components {
         DropUploadForm: {
             files: string[];
         };
+        /** @description Fork: one album of a duplicate group. */
+        DuplicateAlbumView: {
+            album_id: string;
+            artist_name: string;
+            /** @description The album's MusicBrainz release group, when it is matched. */
+            release_group_mbid?: string | null;
+            /**
+             * Format: int64
+             * @description Echoed by the merge routes.
+             */
+            row_revision: number;
+            title: string;
+            tracks: components["schemas"]["DuplicateTrackView"][];
+        };
         DuplicateCandidate: {
             artist_name: string;
             differences: string[];

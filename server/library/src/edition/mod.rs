@@ -4,6 +4,7 @@
 
 pub mod choice;
 pub mod decisions;
+pub mod duplicates;
 mod hand_match;
 pub(crate) mod looks_wrong;
 pub mod models;
