@@ -70,4 +70,38 @@ describe('Check albums', () => {
 			.element(row('Lost Album').getByRole('link', { name: 'Pick an edition' }))
 			.toBeVisible();
 	});
+
+	it('offers the closest candidate of an album nothing fits as a best guess to use', async () => {
+		authStore.setUser(
+			toAuthUser({
+				id: 'user-1',
+				display_name: 'Curator',
+				role: 'trusted',
+				email: null,
+				avatar_url: null,
+				username: 'curator',
+				username_display: 'Curator'
+			})
+		);
+		const near = album('album-3', 'Near Album', 'INSUFFICIENT_EVIDENCE', 'Not enough to be sure.');
+		near.guess = {
+			title: 'The Closest',
+			artist_name: 'The Lanterns',
+			release_group_mbid: 'rg-1',
+			release_mbid: 'rel-1',
+			matched_files: 2
+		};
+		fakeApi({
+			'GET /api/v3/library/unconfirmed': { items: [near], next_cursor: null, total: 1 }
+		});
+
+		await renderWithQuery(UnconfirmedAlbums, { view: 'unmatched' });
+
+		const row = page.getByRole('listitem').filter({ hasText: 'Near Album' });
+		await expect.element(row.getByText('Best guess')).toBeVisible();
+		await expect.element(row.getByText('The Closest')).toBeVisible();
+		await expect.element(row.getByRole('button', { name: /^Use this/ })).toBeVisible();
+		await expect.element(row.getByRole('link', { name: 'Compare' })).toBeVisible();
+		await expect.element(row.getByText('Not found')).not.toBeInTheDocument();
+	});
 });
