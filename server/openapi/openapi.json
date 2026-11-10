@@ -15312,6 +15312,54 @@
         ]
       }
     },
+    "/api/v3/library/duplicates": {
+      "get": {
+        "tags": [
+          "library management"
+        ],
+        "summary": "Fork: albums the library holds twice (the same folded album artist and\ntitle), with the album to keep and the surplus copies.",
+        "operationId": "list_duplicates",
+        "responses": {
+          "200": {
+            "description": "Every duplicate group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicatesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Curator role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/library/folds/{fold_id}/undo": {
       "post": {
         "tags": [
@@ -44190,6 +44238,46 @@
           }
         }
       },
+      "DuplicateAlbumView": {
+        "type": "object",
+        "description": "Fork: one album of a duplicate group.",
+        "required": [
+          "album_id",
+          "title",
+          "artist_name",
+          "row_revision",
+          "tracks"
+        ],
+        "properties": {
+          "album_id": {
+            "type": "string"
+          },
+          "artist_name": {
+            "type": "string"
+          },
+          "release_group_mbid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album's MusicBrainz release group, when it is matched."
+          },
+          "row_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Echoed by the merge routes."
+          },
+          "title": {
+            "type": "string"
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateTrackView"
+            }
+          }
+        }
+      },
       "DuplicateCandidate": {
         "type": "object",
         "required": [
@@ -44293,6 +44381,112 @@
           "barcode",
           "similar"
         ]
+      },
+      "DuplicateGroupView": {
+        "type": "object",
+        "description": "Fork: albums that are one album.",
+        "required": [
+          "kind",
+          "keep_album_id",
+          "albums",
+          "surplus_track_ids"
+        ],
+        "properties": {
+          "albums": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateAlbumView"
+            },
+            "description": "The kept album first."
+          },
+          "keep_album_id": {
+            "type": "string",
+            "description": "The album the others merge into: a MusicBrainz match first, then\nthe most files, then the better files."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DuplicateKindView"
+          },
+          "surplus_track_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every copy of a song held more than once but its best one, to send\nto the recycle bin."
+          }
+        }
+      },
+      "DuplicateKindView": {
+        "type": "string",
+        "description": "Fork: what tidying a duplicate group does.",
+        "enum": [
+          "same_album",
+          "same_songs"
+        ]
+      },
+      "DuplicateTrackView": {
+        "type": "object",
+        "description": "Fork: one file of a duplicated album.",
+        "required": [
+          "track_id",
+          "title",
+          "row_revision"
+        ],
+        "properties": {
+          "bit_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "bit_rate": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bits per second."
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "row_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Echoed by the removal route."
+          },
+          "title": {
+            "type": "string"
+          },
+          "track_id": {
+            "type": "string"
+          }
+        }
+      },
+      "DuplicatesView": {
+        "type": "object",
+        "description": "Fork: every duplicate group.",
+        "required": [
+          "groups"
+        ],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DuplicateGroupView"
+            }
+          }
+        }
       },
       "EditionAcquireResponse": {
         "type": "object",

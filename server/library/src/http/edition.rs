@@ -25,6 +25,8 @@
 //!   write it, and `POST .../tags/{job_id}/undo` to plan putting it back.
 //! - `GET /library/unconfirmed`: albums whose match waits for a look, or
 //!   that someone marked "Looks wrong".
+//! - `GET /library/duplicates`: albums held twice, with what tidying them
+//!   does (fork).
 //! - `PUT /library/albums/{id}/looks-wrong`: mark the album's match as
 //!   looking wrong, or take your own mark back (any signed-in user).
 //! - `DELETE /library/albums/{id}/looks-wrong`: a curator finds nothing
@@ -91,6 +93,7 @@ pub fn routes() -> Routes<LibraryServices> {
         .curator(routes!(apply_edition_tags))
         .curator(routes!(undo_edition_tags))
         .user(routes!(list_unconfirmed))
+        .curator(routes!(list_duplicates))
         .user(routes!(mark_looks_wrong))
         .curator(routes!(clear_looks_wrong))
 }
@@ -1117,6 +1120,123 @@ pub async fn list_unconfirmed(
         limit.into(),
         total,
     )))
+}
+
+/// Fork: what tidying a duplicate group does.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DuplicateKindView {
+    /// The others hold songs the kept album lacks: one album split in two.
+    SameAlbum,
+    /// Every song is in the kept album already: the same songs kept twice.
+    SameSongs,
+}
+
+/// Fork: one file of a duplicated album.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DuplicateTrackView {
+    pub track_id: String,
+    pub title: String,
+    pub file_format: Option<String>,
+    /// Bits per second.
+    pub bit_rate: Option<i64>,
+    pub bit_depth: Option<i64>,
+    pub duration_seconds: Option<f64>,
+    /// Echoed by the removal route.
+    pub row_revision: i64,
+}
+
+/// Fork: one album of a duplicate group.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DuplicateAlbumView {
+    pub album_id: String,
+    pub title: String,
+    pub artist_name: String,
+    /// Echoed by the merge routes.
+    pub row_revision: i64,
+    /// The album's MusicBrainz release group, when it is matched.
+    pub release_group_mbid: Option<String>,
+    pub tracks: Vec<DuplicateTrackView>,
+}
+
+/// Fork: albums that are one album.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DuplicateGroupView {
+    pub kind: DuplicateKindView,
+    /// The album the others merge into: a MusicBrainz match first, then
+    /// the most files, then the better files.
+    pub keep_album_id: String,
+    /// The kept album first.
+    pub albums: Vec<DuplicateAlbumView>,
+    /// Every copy of a song held more than once but its best one, to send
+    /// to the recycle bin.
+    pub surplus_track_ids: Vec<String>,
+}
+
+/// Fork: every duplicate group.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct DuplicatesView {
+    pub groups: Vec<DuplicateGroupView>,
+}
+
+impl From<crate::edition::duplicates::DuplicateGroup> for DuplicateGroupView {
+    fn from(group: crate::edition::duplicates::DuplicateGroup) -> Self {
+        use crate::edition::duplicates::DuplicateKind;
+        Self {
+            kind: match group.kind {
+                DuplicateKind::SameAlbum => DuplicateKindView::SameAlbum,
+                DuplicateKind::SameSongs => DuplicateKindView::SameSongs,
+            },
+            keep_album_id: group.keep_album_id,
+            albums: group
+                .albums
+                .into_iter()
+                .map(|album| DuplicateAlbumView {
+                    album_id: album.album_id,
+                    title: album.title,
+                    artist_name: album.artist_name,
+                    row_revision: album.row_revision,
+                    release_group_mbid: album.release_group_mbid,
+                    tracks: album
+                        .tracks
+                        .into_iter()
+                        .map(|track| DuplicateTrackView {
+                            track_id: track.track_id,
+                            title: track.title,
+                            file_format: track.file_format,
+                            bit_rate: track.bit_rate,
+                            bit_depth: track.bit_depth,
+                            duration_seconds: track.duration_seconds,
+                            row_revision: track.row_revision,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            surplus_track_ids: group.surplus_track_ids,
+        }
+    }
+}
+
+/// Fork: albums the library holds twice (the same folded album artist and
+/// title), with the album to keep and the surplus copies.
+#[utoipa::path(
+    get,
+    tag = "library management",
+    path = "/api/v3/library/duplicates",
+    responses(
+        (status = 200, description = "Every duplicate group", body = DuplicatesView),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "Curator role required"),
+    )
+)]
+pub async fn list_duplicates(
+    State(ops): State<Operations>,
+    _caller: Curator,
+) -> Result<Json<DuplicatesView>, ApiError> {
+    let groups = blocking(move || ops.duplicate_albums()).await?;
+    Ok(Json(DuplicatesView {
+        groups: groups.into_iter().map(Into::into).collect(),
+    }))
 }
 
 /// Mark an album's match as looking wrong, or take the mark back.
