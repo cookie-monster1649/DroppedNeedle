@@ -43,6 +43,7 @@ pub static CATALOG: ExtensionChain = ExtensionChain {
         extension!(2, "catalog/0002_playlist_entry_identities.sql"),
         extension!(3, "catalog/0003_spotify_playlist_syncs.sql"),
         extension!(4, "catalog/0004_entry_spotify_album.sql"),
+        extension!(5, "catalog/0005_playlist_declines.sql"),
     ],
 };
 
@@ -56,9 +57,11 @@ mod tests {
     #[test]
     fn every_extension_file_keeps_to_its_own_tables() {
         for chain in EXTENSIONS {
+            // Tables the chain's own earlier files created, which it may alter.
+            let mut own: Vec<String> = Vec::new();
             for migration in chain.migrations {
                 let sql = migration.sql.to_ascii_lowercase();
-                for forbidden in ["user_version", "alter table", "drop table"] {
+                for forbidden in ["user_version", "drop table"] {
                     assert!(
                         !sql.contains(forbidden),
                         "{}: {} must not use {forbidden}",
@@ -66,7 +69,28 @@ mod tests {
                         migration.name
                     );
                 }
+                for altered in words_after(&sql, "alter table") {
+                    assert!(
+                        own.contains(&altered),
+                        "{}: {} alters {altered}, a table the chain did not create",
+                        chain.name,
+                        migration.name
+                    );
+                }
+                own.extend(words_after(&sql, "create table"));
             }
         }
+    }
+
+    /// The table names that follow each `keyword` in `sql`.
+    fn words_after(sql: &str, keyword: &str) -> Vec<String> {
+        sql.match_indices(keyword)
+            .filter_map(|(at, _)| {
+                sql[at + keyword.len()..]
+                    .split_whitespace()
+                    .find(|word| !matches!(*word, "if" | "not" | "exists"))
+                    .map(|word| word.trim_end_matches('(').to_owned())
+            })
+            .collect()
     }
 }

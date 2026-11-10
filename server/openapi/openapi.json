@@ -58086,7 +58086,8 @@
           "fetching",
           "held",
           "failed",
-          "imported"
+          "imported",
+          "removed"
         ]
       },
       "PlaylistRowStatus": {
