@@ -4233,6 +4233,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/library/duplicates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: albums the library holds twice (the same folded album artist and
+         *     title), with the album to keep and the surplus copies.
+         */
+        get: operations["list_duplicates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/library/folds/{fold_id}/undo": {
         parameters: {
             query?: never;
@@ -13731,6 +13751,20 @@ export interface components {
         DropUploadForm: {
             files: string[];
         };
+        /** @description Fork: one album of a duplicate group. */
+        DuplicateAlbumView: {
+            album_id: string;
+            artist_name: string;
+            /** @description The album's MusicBrainz release group, when it is matched. */
+            release_group_mbid?: string | null;
+            /**
+             * Format: int64
+             * @description Echoed by the merge routes.
+             */
+            row_revision: number;
+            title: string;
+            tracks: components["schemas"]["DuplicateTrackView"][];
+        };
         DuplicateCandidate: {
             artist_name: string;
             differences: string[];
@@ -13765,6 +13799,51 @@ export interface components {
          * @enum {string}
          */
         DuplicateEvidenceKind: "exact_discogs_url" | "release_group" | "barcode" | "similar";
+        /** @description Fork: albums that are one album. */
+        DuplicateGroupView: {
+            /** @description The kept album first. */
+            albums: components["schemas"]["DuplicateAlbumView"][];
+            /**
+             * @description The album the others merge into: a MusicBrainz match first, then
+             *     the most files, then the better files.
+             */
+            keep_album_id: string;
+            kind: components["schemas"]["DuplicateKindView"];
+            /**
+             * @description Every copy of a song held more than once but its best one, to send
+             *     to the recycle bin.
+             */
+            surplus_track_ids: string[];
+        };
+        /**
+         * @description Fork: what tidying a duplicate group does.
+         * @enum {string}
+         */
+        DuplicateKindView: "same_album" | "same_songs";
+        /** @description Fork: one file of a duplicated album. */
+        DuplicateTrackView: {
+            /** Format: int64 */
+            bit_depth?: number | null;
+            /**
+             * Format: int64
+             * @description Bits per second.
+             */
+            bit_rate?: number | null;
+            /** Format: double */
+            duration_seconds?: number | null;
+            file_format?: string | null;
+            /**
+             * Format: int64
+             * @description Echoed by the removal route.
+             */
+            row_revision: number;
+            title: string;
+            track_id: string;
+        };
+        /** @description Fork: every duplicate group. */
+        DuplicatesView: {
+            groups: components["schemas"]["DuplicateGroupView"][];
+        };
         /** @description Edition-acquire outcome. */
         EditionAcquireResponse: {
             /** @description Human outcome. */
@@ -35946,6 +36025,44 @@ export interface operations {
             };
             /** @description Not authenticated */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_duplicates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every duplicate group */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuplicatesView"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Curator role required */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

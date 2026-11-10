@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import PageHeader from '$lib/ui/PageHeader.svelte';
+	import DuplicateAlbums from '$lib/features/library/components/DuplicateAlbums.svelte';
 	import ReviewQueue from '$lib/features/library/components/ReviewQueue.svelte';
 	import UnconfirmedAlbums, {
 		type WaitingView
@@ -9,15 +10,16 @@
 	import { ReviewFilters } from '$lib/features/library/components/review/reviewFilters.svelte';
 	import { getLibraryStatsQuery } from '$lib/features/library/queries/LibraryQueries.svelte';
 	import Tabs from '$lib/ui/Tabs.svelte';
+	import { authStore } from '$lib/stores/authStore.svelte';
 
-	type Tab = WaitingView | 'reviews';
+	type Tab = WaitingView | 'duplicates' | 'reviews';
 
 	// The address holds the open list: ?view=unmatched or ?view=looks_wrong
 	// for those albums, the review list's view, filters and order (?review=<id>
 	// opens one review first), and ?focus=<album id> for the row to come
 	// back to after comparing an album's editions.
 	const params = page.url.searchParams;
-	const VIEWS: WaitingView[] = ['unconfirmed', 'unmatched', 'looks_wrong'];
+	const VIEWS: Tab[] = ['unconfirmed', 'unmatched', 'looks_wrong', 'duplicates'];
 	const asked = VIEWS.find((view) => view === params.get('view')) ?? 'unconfirmed';
 	let tab = $state<Tab>(ReviewFilters.inAddress(params) ? 'reviews' : asked);
 	const stats = getLibraryStatsQuery();
@@ -26,7 +28,9 @@
 		{ id: 'unconfirmed' as Tab, label: 'Best guess', count: stats.data?.guess_count },
 		{ id: 'unmatched' as Tab, label: 'Not found', count: stats.data?.not_found_count },
 		{ id: 'looks_wrong' as Tab, label: 'Looks wrong', count: stats.data?.looks_wrong_count },
-		{ id: 'reviews' as Tab, label: 'Needs you', count: stats.data?.review_count }
+		{ id: 'reviews' as Tab, label: 'Needs you', count: stats.data?.review_count },
+		// Fork: albums held twice (curators).
+		...(authStore.isTrusted ? [{ id: 'duplicates' as Tab, label: 'Duplicates' }] : [])
 	]);
 
 	function show(next: Tab): void {
@@ -65,6 +69,8 @@
 		>
 			{#if tab === 'reviews'}
 				<ReviewQueue />
+			{:else if tab === 'duplicates'}
+				<DuplicateAlbums />
 			{:else}
 				{#key tab}
 					<UnconfirmedAlbums view={tab} focus={params.get('focus')} />
