@@ -874,6 +874,42 @@ impl<'c> HeldRows<'c> {
         })
     }
 
+    /// Fork: claim the entries holding copies their own download task has
+    /// since made redundant (see `SUPERSEDED_FILES`): `held` to `placing`,
+    /// so no action runs on them while the copies go. An entry a person
+    /// is acting on is left alone. Answers the claimed entries and their
+    /// superseded files.
+    pub fn claim_superseded(&self, limit: i64) -> rusqlite::Result<RemovedAlbumClaim> {
+        let mut statement = self.conn.prepare_cached(sql::SUPERSEDED_FILES.text())?;
+        let files: Vec<ClaimedFile> = statement
+            .query_map(params![limit], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        drop(statement);
+        let mut claimed: Vec<i64> = Vec::new();
+        let mut skipped: Vec<i64> = Vec::new();
+        for (_, entry, _) in &files {
+            if claimed.contains(entry) || skipped.contains(entry) {
+                continue;
+            }
+            if self.claim(*entry)? {
+                claimed.push(*entry);
+            } else {
+                skipped.push(*entry);
+            }
+        }
+        let files = files
+            .into_iter()
+            .filter(|(_, entry, _)| claimed.contains(entry))
+            .collect();
+        Ok(RemovedAlbumClaim {
+            claimed,
+            files,
+            in_use: skipped.len(),
+        })
+    }
+
     /// Decide one held file of an entry the caller claimed, leaving the
     /// entry claimed for the caller to give back. Answers how many files moved.
     pub fn resolve_claimed(

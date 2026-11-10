@@ -1884,9 +1884,68 @@ impl HeldService {
     pub async fn tend(&self) -> usize {
         self.finish_cut_off().await;
         let expired = self.expire_due().await;
+        self.discard_superseded().await;
         self.pair_wants().await;
         self.retry_due().await;
         expired
+    }
+
+    /// Fork: discard the held copies a download's own task has since made
+    /// redundant: another copy of the same request imported everything it
+    /// asked for. Only copies in the app's held folder go; a copy that
+    /// could not be removed stays listed, and the next prune tries again.
+    async fn discard_superseded(&self) -> usize {
+        let claim = match self
+            .write("held.superseded_claim", |rows, _| {
+                Ok(rows.claim_superseded(PRUNE_BATCH)?)
+            })
+            .await
+        {
+            Ok(claim) => claim,
+            Err(error) => {
+                tracing::warn!(%error, "superseded held copies not claimed");
+                return 0;
+            }
+        };
+        if claim.claimed.is_empty() {
+            return 0;
+        }
+        let mut gone: Vec<i64> = Vec::with_capacity(claim.files.len());
+        for (file, _, path) in &claim.files {
+            if super::remove_copy(&self.folders.held, path).await {
+                gone.push(*file);
+            }
+        }
+        let now = self.now();
+        let (entries, removed) = (claim.claimed.clone(), gone.len());
+        let finished = self
+            .write("held.superseded", move |rows, _| {
+                for file in &gone {
+                    rows.resolve_claimed(*file, FileState::Discarded, now)?;
+                }
+                for entry in &entries {
+                    rows.release(*entry, now)?;
+                }
+                Ok(())
+            })
+            .await;
+        match finished {
+            Ok(()) => {
+                tracing::info!(
+                    entries = claim.claimed.len(),
+                    files = removed,
+                    "held copies discarded: their request imported another copy in full"
+                );
+                removed
+            }
+            Err(error) => {
+                tracing::warn!(%error, "superseded held copies not finished; a restart finishes them");
+                for entry in claim.claimed {
+                    self.remember_cut_off(entry);
+                }
+                0
+            }
+        }
     }
 
     /// Fork: check a want's files nothing paired yet (held before the
