@@ -16,6 +16,7 @@
 	import AlbumHero from './AlbumHero.svelte';
 	import AlbumHeroSkeleton from './AlbumHeroSkeleton.svelte';
 	import AlbumSourceBar from './AlbumSourceBar.svelte';
+	import ProviderAlbumTracks from './ProviderAlbumTracks.svelte';
 	import BackButton from '$lib/ui/BackButton.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import Card from '$lib/ui/Card.svelte';
@@ -105,6 +106,15 @@
 		const queue = buildDiscoveryQueueFromLocal(tracks);
 		if (!queue.length) return;
 		playerStore.playQueue(queue, 0, shuffle);
+	}
+
+	// Fork: play the album from one of its files (a held track of its
+	// Deezer track list).
+	function playFile(trackId: string): void {
+		const queue = buildDiscoveryQueueFromLocal(tracks);
+		const start = queue.findIndex((item) => item.trackSourceId === trackId);
+		if (start < 0) return;
+		playerStore.playQueue(queue, start, false);
 	}
 
 	let playlistModal = $state<{ open: (tracks: QueueItem[]) => void } | null>(null);
@@ -433,6 +443,10 @@
 					</PaperPanel>
 				{/if}
 			</section>
+
+			{#if album.provider_match && !album.release_group_mbid}
+				<ProviderAlbumTracks match={album.provider_match} onplay={playFile} />
+			{/if}
 
 			{#if authStore.isAdmin}
 				<ManagementHoldSection {album} />
