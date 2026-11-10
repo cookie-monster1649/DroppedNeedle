@@ -162,6 +162,16 @@
 						rel="noreferrer">Open in MusicBrainz</Button
 					>
 				{/if}
+				{#if !artist.artist_mbid && artist.provider?.url}
+					<Button
+						variant="outline"
+						icon={ExternalLink}
+						iconPosition="end"
+						href={artist.provider.url}
+						target="_blank"
+						rel="noreferrer">Open on Deezer</Button
+					>
+				{/if}
 				{#if contributing && artist.identity_state === 'local_only'}
 					<Button variant="outline" icon={FileSearch} href="#musicbrainz-albums">
 						Find existing MusicBrainz artist
@@ -177,6 +187,13 @@
 					className="max-w-xl"
 				/>
 				<ArtistMusicBrainzLink artistId={artist.id} />
+				{#if !artist.artist_mbid && artist.provider?.genres.length}
+					<ul class="flex flex-wrap gap-1.5" aria-label="Genres">
+						{#each artist.provider.genres as genre (genre)}
+							<li class="badge badge-ghost badge-sm">{genre}</li>
+						{/each}
+					</ul>
+				{/if}
 			{/snippet}
 		</ArtistHero>
 

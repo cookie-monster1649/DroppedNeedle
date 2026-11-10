@@ -1536,7 +1536,9 @@ pub(crate) fn artist_art_in(ids: ListLen) -> String {
          JOIN local_album_artwork w ON w.local_album_id = a.id \
          AND w.source IN ('folder','embedded') \
          WHERE laa.local_artist_id = r.id AND a.retired_into_album_id IS NULL \
-         AND a.has_indexed_track = 1))",
+         AND a.has_indexed_track = 1) \
+         OR EXISTS (SELECT 1 FROM library_artist_suggestions s \
+         WHERE s.local_artist_id = r.id AND s.picture_url IS NOT NULL))",
         marks(ids)
     )
 }

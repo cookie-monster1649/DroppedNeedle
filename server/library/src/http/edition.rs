@@ -27,6 +27,9 @@
 //!   that someone marked "Looks wrong".
 //! - `GET /library/duplicates`: albums held twice, with what tidying them
 //!   does (fork).
+//! - `GET /library/artist-suggestions`: artists with no MusicBrainz link,
+//!   each with an artist to merge into or a MusicBrainz artist to link
+//!   (fork); `DELETE /library/artists/{id}/suggestion` turns one down.
 //! - `PUT /library/albums/{id}/looks-wrong`: mark the album's match as
 //!   looking wrong, or take your own mark back (any signed-in user).
 //! - `DELETE /library/albums/{id}/looks-wrong`: a curator finds nothing
@@ -95,6 +98,8 @@ pub fn routes() -> Routes<LibraryServices> {
         .user(routes!(list_unconfirmed))
         .curator(routes!(list_duplicates))
         .curator(routes!(decide_provider_match))
+        .curator(routes!(list_artist_suggestions))
+        .curator(routes!(decline_artist_suggestion))
         .user(routes!(mark_looks_wrong))
         .curator(routes!(clear_looks_wrong))
 }
@@ -1811,4 +1816,124 @@ pub async fn undo_edition_tags(
     })
     .await?;
     Ok(Json(handle.into()))
+}
+
+/// Fork: the MusicBrainz artist an artist suggestion links.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SuggestedMusicBrainzArtistView {
+    pub musicbrainz_artist_id: String,
+    pub name: String,
+    /// MusicBrainz's short note on who this is.
+    pub disambiguation: Option<String>,
+}
+
+/// Fork: the library artist an artist suggestion merges into.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct SuggestedMergeView {
+    pub artist_id: String,
+    pub name: String,
+    /// The revision the merge names.
+    pub artist_revision: i64,
+    /// Its MusicBrainz link, which the merge keeps.
+    pub musicbrainz_artist_id: Option<String>,
+}
+
+/// Fork: an artist with no MusicBrainz link, and what to do about it.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ArtistSuggestionView {
+    pub artist_id: String,
+    pub name: String,
+    /// The revision a link or merge names.
+    pub artist_revision: i64,
+    /// Albums the artist leads.
+    pub album_count: i64,
+    /// Link the artist to this MusicBrainz artist; null when a merge is
+    /// suggested instead.
+    pub musicbrainz: Option<SuggestedMusicBrainzArtistView>,
+    /// Merge the artist into this one.
+    pub merge: Option<SuggestedMergeView>,
+    /// The artist's page on Deezer, whose picture the artist shows.
+    pub deezer_url: Option<String>,
+    /// Deezer fans, a hint of who this is.
+    pub fans: Option<i64>,
+}
+
+impl From<crate::artist_match::ArtistSuggestion> for ArtistSuggestionView {
+    fn from(found: crate::artist_match::ArtistSuggestion) -> Self {
+        Self {
+            artist_id: found.artist_id,
+            name: found.name,
+            artist_revision: found.artist_revision,
+            album_count: found.album_count,
+            musicbrainz: found.musicbrainz.map(|(id, name, disambiguation)| {
+                SuggestedMusicBrainzArtistView {
+                    musicbrainz_artist_id: id,
+                    name,
+                    disambiguation,
+                }
+            }),
+            merge: found.merge.map(|target| SuggestedMergeView {
+                artist_id: target.artist_id,
+                name: target.name,
+                artist_revision: target.artist_revision,
+                musicbrainz_artist_id: target.musicbrainz_artist_id,
+            }),
+            deezer_url: found.deezer_url,
+            fans: found.fans,
+        }
+    }
+}
+
+/// Fork: every open artist suggestion.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ArtistSuggestionsView {
+    pub items: Vec<ArtistSuggestionView>,
+}
+
+/// Fork: artists with no MusicBrainz link, each with a library artist that
+/// is plainly the same to merge into or the MusicBrainz artist of the same
+/// name to link. Taking one goes through the artist merge or the
+/// MusicBrainz link routes.
+#[utoipa::path(
+    get,
+    tag = "library management",
+    path = "/api/v3/library/artist-suggestions",
+    responses(
+        (status = 200, description = "Every open suggestion", body = ArtistSuggestionsView),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "Curator role required"),
+    )
+)]
+pub async fn list_artist_suggestions(
+    State(suggestions): State<crate::artist_match::ArtistSuggestions>,
+    _caller: Curator,
+) -> Result<Json<ArtistSuggestionsView>, ApiError> {
+    let found = blocking(move || suggestions.open()).await?;
+    Ok(Json(ArtistSuggestionsView {
+        items: found.into_iter().map(Into::into).collect(),
+    }))
+}
+
+/// Fork: an artist's suggestion is not them ("Not it"). It is not offered
+/// again.
+#[utoipa::path(
+    delete,
+    tag = "library management",
+    path = "/api/v3/library/artists/{id}/suggestion",
+    params(("id" = String, Path, description = "Local artist id")),
+    responses(
+        (status = 204, description = "Turned down"),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "Curator role required"),
+        (status = 404, description = "The artist has no open suggestion (NO_ARTIST_SUGGESTION)"),
+    )
+)]
+pub async fn decline_artist_suggestion(
+    State(suggestions): State<crate::artist_match::ArtistSuggestions>,
+    caller: Curator,
+    Path(artist_id): Path<String>,
+) -> Result<axum::http::StatusCode, ApiError> {
+    let user = caller.user_id().to_owned();
+    blocking(move || suggestions.decline(&artist_id, &user)).await?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }

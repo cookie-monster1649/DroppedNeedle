@@ -3765,6 +3765,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/library/artist-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: artists with no MusicBrainz link, each with a library artist that
+         *     is plainly the same to merge into or the MusicBrainz artist of the same
+         *     name to link. Taking one goes through the artist merge or the
+         *     MusicBrainz link routes.
+         */
+        get: operations["list_artist_suggestions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/library/artists": {
         parameters: {
             query?: never;
@@ -3969,7 +3991,9 @@ export interface paths {
         /**
          * A library artist's picture, a mosaic of the art of their own albums.
          * @description For artists the library holds with no MusicBrainz link, which have no
-         *     picture of their own. Never reaches out to the network. Albums under
+         *     picture of their own. Fork: an artist whose Deezer artist was found
+         *     shows that artist's picture instead, downloaded once and kept in the
+         *     artwork cache; nothing else reaches out to the network. Albums under
          *     the artist's name with the newest release come first, studio albums
          *     before compilations. Four or more covers give a 2x2 of the first four,
          *     two or three the first two crosswise, and one that cover alone. A
@@ -4006,6 +4030,26 @@ export interface paths {
          *     the same MusicBrainz artist as another in the library.
          */
         delete: operations["clear_artist_link"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/library/artists/{id}/suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Fork: an artist's suggestion is not them ("Not it"). It is not offered
+         *     again.
+         */
+        delete: operations["decline_artist_suggestion"];
         options?: never;
         head?: never;
         patch?: never;
@@ -11289,6 +11333,24 @@ export interface components {
              */
             total: number;
         };
+        /** @description Fork: what other catalogues know of an artist with no MusicBrainz link. */
+        ArtistProviderView: {
+            /**
+             * Format: int64
+             * @description Fans there.
+             */
+            fans?: number | null;
+            /**
+             * @description The genres of the artist's albums' accepted matches, most albums
+             *     first.
+             */
+            genres: string[];
+            /** @description `deezer`. */
+            provider: string;
+            provider_artist_id?: string | null;
+            /** @description The artist's page there. */
+            url?: string | null;
+        };
         /**
          * @description `GET /artists/{artist_mbid}/purchase-options`: the artist's own store
          *     pages (Bandcamp, merch shop).
@@ -11416,6 +11478,39 @@ export interface components {
          * @enum {string}
          */
         ArtistStandardization: "credited" | "canonical";
+        /** @description Fork: an artist with no MusicBrainz link, and what to do about it. */
+        ArtistSuggestionView: {
+            /**
+             * Format: int64
+             * @description Albums the artist leads.
+             */
+            album_count: number;
+            artist_id: string;
+            /**
+             * Format: int64
+             * @description The revision a link or merge names.
+             */
+            artist_revision: number;
+            /** @description The artist's page on Deezer, whose picture the artist shows. */
+            deezer_url?: string | null;
+            /**
+             * Format: int64
+             * @description Deezer fans, a hint of who this is.
+             */
+            fans?: number | null;
+            /** @description Merge the artist into this one. */
+            merge?: null | components["schemas"]["SuggestedMergeView"];
+            /**
+             * @description Link the artist to this MusicBrainz artist; null when a merge is
+             *     suggested instead.
+             */
+            musicbrainz?: null | components["schemas"]["SuggestedMusicBrainzArtistView"];
+            name: string;
+        };
+        /** @description Fork: every open artist suggestion. */
+        ArtistSuggestionsView: {
+            items: components["schemas"]["ArtistSuggestionView"][];
+        };
         /** @description One catalog artist. */
         ArtistView: {
             /**
@@ -11466,6 +11561,12 @@ export interface components {
             led_track_count: number;
             /** @description Display name. */
             name: string;
+            /**
+             * @description Fork: for an artist with no MusicBrainz link, what other catalogues
+             *     (Deezer) know: its page there and the genres of its albums'
+             *     accepted matches. Set on the artist's own read only.
+             */
+            provider?: null | components["schemas"]["ArtistProviderView"];
             /**
              * Format: int64
              * @description Streamable tracks credited to this artist.
@@ -23920,6 +24021,25 @@ export interface components {
             /** Format: int32 */
             track_count: number;
         };
+        /** @description Fork: the library artist an artist suggestion merges into. */
+        SuggestedMergeView: {
+            artist_id: string;
+            /**
+             * Format: int64
+             * @description The revision the merge names.
+             */
+            artist_revision: number;
+            /** @description Its MusicBrainz link, which the merge keeps. */
+            musicbrainz_artist_id?: string | null;
+            name: string;
+        };
+        /** @description Fork: the MusicBrainz artist an artist suggestion links. */
+        SuggestedMusicBrainzArtistView: {
+            /** @description MusicBrainz's short note on who this is. */
+            disambiguation?: string | null;
+            musicbrainz_artist_id: string;
+            name: string;
+        };
         /**
          * @description Why a track was suggested: the pool it came from.
          * @enum {string}
@@ -34457,6 +34577,44 @@ export interface operations {
             };
         };
     };
+    list_artist_suggestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every open suggestion */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtistSuggestionsView"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Curator role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     list_artists: {
         parameters: {
             query?: {
@@ -35326,6 +35484,54 @@ export interface operations {
             };
             /** @description The artist changed since it was read (STALE_REVISION), has no hand-set link (ARTIST_LINK_NOT_CHOSEN), or would be the same MusicBrainz artist as others (ARTIST_LINK_SHARED, listed in details.artists) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    decline_artist_suggestion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Local artist id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Turned down */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Curator role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The artist has no open suggestion (NO_ARTIST_SUGGESTION) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

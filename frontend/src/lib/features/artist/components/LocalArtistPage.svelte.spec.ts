@@ -88,4 +88,36 @@ describe('local artist page', () => {
 			.element(page.getByRole('heading', { name: 'Appears on', exact: true }))
 			.toBeVisible();
 	});
+
+	it('shows Deezer genres and a Deezer link for an artist MusicBrainz lacks', async () => {
+		fakeApi({
+			'GET /api/v3/library/artists/{id}': {
+				...artist,
+				provider: {
+					provider: 'deezer',
+					provider_artist_id: '55',
+					url: 'https://www.deezer.com/artist/55',
+					fans: 1234,
+					genres: ['R&B', 'Soul']
+				}
+			},
+			'GET /api/v3/library/artists/{id}/albums': { items: [], total: 0, next: null },
+			'GET /api/v3/library/artists/{id}/appearances': { items: [], total: 0, next: null },
+			'GET /api/v3/library/artists/{id}/musicbrainz-link': {
+				artist_id: artist.id,
+				artist_revision: 1,
+				musicbrainz_artist_id: null,
+				source: null,
+				set_by: null,
+				selected_at: null
+			},
+			'GET /api/v3/library/tracks': { items: [], total: 0, next: null },
+			'POST /api/v3/ratings/lookup': { albums: {}, artists: {}, tracks: {} }
+		});
+		await renderWithQuery(LocalArtistPage, { artistId: artist.id });
+
+		await expect.element(page.getByRole('list', { name: 'Genres' })).toBeVisible();
+		await expect.element(page.getByText('Soul')).toBeVisible();
+		await expect.element(page.getByRole('link', { name: 'Open on Deezer' })).toBeVisible();
+	});
 });

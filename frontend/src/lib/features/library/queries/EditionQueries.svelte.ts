@@ -1,5 +1,6 @@
 import {
 	albumGroupChanged,
+	artistLinkChanged,
 	albumHistoryChanged,
 	albumRemovalsChanged,
 	albumStatusChanged,
@@ -458,6 +459,73 @@ export function createTidyDuplicateGroupMutation() {
 				localChanged()
 			];
 		}
+	}));
+}
+
+// Fork: artists with no MusicBrainz link, for Check albums' Artists tab.
+export type ArtistSuggestion = components['schemas']['ArtistSuggestionView'];
+
+export const getArtistSuggestionsQuery = (getUserId: Getter<EditionUserId>) =>
+	createQuery(() => ({
+		queryKey: LibraryQueryKeyFactory.catalog.unconfirmed(getUserId(), 'artists'),
+		enabled: !!getUserId() && authStore.isTrusted,
+		queryFn: ({ signal }): Promise<components['schemas']['ArtistSuggestionsView']> =>
+			api.v3.GET(v3('/api/v3/library/artist-suggestions'), { signal })
+	}));
+
+// Fork: take an artist suggestion through the existing routes: link the
+// MusicBrainz artist, or merge into the suggested artist (preview, then
+// apply its token; admins), which keeps that artist's link.
+export function createTakeArtistSuggestionMutation() {
+	return createAppMutation(() => ({
+		mutationFn: async (item: ArtistSuggestion): Promise<void> => {
+			if (item.merge) {
+				const request = {
+					source_artist_ids: [item.artist_id],
+					surviving_artist_id: item.merge.artist_id,
+					expected_revisions: {
+						[item.artist_id]: item.artist_revision,
+						[item.merge.artist_id]: item.merge.artist_revision
+					},
+					provider_choice: 'retain_survivor' as const
+				};
+				const preview = await api.v3.POST(v3('/api/v3/library/artists/merge-preview'), request);
+				await api.v3.POST(v3('/api/v3/library/artists/merge'), {
+					...request,
+					preview_token: preview.preview_token,
+					idempotency_key: createUuid()
+				});
+				return;
+			}
+			if (!item.musicbrainz) return;
+			await api.v3.PUT(
+				v3('/api/v3/library/artists/{id}/musicbrainz-link', { path: { id: item.artist_id } }),
+				{
+					musicbrainz_artist_id: item.musicbrainz.musicbrainz_artist_id,
+					expected_revision: item.artist_revision
+				}
+			);
+		},
+		effects: (_d, item) => {
+			const userId = authStore.user?.id;
+			return [
+				catalogChanged(userId),
+				artistLinkChanged(userId, item.artist_id),
+				libraryCountsChanged(userId),
+				localChanged()
+			];
+		}
+	}));
+}
+
+// Fork: "Not it" on an artist suggestion; it is not offered again.
+export function createDeclineArtistSuggestionMutation() {
+	return createAppMutation(() => ({
+		mutationFn: (item: ArtistSuggestion): Promise<void> =>
+			api.v3.DELETE(
+				v3('/api/v3/library/artists/{id}/suggestion', { path: { id: item.artist_id } })
+			),
+		effects: () => [catalogChanged(authStore.user?.id)]
 	}));
 }
 

@@ -673,7 +673,15 @@ pub async fn get_artist(
     let art_missing = artists_missing_art(deps, std::slice::from_ref(&record))
         .await?
         .contains(&record.id);
-    Ok(ArtistView::from((record, favorite, art_missing)))
+    let provider = if record.artist_mbid.is_none() {
+        deps.catalog.artist_provider_page(&record.id).await?
+    } else {
+        None
+    };
+    Ok(ArtistView {
+        provider: provider.map(Into::into),
+        ..ArtistView::from((record, favorite, art_missing))
+    })
 }
 
 /// One page of albums led by the artist. Unknown artists are 404.
