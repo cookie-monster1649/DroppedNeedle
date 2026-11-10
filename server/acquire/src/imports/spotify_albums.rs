@@ -38,6 +38,9 @@ pub struct SpotifyAlbum {
     pub artist: String,
     /// The ISRCs of its tracks on the playlist, uppercased and well formed.
     pub isrcs: BTreeSet<String>,
+    /// Fork: the Spotify album id, empty when unknown. MusicBrainz releases
+    /// link their Spotify album, which proves the album outright.
+    pub spotify_id: String,
 }
 
 impl SpotifyAlbum {
@@ -58,6 +61,9 @@ pub struct ProvenAlbum {
     pub group: String,
     /// Uppercased ISRC -> recording MBID, for the ISRCs the album carried.
     pub recordings: std::collections::BTreeMap<String, String>,
+    /// Fork: the release that proved it (the exact edition), when one did.
+    #[serde(default)]
+    pub release: Option<String>,
 }
 
 /// Finds the release group of Spotify albums through MusicBrainz.
@@ -108,7 +114,13 @@ impl AlbumResolver {
         let key = CacheKey::hashed(
             Source::MusicBrainz,
             "spotify_album_recordings",
-            &[&namespace, &album.title, &album.artist, &joined],
+            &[
+                &namespace,
+                &album.title,
+                &album.artist,
+                &joined,
+                &album.spotify_id,
+            ],
         );
         let album = album.clone();
         self.cache
@@ -125,6 +137,94 @@ impl AlbumResolver {
             )
             .await
     }
+
+    /// Fork: the album's release group found by its barcode (Spotify's
+    /// UPC), for an album the link and ISRC proofs left open. A barcode
+    /// names one product, so the releases carrying it must agree on one
+    /// release group.
+    ///
+    /// # Errors
+    ///
+    /// A MusicBrainz failure; nothing is cached for it.
+    pub async fn resolve_barcode(
+        &self,
+        album: &SpotifyAlbum,
+        upc: &str,
+    ) -> Result<Option<ProvenAlbum>, ProviderError> {
+        let upc: String = upc.chars().filter(char::is_ascii_digit).collect();
+        if upc.len() < 8 {
+            return Ok(None);
+        }
+        let Some(settings) = self.settings.read() else {
+            return Err(ProviderError::NotConfigured {
+                provider: SOURCE,
+                message: "the musicbrainz settings cannot be read".to_owned(),
+            });
+        };
+        let namespace = format!("{}:g{}", settings.source_id, settings.generation);
+        let view = self.musicbrainz.fixed(
+            self.musicbrainz.source_from(&settings),
+            RequestPriority::BackgroundSync,
+        );
+        let joined = album
+            .isrcs
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(",");
+        let key = CacheKey::hashed(
+            Source::MusicBrainz,
+            "spotify_album_barcode",
+            &[&namespace, &upc, &joined],
+        );
+        let album = album.clone();
+        self.cache
+            .get_or_fetch(
+                &key,
+                Policy::RELEASE_TO_GROUP,
+                RequestPriority::BackgroundSync,
+                move |_| async move {
+                    let page = view
+                        .search_releases_query(
+                            &format!("barcode:{upc}"),
+                            SEARCH_LIMIT,
+                            Criticality::IdentityCritical,
+                        )
+                        .await?;
+                    let ids: Vec<String> = page.items.iter().map(|hit| hit.id.clone()).collect();
+                    Ok(match prove_releases(&view, &album, &ids, false).await? {
+                        Some(found) => Fetched::Found(found),
+                        None => Fetched::Missing,
+                    })
+                },
+            )
+            .await
+    }
+}
+
+impl AlbumResolver {
+    /// Fork: the barcode kept for Spotify album `id`: `Some(None)` when
+    /// Spotify was asked and had none, `None` when it hasn't been asked.
+    pub async fn kept_barcode(&self, id: &str) -> Option<Option<String>> {
+        let bytes = self.cache.get_bytes(&barcode_key(id)).await?;
+        let code = String::from_utf8(bytes).ok()?;
+        Some(Some(code).filter(|code| !code.is_empty()))
+    }
+
+    /// Fork: keep Spotify album `id`'s barcode (empty for none) for a month,
+    /// so a playlist sync asks Spotify once per album.
+    pub fn keep_barcode(&self, id: &str, code: Option<&str>) {
+        self.cache.set_bytes(
+            &barcode_key(id),
+            code.unwrap_or_default().as_bytes().to_vec(),
+            std::time::Duration::from_secs(30 * 24 * 3600),
+        );
+    }
+}
+
+/// Fork: where a Spotify album's barcode is kept.
+fn barcode_key(id: &str) -> CacheKey {
+    CacheKey::hashed(Source::MusicBrainz, "spotify_album_upc", &[id])
 }
 
 impl AlbumResolver {
@@ -208,6 +308,24 @@ async fn prove(
     view: &MusicBrainzView,
     album: &SpotifyAlbum,
 ) -> Result<Option<ProvenAlbum>, ProviderError> {
+    // Fork: a MusicBrainz release that links this Spotify album is it.
+    if !album.spotify_id.is_empty() && album.spotify_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        let resolution = view
+            .resolve_url(
+                &format!("https://open.spotify.com/album/{}", album.spotify_id),
+                &["release-rels"],
+                Criticality::IdentityCritical,
+            )
+            .await?;
+        let ids: Vec<String> = resolution
+            .relations
+            .iter()
+            .filter_map(|relation| relation.release.as_ref().map(|release| release.id.clone()))
+            .collect();
+        if let Some(found) = prove_releases(view, album, &ids, false).await? {
+            return Ok(Some(found));
+        }
+    }
     for title in title_forms(&album.title) {
         let page = view
             .search_releases(
@@ -220,6 +338,7 @@ async fn prove(
         let mut proven: BTreeSet<String> = BTreeSet::new();
         let mut recordings: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();
+        let mut edition: Option<String> = None;
         for hit in page.items {
             let listed = hit
                 .release_group
@@ -261,15 +380,20 @@ async fn prove(
                 }
             }
             if carries {
+                if proven.is_empty() {
+                    edition = Some(normalize_mb_id(&release.id));
+                }
                 proven.insert(group);
             }
         }
         match proven.len() {
             0 => {}
             1 => {
-                return Ok(proven
-                    .pop_first()
-                    .map(|group| ProvenAlbum { group, recordings }));
+                return Ok(proven.pop_first().map(|group| ProvenAlbum {
+                    group,
+                    recordings,
+                    release: edition,
+                }));
             }
             _ => {
                 tracing::debug!(
@@ -281,6 +405,71 @@ async fn prove(
         }
     }
     Ok(None)
+}
+
+/// Fork: the one release group the releases `ids` agree on, with the
+/// recordings the album's ISRCs name on them and the first release as the
+/// edition. The releases are already tied to the album (by its Spotify link
+/// or its barcode), so no ISRC has to match unless `need_isrc`. Two groups
+/// leave it open.
+async fn prove_releases(
+    view: &MusicBrainzView,
+    album: &SpotifyAlbum,
+    ids: &[String],
+    need_isrc: bool,
+) -> Result<Option<ProvenAlbum>, ProviderError> {
+    let mut groups: BTreeSet<String> = BTreeSet::new();
+    let mut recordings = std::collections::BTreeMap::new();
+    let mut edition = None;
+    for id in ids.iter().take(SEARCH_LIMIT as usize) {
+        let Some(release) = view
+            .lookup_release(id, &PROOF_INCLUDES, Criticality::IdentityCritical)
+            .await?
+        else {
+            continue;
+        };
+        let release = release.entity;
+        let Some(group) = release
+            .release_group
+            .as_ref()
+            .map(|group| normalize_mb_id(&group.id))
+            .filter(|group| is_valid_mbid(group))
+        else {
+            continue;
+        };
+        let mut carries = false;
+        for recording in release
+            .media
+            .iter()
+            .flat_map(|medium| &medium.tracks)
+            .filter_map(|track| track.recording.as_ref())
+        {
+            for isrc in &recording.isrcs {
+                let isrc = isrc.trim().to_ascii_uppercase();
+                if album.isrcs.contains(&isrc) {
+                    carries = true;
+                    recordings
+                        .entry(isrc)
+                        .or_insert_with(|| normalize_mb_id(&recording.id));
+                }
+            }
+        }
+        if need_isrc && !carries {
+            continue;
+        }
+        if edition.is_none() {
+            edition = Some(normalize_mb_id(&release.id));
+        }
+        groups.insert(group);
+    }
+    if groups.len() != 1 {
+        return Ok(None);
+    }
+    Ok(groups.pop_first().map(|group| ProvenAlbum {
+        group,
+        recordings,
+        release: edition,
+    }))
 }
 
 /// The title as Spotify gives it, then without a trailing edition note

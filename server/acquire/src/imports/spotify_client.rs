@@ -257,6 +257,25 @@ impl SpotifyClient {
         .await
     }
 
+    /// Fork: one album's barcode (UPC, else EAN), `None` when Spotify has
+    /// none.
+    pub async fn album_barcode(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        album_id: &str,
+    ) -> Result<Option<String>, SpotifyError> {
+        let priority = refresher.priority;
+        let album = self
+            .authed(refresher, "album", |token| async move {
+                self.api.album(&token, album_id, priority).await
+            })
+            .await?;
+        Ok(album
+            .external_ids
+            .and_then(|ids| ids.upc.or(ids.ean))
+            .filter(|code| !code.trim().is_empty()))
+    }
+
     /// Playlist tracks, page by page. Each entry carries the track under
     /// `item` (new) or `track` (legacy alias); locals, id-less rows, and
     /// non-track types are skipped.
