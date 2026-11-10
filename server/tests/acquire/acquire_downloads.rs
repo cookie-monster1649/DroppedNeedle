@@ -1241,6 +1241,83 @@ impl HeldRig {
     }
 }
 
+/// Fork: once a download's request imports another copy in full, the
+/// copies it held earlier are discarded by the held list's loop, their
+/// held files removed. A request that imported only part of the album,
+/// whose import came before the hold, or whose import held a file of its
+/// own, keeps its copies for a person.
+#[tokio::test]
+async fn copies_held_before_their_request_imported_in_full_are_discarded() {
+    let rig = HeldRig::new(vec![held_release()]).await;
+    let tracks = held_release().tracks;
+    let (db, acquire, held_dir) = (&rig.db, &rig.acquire, &rig.held_dir);
+    for name in ["full.flac", "partial.flac", "earlier.flac", "same.flac"] {
+        held_copy(held_dir, name, "flac_full_02.flac", "Sour Times", 2);
+    }
+    let mut entries = Vec::new();
+    for (task, file) in [
+        ("t-full", "full.flac"),
+        ("t-partial", "partial.flac"),
+        ("t-earlier", "earlier.flac"),
+        ("t-same", "same.flac"),
+    ] {
+        entries.push(
+            seed_held(
+                db,
+                &format!("task:{task}"),
+                "held",
+                vec![(file, tracks[1].clone(), Reason::WeakMatch)],
+            )
+            .await,
+        );
+    }
+    db.write("test.decisions", |tx| {
+        for (task, file, outcome, missing, at, held) in [
+            ("t-full", "full.flac", "imported", "[]", 50, 0),
+            ("t-partial", "partial.flac", "imported", "[[1,2]]", 50, 0),
+            ("t-earlier", "earlier.flac", "imported", "[]", 5, 0),
+            ("t-same", "same.flac", "imported", "[]", 50, 1),
+        ] {
+            tx.execute(
+                "INSERT INTO download_tasks (id, user_id, release_group_mbid, artist_name, \
+                 album_title, created_at, updated_at) \
+                 VALUES (?1, 'u-ada', ?2, 'Portishead', 'Dummy', 1, 1)",
+                rusqlite::params![task, HELD_GROUP],
+            )?;
+            tx.execute(
+                "UPDATE acquire_held_files SET source_task_id = ?1, created_at = 10 WHERE path = ?2",
+                rusqlite::params![task, file],
+            )?;
+            tx.execute(
+                "INSERT INTO download_import_decisions (task_id, outcome, missing_positions, \
+                 decided_at, files_held) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![task, outcome, missing, at, held],
+            )?;
+        }
+        Ok(())
+    })
+    .await
+    .expect("tasks and decisions");
+
+    acquire.held.tend().await;
+
+    assert_eq!(held_file(db, "full.flac").0, "discarded");
+    assert!(
+        !held_dir.join("full.flac").exists(),
+        "its held copy is removed"
+    );
+    assert_eq!(retry_of(db, entries[0]).0, "resolved");
+    for (file, entry) in [
+        ("partial.flac", entries[1]),
+        ("earlier.flac", entries[2]),
+        ("same.flac", entries[3]),
+    ] {
+        assert_eq!(held_file(db, file).0, "held", "{file} waits for a person");
+        assert!(held_dir.join(file).is_file());
+        assert_eq!(retry_of(db, entry).0, "held");
+    }
+}
+
 #[tokio::test]
 async fn held_files_the_library_could_not_take_are_retried_by_themselves() {
     use droppedneedle_kernel::clock::Clock as _;
