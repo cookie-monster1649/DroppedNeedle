@@ -40,6 +40,16 @@ impl Operations {
         })
     }
 
+    /// Fork: albums the library holds twice. Blocking.
+    pub fn duplicate_albums(
+        &self,
+    ) -> Result<Vec<crate::edition::duplicates::DuplicateGroup>, OperationError> {
+        self.db
+            .read_blocking("operations.duplicate_albums", |conn| {
+                Ok::<_, OperationError>(crate::edition::duplicates::duplicate_groups(conn)?)
+            })
+    }
+
     /// One page of the albums whose match waits for a person. Blocking.
     pub fn waiting_albums(
         &self,
