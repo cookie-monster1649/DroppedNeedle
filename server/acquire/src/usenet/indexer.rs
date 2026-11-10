@@ -76,7 +76,9 @@ impl Indexer for PluginIndexers {
             let usenet = SourceTag::Usenet.to_string();
             let found = match query {
                 IndexerQuery::Track { artist, title } => {
-                    self.host.search_track(&usenet, artist, title, None).await
+                    self.host
+                        .search_track(&usenet, artist, title, None, None)
+                        .await
                 }
                 IndexerQuery::Album(target) => {
                     self.host

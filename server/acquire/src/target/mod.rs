@@ -359,6 +359,13 @@ impl Targets {
             .as_deref()
             .map(|mbid| mbid.trim().to_ascii_lowercase())
             .unwrap_or_default();
+        // Fork: a want's asked length, from the provider that named it, so
+        // a lone-track search can tell the song from a longer or shorter
+        // version.
+        let want_seconds = crate::requests::ledger::is_want_key(&recording)
+            .then(|| plan.expected_tracks.first())
+            .flatten()
+            .and_then(|track| track.duration_seconds);
         let lone = |reason: TrackReason| SearchTarget {
             artist: task.artist_name.clone(),
             album_title: String::new(),
@@ -376,7 +383,7 @@ impl Targets {
             track: Some(TrackWant {
                 artist: task.artist_name.clone(),
                 title: title.clone(),
-                duration_seconds: None,
+                duration_seconds: want_seconds,
                 no_album: Some(reason),
             }),
         };
