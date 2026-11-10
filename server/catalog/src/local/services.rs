@@ -504,11 +504,13 @@ pub async fn get_album(
         .album_page_state(&record.id)
         .await?
         .ok_or(LibraryFailure::NotFound)?;
+    let provider_match = deps.catalog.album_provider_match(&record.id).await?;
     let album = album_views(deps, user_id, vec![record])
         .await?
         .pop()
         .ok_or(LibraryFailure::NotFound)?;
     Ok(AlbumDetailView {
+        provider_match: provider_match.map(Into::into),
         album,
         management_hold: hold.map(|hold| ManagementHoldView {
             kind: hold.kind,

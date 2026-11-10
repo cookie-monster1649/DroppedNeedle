@@ -7937,6 +7937,159 @@ async fn check_albums_lists_an_album_held_twice_as_duplicates() {
     assert_eq!(group["surplus_track_ids"], json!([surplus]), "{body}");
 }
 
+/// Fork: an album MusicBrainz has nothing for gets a Deezer best guess in
+/// Check albums. "Use this" gives its page the match's label, genres and
+/// track list (with the tracks it lacks marked) and links its file to
+/// Deezer; "Not it" on an album with nothing to decide is a 404.
+#[tokio::test]
+async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
+    use droppedneedle_library::provider_match::ProviderMatches;
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::test_support::ScriptedWire;
+
+    let rig = Rig::start("lib-check-deezer").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-d/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-d/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    app.seed_with(
+        "INSERT INTO library_album_match_state (local_album_id, state, reason_code, \
+         candidates_json, updated_at) VALUES (?1, 'unmatched', 'NO_CANDIDATE', '[]', 1)",
+        rusqlite::params![album],
+    )
+    .await;
+    let (status, detail) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["provider_match"], Value::Null, "{detail}");
+    let (status, tracks) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracks}");
+    let held = &tracks["items"][0];
+    let seconds = held["duration_seconds"].as_f64().unwrap_or(200.0).round() as i64;
+
+    let wire = Arc::new(ScriptedWire::new());
+    let json_type = [("content-type", "application/json")];
+    wire.answer(
+        "http://127.0.0.1:9/deezer/search/album",
+        200,
+        &json_type,
+        json!({"data": [{"id": 42, "title": detail["title"], "nb_tracks": 2,
+            "artist": {"id": 7, "name": detail["artist_name"]}}]})
+        .to_string(),
+    );
+    wire.answer(
+        "http://127.0.0.1:9/deezer/album/42",
+        200,
+        &json_type,
+        json!({
+            "id": 42, "title": detail["title"], "upc": "0123", "label": "Own Label",
+            "release_date": "2019-05-03", "record_type": "album",
+            "cover_xl": "http://127.0.0.1:9/cover.jpg", "link": "https://www.deezer.com/album/42",
+            "genres": {"data": [{"name": "Jazz"}]},
+            "artist": {"id": 7, "name": detail["artist_name"]},
+            "tracks": {"data": [
+                {"id": 1001, "title": held["title"], "duration": seconds},
+                {"id": 1002, "title": "A Song Not Held", "duration": 100}
+            ]}
+        })
+        .to_string(),
+    );
+    let matches = ProviderMatches::new(
+        droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+            .expect("database opens"),
+        Providers::unpaced(wire.clone()).previews.clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+    assert_eq!(matches.suggest_some(10).await, Ok(1));
+
+    let (status, body) = app
+        .call(
+            "GET",
+            "/api/v3/library/unconfirmed?state=unmatched",
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let guess = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|row| row["album_id"] == json!(album))
+        .map(|row| row["provider_guess"].clone())
+        .expect("album listed");
+    assert_eq!(guess["provider"], json!("deezer"), "{body}");
+    assert_eq!(guess["provider_album_id"], json!("42"), "{body}");
+    assert_eq!(guess["year"], json!(2019), "{body}");
+    assert_eq!(guess["track_count"], json!(2), "{body}");
+    assert_eq!(guess["matched_files"], json!(1), "{body}");
+
+    let path = format!("/api/v3/library/albums/{album}/provider-match");
+    let (status, body) = app
+        .call("PUT", &path, &headers, Some(json!({"accept": true})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], json!("confirmed"), "{body}");
+
+    let (status, detail) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let found = &detail["provider_match"];
+    assert_eq!(found["label"], json!("Own Label"), "{detail}");
+    assert_eq!(found["upc"], json!("0123"), "{detail}");
+    assert_eq!(found["genres"], json!(["Jazz"]), "{detail}");
+    assert_eq!(found["tracks"][0]["track_id"], json!(track), "{detail}");
+    assert_eq!(found["tracks"][1]["track_id"], Value::Null, "{detail}");
+    let links: i64 = app
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM local_entity_source_links WHERE local_track_id = ?1 \
+             AND provider = 'deezer' AND external_id = '1001'",
+            [&track],
+            |row| row.get(0),
+        )
+        .expect("links");
+    assert_eq!(links, 1, "the file is linked to its Deezer track");
+
+    let (status, body) = app
+        .call(
+            "PUT",
+            "/api/v3/library/albums/no-such-album/provider-match",
+            &headers,
+            Some(json!({"accept": false})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
 /// Fork: an album nothing fits still shows its closest MusicBrainz
 /// candidate in Check albums, as a suggestion to take or pass on; one with
 /// no candidate shows none.

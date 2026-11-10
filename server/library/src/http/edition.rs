@@ -94,6 +94,7 @@ pub fn routes() -> Routes<LibraryServices> {
         .curator(routes!(undo_edition_tags))
         .user(routes!(list_unconfirmed))
         .curator(routes!(list_duplicates))
+        .curator(routes!(decide_provider_match))
         .user(routes!(mark_looks_wrong))
         .curator(routes!(clear_looks_wrong))
 }
@@ -568,6 +569,52 @@ pub struct WaitingAlbumView {
     pub file_count: u32,
     /// How many people marked the match "Looks wrong".
     pub looks_wrong_count: u32,
+    /// Fork: for an album nothing on MusicBrainz fits, the best guess from
+    /// another catalogue (Deezer), when one was found.
+    pub provider_guess: Option<ProviderGuessView>,
+}
+
+/// Fork: an album's best guess from another catalogue.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProviderGuessView {
+    /// `deezer`.
+    pub provider: String,
+    pub provider_album_id: String,
+    pub title: String,
+    pub artist_name: String,
+    pub year: Option<i32>,
+    /// `album`, `ep`, `single` or `compile`.
+    pub record_type: Option<String>,
+    /// The provider's cover, to show beside the guess.
+    pub cover_url: Option<String>,
+    /// The album's page on the provider.
+    pub url: String,
+    /// Tracks on the provider's album.
+    pub track_count: u32,
+    /// The album's files its track list accounts for.
+    pub matched_files: u32,
+    /// 0 to 1.
+    pub score: f64,
+}
+
+impl ProviderGuessView {
+    fn of(found: &crate::provider_match::ProviderMatch, matched_files: u32) -> Self {
+        Self {
+            provider: found.provider.clone(),
+            provider_album_id: found.provider_album_id.clone(),
+            title: found.title.clone(),
+            artist_name: found.artist_name.clone(),
+            year: found.year(),
+            record_type: found.record_type.clone(),
+            cover_url: found.cover_url.clone(),
+            url: found.link_url.clone().unwrap_or_else(|| {
+                crate::provider_match::deezer_url("album", &found.provider_album_id)
+            }),
+            track_count: u32::try_from(found.tracks.len()).unwrap_or(u32::MAX),
+            matched_files,
+            score: found.score,
+        }
+    }
 }
 
 /// The guess an album holds, as its row in the list names it.
@@ -594,6 +641,7 @@ impl From<WaitingAlbum> for WaitingAlbumView {
             }),
             file_count: album.file_count,
             looks_wrong_count: album.looks_wrong,
+            provider_guess: None,
             album_id: album.local_album_id,
             title: album.title,
             artist_name: album.artist_name,
@@ -1102,6 +1150,7 @@ pub async fn remove_extras(
 )]
 pub async fn list_unconfirmed(
     State(ops): State<Operations>,
+    State(matches): State<crate::provider_match::ProviderMatches>,
     _caller: User,
     ValidQuery(query): ValidQuery<UnconfirmedQuery>,
 ) -> Result<Json<Page<WaitingAlbumView>>, ApiError> {
@@ -1113,7 +1162,16 @@ pub async fn list_unconfirmed(
     let paging = PageRequest::<u32>::read(query.limit, query.cursor.as_deref(), 50, PAGE_MAX)?;
     let (limit, offset) = (paging.limit as u32, paging.after.unwrap_or(0));
     let (items, total) = blocking(move || ops.waiting_albums(which, limit, offset)).await?;
-    let items = items.into_iter().map(Into::into).collect();
+    let mut items: Vec<WaitingAlbumView> = items.into_iter().map(Into::into).collect();
+    if matches!(which, Waiting::Unmatched) {
+        let ids = items.iter().map(|item| item.album_id.clone()).collect();
+        let found = blocking(move || matches.suggestions_for(ids)).await?;
+        for item in &mut items {
+            if let Some((found, matched)) = found.get(&item.album_id) {
+                item.provider_guess = Some(ProviderGuessView::of(found, *matched));
+            }
+        }
+    }
     Ok(Json(Page::at_offset(
         items,
         offset.into(),
@@ -1236,6 +1294,55 @@ pub async fn list_duplicates(
     let groups = blocking(move || ops.duplicate_albums()).await?;
     Ok(Json(DuplicatesView {
         groups: groups.into_iter().map(Into::into).collect(),
+    }))
+}
+
+/// Fork: a person's answer to an album's best guess from another catalogue.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct ProviderMatchDecisionBody {
+    /// True for "Use this", false for "Not it".
+    pub accept: bool,
+}
+
+/// Fork: an album's match from another catalogue, once decided.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ProviderMatchDecisionView {
+    pub album_id: String,
+    /// `confirmed` or `declined`.
+    pub state: String,
+    pub guess: ProviderGuessView,
+}
+
+/// Fork: accept an album's best guess from another catalogue ("Use this"),
+/// or turn it down ("Not it"). Accepting gives the album the guess's
+/// cover, year, label, genres and track list, and links the album and the
+/// files the track list accounts for to it.
+#[utoipa::path(
+    put,
+    tag = "library management",
+    path = "/api/v3/library/albums/{album_id}/provider-match",
+    params(("album_id" = String, Path, description = "Local album id")),
+    request_body = ProviderMatchDecisionBody,
+    responses(
+        (status = 200, description = "The decided match", body = ProviderMatchDecisionView),
+        (status = 400, description = "No `accept` given"),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "Curator role required"),
+        (status = 404, description = "The album has no suggestion (NO_PROVIDER_MATCH)"),
+    )
+)]
+pub async fn decide_provider_match(
+    State(matches): State<crate::provider_match::ProviderMatches>,
+    caller: Curator,
+    Path(album_id): Path<String>,
+    ValidJson(body): ValidJson<ProviderMatchDecisionBody>,
+) -> Result<Json<ProviderMatchDecisionView>, ApiError> {
+    let user = caller.user_id().to_owned();
+    let found = blocking(move || matches.decide(&album_id, body.accept, &user)).await?;
+    Ok(Json(ProviderMatchDecisionView {
+        album_id: found.album_id.clone(),
+        state: found.state.as_str().to_owned(),
+        guess: ProviderGuessView::of(&found, 0),
     }))
 }
 

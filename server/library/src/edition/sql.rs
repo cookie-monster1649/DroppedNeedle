@@ -59,25 +59,33 @@ droppedneedle_kernel::sql! {
     pub(super) IDENTIFYING = "SELECT EXISTS(SELECT 1 FROM library_identify_jobs WHERE local_album_id = ?1 \
          AND state IN ('queued', 'running', 'deferred'))";
     /// Fork: the indexed files of listed albums that share their folded
-    /// album artist and title with another listed album: split halves and
-    /// copies kept twice, for Check albums' Duplicates list.
+    /// album artist and title with another listed album, or their Deezer
+    /// match with one (singles of one release): split halves and copies
+    /// kept twice, for Check albums' Duplicates list.
     pub(super) DUPLICATE_ALBUM_FILES = "SELECT a.id AS album_id, a.title AS album_title, \
          COALESCE(a.album_artist_name, '') AS artist_name, a.row_revision AS album_revision, \
          a.album_artist_name_folded AS artist_folded, a.title_folded AS title_folded, \
          e.release_group_mbid AS release_group_mbid, t.id AS track_id, t.title AS track_title, \
          COALESCE(t.title_folded, '') AS track_title_folded, t.file_format AS file_format, \
          t.bit_rate AS bit_rate, t.bit_depth AS bit_depth, t.duration_seconds AS duration_seconds, \
-         t.row_revision AS track_revision \
+         t.row_revision AS track_revision, pm.provider_album_id AS provider_album_id \
          FROM local_albums a \
          CROSS JOIN local_tracks t INDEXED BY idx_local_tracks_album_availability \
          LEFT JOIN local_album_external_identities e \
            ON e.local_album_id = a.id AND e.provider = 'musicbrainz' \
+         LEFT JOIN library_album_provider_matches pm ON pm.local_album_id = a.id \
+           AND pm.match_state IN ('suggested', 'confirmed') \
          WHERE t.local_album_id = a.id AND t.availability = 'indexed' \
            AND a.album_artist_name_folded IS NOT NULL AND a.title_folded IS NOT NULL \
            AND " + (crate::listed_album!("a")) + " \
-           AND EXISTS (SELECT 1 FROM local_albums b WHERE b.id != a.id \
+           AND (EXISTS (SELECT 1 FROM local_albums b WHERE b.id != a.id \
              AND b.album_artist_name_folded = a.album_artist_name_folded \
              AND b.title_folded = a.title_folded AND " + (crate::listed_album!("b")) + ") \
+           OR EXISTS (SELECT 1 FROM library_album_provider_matches pb \
+             JOIN local_albums b ON b.id = pb.local_album_id \
+             WHERE pb.provider = pm.provider AND pb.provider_album_id = pm.provider_album_id \
+             AND pb.local_album_id != a.id AND pb.match_state IN ('suggested', 'confirmed') \
+             AND " + (crate::listed_album!("b")) + ")) \
          ORDER BY a.album_artist_name_folded, a.title_folded, a.id, t.id";
     pub(super) WAITING_ALBUM_COUNT = "SELECT COUNT(*) FROM library_album_match_state s \
          JOIN local_albums a ON a.id = s.local_album_id \
@@ -184,6 +192,7 @@ droppedneedle_kernel::sql! {
         bit_depth: Option<i64>,
         duration_seconds: Option<f64>,
         track_revision: i64,
+        provider_album_id: Option<String>,
     }
     pub(super) row WaitingAlbumRow for [WAITING_ALBUM_PAGE] {
         local_album_id: String,

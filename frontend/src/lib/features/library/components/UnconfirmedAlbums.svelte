@@ -2,7 +2,8 @@
 	One Check albums list: albums whose edition is a best guess, that
 	nothing fits, or that someone marked "Looks wrong". Each row shows the
 	files and, for a guess, what "That's right" confirms. An album nothing
-	fits shows its closest candidate, if any, with "Use this" (fork). Compare opens the
+	fits shows its closest candidate, if any, with "Use this" (fork); with no
+	candidate, Deezer's closest album, with "Use this" and "Not it". Compare opens the
 	album's edition sheet, and Done there comes back here at the next album.
 -->
 <script lang="ts" module>
@@ -25,6 +26,7 @@
 		createChooseAlbumEditionMutation,
 		createClearLooksWrongMutation,
 		createConfirmAlbumEditionMutation,
+		createDecideProviderMatchMutation,
 		createUndoAlbumEditionMutation,
 		getWaitingAlbumsQuery,
 		type WaitingAlbum
@@ -52,9 +54,12 @@
 	const undo = createUndoAlbumEditionMutation();
 	const choose = createChooseAlbumEditionMutation();
 	const clearMarks = createClearLooksWrongMutation();
+	const decide = createDecideProviderMatchMutation();
 	const items = $derived(query.data?.pages.flatMap((page) => page.items) ?? []);
 	const total = $derived(query.data?.pages[0]?.total ?? 0);
-	const busy = $derived(confirm.isPending || clearMarks.isPending || choose.isPending);
+	const busy = $derived(
+		confirm.isPending || clearMarks.isPending || choose.isPending || decide.isPending
+	);
 
 	const EMPTY: Record<WaitingView, string> = {
 		unconfirmed: 'No best guesses. Every matched album is confirmed.',
@@ -158,6 +163,42 @@
 		}
 	}
 
+	// Fork: Deezer's closest album, for an album with no MusicBrainz candidate.
+	const fromDeezer = (item: WaitingAlbum) =>
+		item.state === 'unmatched' && !needsMatching(item) && !suggested(item)
+			? (item.provider_guess ?? null)
+			: null;
+
+	async function decideGuess(item: WaitingAlbum, accept: boolean): Promise<void> {
+		const found = item.provider_guess;
+		if (!found) return;
+		const next = after(item.album_id);
+		try {
+			await decide.mutateAsync({ userId: userId(), localId: item.album_id, accept });
+			toastStore.show({
+				message: accept
+					? `${item.title} now uses ${found.title} from Deezer.`
+					: `Deezer's guess for ${item.title} is set aside.`,
+				type: 'success'
+			});
+			void moveTo(next);
+		} catch (error) {
+			failed(error, "This guess couldn't be saved.");
+		}
+	}
+
+	function providerLine(item: WaitingAlbum): string {
+		const found = item.provider_guess;
+		if (!found) return '';
+		return [
+			found.artist_name,
+			found.year ? String(found.year) : '',
+			`${found.matched_files} of ${count(item.file_count, 'file', 'files')} on its ${count(found.track_count, 'track', 'tracks')}`
+		]
+			.filter(Boolean)
+			.join(' · ');
+	}
+
 	async function looksFine(item: WaitingAlbum): Promise<void> {
 		const next = after(item.album_id);
 		try {
@@ -177,6 +218,7 @@
 	function stateLabel(item: WaitingAlbum): string {
 		if (needsMatching(item)) return NEEDS_MATCHING;
 		if (suggested(item)) return 'Best guess';
+		if (fromDeezer(item)) return 'Best guess · from Deezer';
 		if (item.state === 'unmatched') return 'Not found';
 		if (item.state === 'unconfirmed') return 'Best guess';
 		if (item.state === 'chosen') return 'Chosen by a person';
@@ -202,6 +244,7 @@
 			<ul class="space-y-2" bind:this={list}>
 				{#each items as item (item.album_id)}
 					{@const guess = item.guess}
+					{@const deezer = fromDeezer(item)}
 					<li
 						data-album={item.album_id}
 						class="grid gap-3 rounded-box border border-base-content/10 bg-base-100 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-center"
@@ -242,17 +285,27 @@
 									className="h-14 w-14 shrink-0 border border-base-content/10"
 									retryOnError={false}
 								/>
+							{:else if deezer}
+								<AlbumImage
+									customUrl={deezer.cover_url ?? undefined}
+									alt=""
+									size="sm"
+									rounded="md"
+									className="h-14 w-14 shrink-0 border border-base-content/10"
+									retryOnError={false}
+								/>
 							{/if}
 							<div class="min-w-0">
 								<p
 									class="flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase {item.state ===
 										'unmatched' &&
 									!needsMatching(item) &&
-									!suggested(item)
+									!suggested(item) &&
+									!deezer
 										? 'text-error'
 										: 'text-warning'}"
 								>
-									{#if item.state === 'unmatched' && !needsMatching(item) && !suggested(item)}
+									{#if item.state === 'unmatched' && !needsMatching(item) && !suggested(item) && !deezer}
 										<CircleAlert class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
 									{:else}
 										<CircleHelp class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -266,8 +319,18 @@
 											.filter(Boolean)
 											.join(' · ')}
 									</p>
+								{:else if deezer}
+									<a
+										class="block truncate font-medium hover:underline"
+										href={deezer.url}
+										target="_blank"
+										rel="noopener noreferrer">{deezer.title}</a
+									>
+									<p class="truncate text-xs text-muted">{providerLine(item)}</p>
 								{/if}
-								<p class="mt-1 text-sm text-muted">{item.reason.message}</p>
+								{#if !deezer}
+									<p class="mt-1 text-sm text-muted">{item.reason.message}</p>
+								{/if}
 								{#if item.looks_wrong_count > 0}
 									<p class="mt-1 flex items-center gap-1 text-xs text-muted">
 										<Flag class="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -296,6 +359,22 @@
 									disabled={busy}
 									aria-label={`Use this: ${item.title} is ${item.guess?.title ?? 'this edition'}`}
 									onclick={() => void useThis(item)}>Use this</Button
+								>
+							{/if}
+							{#if authStore.isTrusted && deezer}
+								<Button
+									variant="primary"
+									size="sm"
+									disabled={busy}
+									aria-label={`Use this: ${item.title} is ${deezer.title} on Deezer`}
+									onclick={() => void decideGuess(item, true)}>Use this</Button
+								>
+								<Button
+									variant="ghost"
+									size="sm"
+									disabled={busy}
+									aria-label={`Not it: ${item.title} is not ${deezer.title}`}
+									onclick={() => void decideGuess(item, false)}>Not it</Button
 								>
 							{/if}
 							{#if authStore.isTrusted && view === 'looks_wrong'}

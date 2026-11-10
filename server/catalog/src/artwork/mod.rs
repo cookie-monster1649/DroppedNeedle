@@ -115,6 +115,8 @@ pub const ARTIST_FLIGHT_LIMIT: Duration = Duration::from_secs(60);
 pub const RESIZE_PERMITS: usize = 3;
 /// Largest archive image accepted.
 pub const MAX_REMOTE_BYTES: usize = 20 * 1024 * 1024;
+/// Fork: source label for a cover from an album's Deezer match.
+const PROVIDER_COVER_SOURCE: &str = "deezer";
 /// Source label for artist images.
 pub const ARTIST_SOURCE: &str = "artist-image";
 /// Source label for TheAudioDB album thumbnails served as covers.
@@ -538,6 +540,29 @@ impl ArtworkService {
         {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+    }
+
+    /// Fork: the cover of an album's accepted Deezer match, downloaded once
+    /// and kept in the artwork cache under its address.
+    async fn provider_cover(&self, url: &str, size: Option<&str>) -> Option<CoverBytes> {
+        let key = format!("provider-cover:{url}");
+        if !self.settled(&key).await {
+            match self.images.fetch(url, RequestPriority::UserInitiated).await {
+                ImageFetch::Found(art) => {
+                    self.cache
+                        .put(Some(&key), art.bytes, &art.content_type)
+                        .await;
+                }
+                ImageFetch::Unusable => self.cache.put_miss(&key, MISS_TTL_SECS).await,
+                ImageFetch::Failed => {
+                    self.cache.put_unreachable(&key, OUTAGE_TTL_SECS).await;
+                }
+            }
+        }
+        let cover = self
+            .cached_image(&key, PROVIDER_COVER_SOURCE, CoverOrigin::Remote)
+            .await?;
+        Some(self.sized(cover, size).await)
     }
 
     /// A cached image by key, labelled with `source` and `origin`.
@@ -1456,9 +1481,10 @@ impl CoverArt for ArtworkService {
     ) -> BoxFuture<'a, Option<CoverBytes>> {
         Box::pin(async move {
             match self.local.album(album_id).await {
-                Ok(Some(context)) => match &context.local {
-                    Some(art) => self.serve_local(art, size).await,
-                    None => None,
+                Ok(Some(context)) => match (&context.local, &context.provider_cover) {
+                    (Some(art), _) => self.serve_local(art, size).await,
+                    (None, Some(url)) => self.provider_cover(url, size).await,
+                    (None, None) => None,
                 },
                 Ok(None) => None,
                 Err(error) => {

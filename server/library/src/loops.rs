@@ -61,7 +61,15 @@ pub const LOOPS: &[&str] = &[
     RECYCLE_EXPIRY_JOB,
     LEFTOVERS_JOB,
     SAME_FOLDER_JOB,
+    PROVIDER_MATCH_JOB,
 ];
+
+/// Fork: best guesses from Deezer for albums MusicBrainz has nothing for,
+/// a few albums a turn.
+pub const PROVIDER_MATCH_JOB: &str = "library-provider-matches";
+const PROVIDER_MATCH_EVERY: Duration = Duration::from_secs(300);
+const PROVIDER_MATCH_BATCH: u32 = 10;
+const PROVIDER_MATCH_FAILED: &str = "PROVIDER_MATCH_FAILED";
 
 /// Fork: the merge of albums that are plainly one album (same folder, same
 /// artist and title), and how often it looks.
@@ -767,6 +775,22 @@ pub(crate) fn start_loops(
         })? {
             Ok(_) => Ok(Next::Continue),
             Err(error) => Err(TickError::new(SAME_FOLDER_FAILED, error.to_string())),
+        },
+    )?;
+    let (matches, match_handle) = (services.provider_matches.clone(), Handle::current());
+    supervisor.periodic_blocking(
+        PROVIDER_MATCH_JOB,
+        Schedule::new(PROVIDER_MATCH_EVERY)
+            .with_initial_delay(Duration::from_secs(120))
+            .with_jitter(Duration::from_secs(30))
+            .with_backoff(Duration::from_secs(300), Duration::from_secs(3600)),
+        move |_ctx| match drive(
+            &match_handle,
+            "provider matches",
+            matches.suggest_some(PROVIDER_MATCH_BATCH),
+        )? {
+            Ok(_) => Ok(Next::Continue),
+            Err(error) => Err(TickError::new(PROVIDER_MATCH_FAILED, error)),
         },
     )?;
     let publish = services.publishing.clone();
