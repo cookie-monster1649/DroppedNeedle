@@ -359,11 +359,14 @@ droppedneedle_kernel::sql! {
     pub(crate) ALBUM_BY_GROUP = "SELECT " + ALBUM_COLUMNS + " " + ALBUM_JOINS
         + " WHERE a.id = (" + (copy_of_group!("= lower(?1)")) + ") GROUP BY a.id";
     /// Other listed albums of an album's release group, oldest first.
+    /// Fork: only those with files. A copy emptied into the recycle bin
+    /// (as "Merge albums" leaves the copies it discards from) stays listed
+    /// so Put back can reach it, but it is no copy the library holds.
     pub(crate) ALBUM_COPIES = "SELECT " + ALBUM_COLUMNS + " " + ALBUM_JOINS
         + " WHERE ae.release_group_mbid = \
         (SELECT i.release_group_mbid FROM local_album_external_identities i \
          WHERE i.local_album_id = ? AND " + (musicbrainz!("i")) + ") \
-        AND a.id != ? AND " + (listed_album!("a"))
+        AND a.id != ? AND a.has_indexed_track = 1 AND " + (listed_album!("a"))
         + " GROUP BY a.id ORDER BY a.created_at ASC, a.id ASC";
     /// A page of the listed albums an artist leads, by title.
     family LED_ALBUM_PAGE = led_album_page;

@@ -33,8 +33,8 @@ pub enum PlaylistRowState {
     Failed,
     /// Landed; the playlist links it within a couple of minutes.
     Imported,
-    /// Its file was removed by hand; it is not fetched again until the file
-    /// is put back from the recycle bin.
+    /// Its file was removed by hand. Syncs don't ask for it again; a person
+    /// may, and that ask fetches it anew.
     Removed,
 }
 
@@ -114,25 +114,35 @@ pub async fn playlist_rows(
             let mut declined = conn.prepare_cached(sql::ROW_DECLINED.text())?;
             let mut rows = Vec::with_capacity(entries.len());
             for (track_id, recording, artist, title, linked, spotify) in entries {
-                let mut removed = || -> rusqlite::Result<bool> {
-                    if artist.trim().is_empty() && title.trim().is_empty() && spotify.is_none() {
-                        return Ok(false);
-                    }
-                    declined.query_row(
-                        params![playlist_id, want_key(&artist, &title), spotify],
-                        |row| row.get(0),
-                    )
-                };
                 let state = if linked {
                     PlaylistRowState::Owned
-                } else if removed()? {
-                    PlaylistRowState::Removed
                 } else if let Some(key) = key_of(recording.as_deref(), &artist, &title) {
                     let is_held: bool = held.query_row(params![user_id, key], |row| row.get(0))?;
-                    let status: Option<String> = request
-                        .query_row(params![key], |row| row.get(0))
+                    let asked: Option<(String, i64)> = request
+                        .query_row(params![key], |row| Ok((row.get(0)?, row.get(1)?)))
                         .optional()?;
-                    state_of(is_held, status.as_deref())
+                    let removed_at: Option<i64> =
+                        if artist.trim().is_empty() && title.trim().is_empty() && spotify.is_none()
+                        {
+                            None
+                        } else {
+                            declined
+                                .query_row(
+                                    params![playlist_id, want_key(&artist, &title), spotify],
+                                    |row| row.get(0),
+                                )
+                                .optional()?
+                        };
+                    // A removal outranks the ask that fetched the file; an
+                    // ask made after it fetches the song again.
+                    match removed_at {
+                        Some(at)
+                            if !is_held && asked.as_ref().is_none_or(|(_, asked)| *asked < at) =>
+                        {
+                            PlaylistRowState::Removed
+                        }
+                        _ => state_of(is_held, asked.as_ref().map(|(status, _)| status.as_str())),
+                    }
                 } else {
                     PlaylistRowState::Missing
                 };

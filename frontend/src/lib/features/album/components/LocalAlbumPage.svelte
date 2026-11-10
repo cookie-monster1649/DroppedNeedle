@@ -144,7 +144,7 @@
 
 	// Fork: remove a wrong file, or the whole album, as on a MusicBrainz
 	// album page. The files go to the recycle bin; a playlist song whose file
-	// is removed is marked not to be fetched again until it is put back.
+	// is removed is marked so syncs never fetch it again (a person may).
 	const removeTrack = createRemoveLibraryTrackMutation();
 	let removeFileTarget = $state<TrackView | null>(null);
 	let removeFileError = $state<string | null>(null);
@@ -480,7 +480,8 @@
 		<p class="text-muted">
 			Remove <span class="font-semibold text-base-content">{album.title}</span> by
 			<span class="font-semibold text-base-content">{album.artist_name}</span> from your library? Its
-			files go to the recycle bin. Playlist songs it held are not fetched again until they are put back.
+			files go to the recycle bin. Playlist syncs won't fetch its songs again; you can still request them
+			anew.
 		</p>
 	</ConfirmDialog>
 {/if}
