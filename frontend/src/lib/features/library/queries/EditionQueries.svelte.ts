@@ -551,6 +551,19 @@ export function createClearLooksWrongMutation() {
 	}));
 }
 
+// Fork: "Use this" or "Not it" on an album's best guess from Deezer. Using
+// it changes the album's cover, year and page, so the catalogue refreshes.
+export function createDecideProviderMatchMutation() {
+	return createAppMutation(() => ({
+		mutationFn: ({ localId, accept }: EditionTarget & { accept: boolean }) =>
+			api.v3.PUT(
+				v3('/api/v3/library/albums/{album_id}/provider-match', { path: { album_id: localId } }),
+				{ accept }
+			),
+		effects: (_d, variables) => heldEditionScope(variables)
+	}));
+}
+
 export function createConfirmAlbumEditionMutation() {
 	return createAppMutation(() => ({
 		mutationFn: ({ localId, identityRevision }: GuardedEditionTarget) =>

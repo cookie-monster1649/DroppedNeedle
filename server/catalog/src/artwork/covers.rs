@@ -471,7 +471,9 @@ pub async fn artist_cover_credit(
 }
 
 /// An album's own art: the folder image or embedded picture the library
-/// scan found. Never reaches out to the network. Pass the album's
+/// scan found. Fork: an album with neither whose Deezer match a person
+/// accepted gets that match's cover, downloaded once and kept in the
+/// artwork cache. Nothing else reaches out to the network. Pass the album's
 /// `cover_version` as `v`: a matching version is cached for good, an older
 /// one revalidates.
 #[utoipa::path(

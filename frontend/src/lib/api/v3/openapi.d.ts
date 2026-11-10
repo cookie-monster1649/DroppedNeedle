@@ -3440,6 +3440,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/library/albums/{album_id}/provider-match": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Fork: accept an album's best guess from another catalogue ("Use this"),
+         *     or turn it down ("Not it"). Accepting gives the album the guess's
+         *     cover, year, label, genres and track list, and links the album and the
+         *     files the track list accounts for to it.
+         */
+        put: operations["decide_provider_match"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/library/albums/{album_id}/reidentification/releases": {
         parameters: {
             query?: never;
@@ -3636,7 +3658,9 @@ export interface paths {
         };
         /**
          * An album's own art: the folder image or embedded picture the library
-         *     scan found. Never reaches out to the network. Pass the album's
+         *     scan found. Fork: an album with neither whose Deezer match a person
+         *     accepted gets that match's cover, downloaded once and kept in the
+         *     artwork cache. Nothing else reaches out to the network. Pass the album's
          *     `cover_version` as `v`: a matching version is cached for good, an older
          *     one revalidates.
          */
@@ -10168,6 +10192,11 @@ export interface components {
             /** @description The album's pending identification review, if any. */
             pending_review_id?: string | null;
             /**
+             * @description Fork: the album's accepted match from another catalogue (Deezer),
+             *     for an album MusicBrainz does not know.
+             */
+            provider_match?: null | components["schemas"]["AlbumProviderMatchView"];
+            /**
              * Format: int64
              * @description The album row's revision, which a change to its grouping and its
              *     removal echo.
@@ -10372,6 +10401,28 @@ export interface components {
             provider?: string | null;
             /** @description Sampled tracks in album order. */
             tracks?: components["schemas"]["PreviewTrackItem"][];
+        };
+        /** @description Fork: an album's accepted match from another catalogue. */
+        AlbumProviderMatchView: {
+            artist_name: string;
+            artist_picture_url?: string | null;
+            genres: string[];
+            label?: string | null;
+            /** @description `deezer`. */
+            provider: string;
+            provider_album_id: string;
+            provider_artist_id?: string | null;
+            /** @description `album`, `ep`, `single` or `compile`. */
+            record_type?: string | null;
+            /** @description `YYYY-MM-DD`. */
+            release_date?: string | null;
+            title: string;
+            /** @description The provider's track list, in album order. */
+            tracks: components["schemas"]["ProviderTrackView"][];
+            /** @description The barcode. */
+            upc?: string | null;
+            /** @description The album's page on the provider. */
+            url: string;
         };
         /**
          * @description One album as a row in a list: discover shelves, charts and the
@@ -19194,6 +19245,7 @@ export interface components {
                  * @description How many people marked the match "Looks wrong".
                  */
                 looks_wrong_count: number;
+                provider_guess?: null | components["schemas"]["ProviderGuessView"];
                 reason: components["schemas"]["ReasonView"];
                 release_group_mbid?: string | null;
                 release_mbid?: string | null;
@@ -20280,6 +20332,37 @@ export interface components {
          * @enum {string}
          */
         ProviderDataSource: "musicbrainz" | "listenbrainz" | "lastfm" | "audiodb" | "wikidata" | "purchase" | "plugins" | "youtube" | "lrclib" | "previews";
+        /** @description Fork: an album's best guess from another catalogue. */
+        ProviderGuessView: {
+            artist_name: string;
+            /** @description The provider's cover, to show beside the guess. */
+            cover_url?: string | null;
+            /**
+             * Format: int32
+             * @description The album's files its track list accounts for.
+             */
+            matched_files: number;
+            /** @description `deezer`. */
+            provider: string;
+            provider_album_id: string;
+            /** @description `album`, `ep`, `single` or `compile`. */
+            record_type?: string | null;
+            /**
+             * Format: double
+             * @description 0 to 1.
+             */
+            score: number;
+            title: string;
+            /**
+             * Format: int32
+             * @description Tracks on the provider's album.
+             */
+            track_count: number;
+            /** @description The album's page on the provider. */
+            url: string;
+            /** Format: int32 */
+            year?: number | null;
+        };
         /** @description One provider's limiter posture. */
         ProviderLimiterView: {
             /**
@@ -20299,6 +20382,18 @@ export interface components {
             remaining: number;
             /** @description Provider name, e.g. `musicbrainz`. */
             source: string;
+        };
+        /** @description Fork: a person's answer to an album's best guess from another catalogue. */
+        ProviderMatchDecisionBody: {
+            /** @description True for "Use this", false for "Not it". */
+            accept: boolean;
+        };
+        /** @description Fork: an album's match from another catalogue, once decided. */
+        ProviderMatchDecisionView: {
+            album_id: string;
+            guess: components["schemas"]["ProviderGuessView"];
+            /** @description `confirmed` or `declined`. */
+            state: string;
         };
         /** @description What one provider holds in the cache file. */
         ProviderSourceStats: {
@@ -20321,6 +20416,20 @@ export interface components {
             calls: components["schemas"]["ProviderCallsView"][];
             /** @description Limiter posture per rate row, in name order. */
             limiters: components["schemas"]["ProviderLimiterView"][];
+        };
+        /** @description Fork: one track of a provider's album, and the file that is it. */
+        ProviderTrackView: {
+            /** Format: int64 */
+            disc: number;
+            /** Format: double */
+            duration_seconds?: number | null;
+            isrc?: string | null;
+            /** Format: int64 */
+            position: number;
+            provider_track_id: string;
+            title: string;
+            /** @description The album's file that is this track; none when the album lacks it. */
+            track_id?: string | null;
         };
         /** @description Single Prowlarr connection (Prowlarr multiplexes its own indexers). */
         ProwlarrConnection: {
@@ -24711,6 +24820,11 @@ export interface components {
              * @description How many people marked the match "Looks wrong".
              */
             looks_wrong_count: number;
+            /**
+             * @description Fork: for an album nothing on MusicBrainz fits, the best guess from
+             *     another catalogue (Deezer), when one was found.
+             */
+            provider_guess?: null | components["schemas"]["ProviderGuessView"];
             reason: components["schemas"]["ReasonView"];
             release_group_mbid?: string | null;
             release_mbid?: string | null;
@@ -33141,6 +33255,69 @@ export interface operations {
             };
             /** @description The exclusion changed; reload and retry */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    decide_provider_match: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Local album id */
+                album_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderMatchDecisionBody"];
+            };
+        };
+        responses: {
+            /** @description The decided match */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderMatchDecisionView"];
+                };
+            };
+            /** @description No `accept` given */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Curator role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description The album has no suggestion (NO_PROVIDER_MATCH) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

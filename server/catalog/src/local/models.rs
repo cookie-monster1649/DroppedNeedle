@@ -141,6 +141,81 @@ pub struct AlbumDetailView {
     /// Fork: the Spotify album its tracks came from, for "Add to
     /// MusicBrainz" and "Match to MusicBrainz" from Spotify's data.
     pub spotify_album_id: Option<String>,
+    /// Fork: the album's accepted match from another catalogue (Deezer),
+    /// for an album MusicBrainz does not know.
+    pub provider_match: Option<AlbumProviderMatchView>,
+}
+
+/// Fork: an album's accepted match from another catalogue.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AlbumProviderMatchView {
+    /// `deezer`.
+    pub provider: String,
+    pub provider_album_id: String,
+    /// The album's page on the provider.
+    pub url: String,
+    pub title: String,
+    pub artist_name: String,
+    pub provider_artist_id: Option<String>,
+    pub artist_picture_url: Option<String>,
+    /// `YYYY-MM-DD`.
+    pub release_date: Option<String>,
+    pub label: Option<String>,
+    /// The barcode.
+    pub upc: Option<String>,
+    /// `album`, `ep`, `single` or `compile`.
+    pub record_type: Option<String>,
+    pub genres: Vec<String>,
+    /// The provider's track list, in album order.
+    pub tracks: Vec<ProviderTrackView>,
+}
+
+/// Fork: one track of a provider's album, and the file that is it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ProviderTrackView {
+    pub provider_track_id: String,
+    pub title: String,
+    pub duration_seconds: Option<f64>,
+    pub disc: i64,
+    pub position: i64,
+    pub isrc: Option<String>,
+    /// The album's file that is this track; none when the album lacks it.
+    pub track_id: Option<String>,
+}
+
+impl From<droppedneedle_library::provider_match::AlbumProviderPage> for AlbumProviderMatchView {
+    fn from(page: droppedneedle_library::provider_match::AlbumProviderPage) -> Self {
+        let found = page.found;
+        Self {
+            url: found.link_url.clone().unwrap_or_else(|| {
+                droppedneedle_library::provider_match::deezer_url("album", &found.provider_album_id)
+            }),
+            provider: found.provider,
+            provider_album_id: found.provider_album_id,
+            title: found.title,
+            artist_name: found.artist_name,
+            provider_artist_id: found.provider_artist_id,
+            artist_picture_url: found.artist_picture_url,
+            release_date: found.release_date,
+            label: found.label,
+            upc: found.upc,
+            record_type: found.record_type,
+            genres: found.genres,
+            tracks: page
+                .tracks
+                .into_iter()
+                .map(|held| ProviderTrackView {
+                    provider_track_id: held.track.provider_track_id,
+                    title: held.track.title,
+                    duration_seconds: held.track.duration_seconds,
+                    disc: held.track.disc,
+                    position: held.track.position,
+                    isrc: held.track.isrc,
+                    track_id: held.track_id,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// One page of catalog albums.

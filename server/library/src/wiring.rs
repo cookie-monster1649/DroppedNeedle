@@ -426,6 +426,8 @@ pub struct LibrarySetup {
     pub publishing: Publishing,
     /// Finished downloads brought into the library.
     pub imports: Imports,
+    /// Fork: Deezer's catalogue, for albums MusicBrainz does not know.
+    pub deezer: droppedneedle_providers::preview::PreviewClient,
 }
 
 impl LibrarySetup {
@@ -465,6 +467,7 @@ impl LibrarySetup {
             Arc::new(cached(RequestPriority::UserInitiated)),
         );
         let import_acoustid = providers.acoustid.clone();
+        let deezer = providers.previews.clone();
         Self::assemble(
             platform,
             endpoints.identify,
@@ -473,9 +476,11 @@ impl LibrarySetup {
             ports,
             imports,
             import_acoustid,
+            deezer,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn assemble(
         platform: &droppedneedle_kernel::platform::Platform,
         make_providers: IdentifyFactory,
@@ -486,6 +491,7 @@ impl LibrarySetup {
             Arc<dyn super::identify::sources::ReleaseSource>,
         >,
         import_acoustid: droppedneedle_providers::acoustid::AcoustIdClient,
+        deezer: droppedneedle_providers::preview::PreviewClient,
     ) -> Result<Self, String> {
         let db = &platform.db;
         let settings =
@@ -627,6 +633,7 @@ impl LibrarySetup {
             identification,
             publishing,
             imports,
+            deezer,
         })
     }
 }
@@ -649,6 +656,8 @@ pub struct LibraryServices {
     pub management: Management,
     pub mutations: Mutations,
     pub contrib: Arc<ContributionService>,
+    /// Fork: albums' matches outside MusicBrainz.
+    pub provider_matches: crate::provider_match::ProviderMatches,
 }
 
 impl LibraryServices {
@@ -676,6 +685,11 @@ impl LibraryServices {
             identification: setup.identification.clone(),
             publishing: setup.publishing.clone(),
             operations,
+            provider_matches: crate::provider_match::ProviderMatches::new(
+                setup.db.clone(),
+                setup.deezer.clone(),
+                setup.clock.clone(),
+            ),
             setup: setup.clone(),
         }
     }
@@ -754,4 +768,5 @@ substate!(
     management: Management,
     mutations: Mutations,
     contrib: Arc<ContributionService>,
+    provider_matches: crate::provider_match::ProviderMatches,
 );

@@ -252,8 +252,14 @@ droppedneedle_kernel::sql! {
         COALESCE(SUM(t.duration_seconds), 0.0) AS total_duration_seconds, \
         COALESCE(SUM(t.file_size_bytes), 0) AS total_size_bytes, "
         + (album_primary_format!("a")) + " AS format, \
-        a.year AS year, a.is_compilation AS is_compilation, \
-        COALESCE(w.source IN ('folder','embedded'), 0) AS cover_available, \
+        COALESCE(a.year, (SELECT CAST(substr(pm.release_date, 1, 4) AS INTEGER) \
+         FROM library_album_provider_matches pm WHERE pm.local_album_id = a.id \
+         AND pm.match_state = 'confirmed' AND pm.release_date GLOB '[1-9][0-9][0-9][0-9]*')) AS year, \
+        a.is_compilation AS is_compilation, \
+        (COALESCE(w.source IN ('folder','embedded'), 0) \
+         OR EXISTS (SELECT 1 FROM library_album_provider_matches pm \
+         WHERE pm.local_album_id = a.id AND pm.match_state = 'confirmed' \
+         AND pm.cover_url IS NOT NULL)) AS cover_available, \
         CASE WHEN w.source IN ('folder','embedded') THEN w.version END AS art_version, \
         a.created_at / 1000.0 AS date_added, \
         (SELECT c.id FROM library_contribution_drafts c WHERE c.local_album_id = a.id \
@@ -416,7 +422,10 @@ droppedneedle_kernel::sql! {
          t.bit_rate AS bit_rate, t.sample_rate AS sample_rate, \
          t.bit_depth AS bit_depth, t.channels AS channels, \
          t.file_size_bytes AS file_size_bytes, t.imported_at / 1000.0 AS date_added, \
-         COALESCE(w.source IN ('folder','embedded'), 0) AS cover_available, \
+         (COALESCE(w.source IN ('folder','embedded'), 0) \
+          OR EXISTS (SELECT 1 FROM library_album_provider_matches pm \
+          WHERE pm.local_album_id = t.local_album_id AND pm.match_state = 'confirmed' \
+          AND pm.cover_url IS NOT NULL)) AS cover_available, \
          t.row_revision AS row_revision"
     ));
     /// The track projection's joins. A statement adds the availability
