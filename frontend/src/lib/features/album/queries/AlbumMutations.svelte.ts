@@ -7,8 +7,10 @@ import {
 	albumHeaderChanged,
 	albumReread,
 	applyEffectsIn,
-	createAppMutation
+	createAppMutation,
+	requestsChanged
 } from '$lib/queries/effects';
+import { authStore } from '$lib/stores/authStore.svelte';
 import { setQueryDataWithPersister } from '$lib/queries/QueryClient';
 import { AlbumQueryKeyFactory } from './AlbumQueryKeyFactory';
 
@@ -36,4 +38,29 @@ export function createRefreshAlbumMutation() {
 		}),
 		client
 	);
+}
+
+// Fork: ask for one track MusicBrainz doesn't know, by name: a track of an
+// album's Deezer match the library lacks. Goes through the want intake the
+// playlists use, with the track's ISRC when Deezer gave one.
+export type WantTrackInput = {
+	artistName: string;
+	trackTitle: string;
+	albumTitle: string;
+	durationSeconds: number | null;
+	isrc: string | null;
+};
+
+export function createWantTrackMutation() {
+	return createAppMutation(() => ({
+		mutationFn: (input: WantTrackInput) =>
+			api.v3.POST(v3('/api/v3/requests/wants'), {
+				artist_name: input.artistName,
+				track_title: input.trackTitle,
+				album_title: input.albumTitle,
+				duration_seconds: input.durationSeconds === null ? null : Math.round(input.durationSeconds),
+				isrc: input.isrc
+			}),
+		effects: () => [requestsChanged(authStore.user?.id)]
+	}));
 }
