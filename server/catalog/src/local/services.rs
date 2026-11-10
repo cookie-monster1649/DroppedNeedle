@@ -519,6 +519,7 @@ pub async fn get_album(
         row_revision: state.row_revision,
         listing_revision: state.listing_revision,
         pending_review_id: state.pending_review_id,
+        spotify_album_id: state.spotify_album_id,
     })
 }
 

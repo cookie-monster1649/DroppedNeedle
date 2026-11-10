@@ -73,6 +73,7 @@ impl ImportSink for PlaylistImportSink {
                         recording_mbid: track.recording_mbid.as_deref().and_then(clean_recording),
                         spotify_track_id: None,
                         isrc: None,
+                        spotify_album_id: None,
                     })
                 })
                 .collect::<Vec<_>>();

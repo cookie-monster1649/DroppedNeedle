@@ -120,6 +120,8 @@ pub struct NewEntry {
     pub spotify_track_id: Option<String>,
     /// Fork: the track's ISRC, upper case, when the provider gave one.
     pub isrc: Option<String>,
+    /// Fork: the Spotify album the track is on.
+    pub spotify_album_id: Option<String>,
 }
 
 /// Uploaded cover bytes.
@@ -419,7 +421,12 @@ fn insert_entries(
         if entry.spotify_track_id.is_some() || entry.isrc.is_some() {
             tx.execute(
                 sql::INSERT_ENTRY_IDENTITY.text(),
-                params![id, entry.spotify_track_id, entry.isrc],
+                params![
+                    id,
+                    entry.spotify_track_id,
+                    entry.isrc,
+                    entry.spotify_album_id
+                ],
             )?;
         }
         added.push(id);

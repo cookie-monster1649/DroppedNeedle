@@ -36296,6 +36296,13 @@
                 "type": "integer",
                 "format": "int64",
                 "description": "The album row's revision, which a change to its grouping and its\nremoval echo."
+              },
+              "spotify_album_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Fork: the Spotify album its tracks came from, for \"Add to\nMusicBrainz\" and \"Match to MusicBrainz\" from Spotify's data."
               }
             }
           }

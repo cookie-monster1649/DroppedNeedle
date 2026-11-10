@@ -246,6 +246,8 @@ pub struct AlbumPageState {
     pub listing_revision: i64,
     /// The newest pending identification review, if any.
     pub pending_review_id: Option<String>,
+    /// Fork: the Spotify album most of its tracks came from, if any.
+    pub spotify_album_id: Option<String>,
 }
 
 /// Why library management leaves an album's files alone.

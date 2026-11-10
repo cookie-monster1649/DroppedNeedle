@@ -190,6 +190,7 @@ fn to_entry(input: &TrackInput) -> Result<NewEntry, CollectionsError> {
         recording_mbid: input.recording_mbid.as_deref().and_then(clean_recording),
         spotify_track_id: None,
         isrc: None,
+        spotify_album_id: None,
     })
 }
 
