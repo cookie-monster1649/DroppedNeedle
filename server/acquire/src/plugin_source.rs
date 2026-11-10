@@ -484,7 +484,13 @@ impl PluginDownloadSource {
             // is the last resort, and the reason is recorded.
             let (lone, refused) = automatic(
                 self.host
-                    .search_track(&self.key, &track.artist, &track.title, None)
+                    .search_track(
+                        &self.key,
+                        &track.artist,
+                        &track.title,
+                        Some(target.album_title.as_str()).filter(|title| !title.is_empty()),
+                        track.duration_seconds,
+                    )
                     .await,
             );
             refused_any |= refused;

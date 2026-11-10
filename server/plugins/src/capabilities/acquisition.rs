@@ -202,12 +202,13 @@ impl PluginHost {
         artist_name: &str,
         track_title: &str,
         album_title: Option<&str>,
+        duration_seconds: Option<f64>,
     ) -> Vec<PluginSearchResult> {
         let params = json!({
             "artist_name": artist_name,
             "track_title": track_title,
             "album_title": album_title,
-            "duration_seconds": Value::Null,
+            "duration_seconds": duration_seconds.filter(|seconds| seconds.is_finite() && *seconds > 0.0),
             "timeout": SEARCH_BUDGET.as_secs_f64(),
         });
         self.search(source_key, methods::SEARCH_TRACK, params).await
