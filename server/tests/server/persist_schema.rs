@@ -2514,6 +2514,18 @@ fn state_columns() -> Vec<StateColumn> {
         state("auth_users", "role", &Role::ALL, Role::as_str),
         // library
         state("library_album_match_state", "state", &MatchFlagState::ALL, MatchFlagState::as_str),
+        state(
+            "library_album_provider_matches",
+            "match_state",
+            &droppedneedle_library::provider_match::ProviderMatchState::ALL,
+            droppedneedle_library::provider_match::ProviderMatchState::as_str,
+        ),
+        state(
+            "library_album_provider_matches",
+            "provider",
+            &droppedneedle_library::provider_match::MatchProvider::ALL,
+            droppedneedle_library::provider_match::MatchProvider::as_str,
+        ),
         state("library_album_takeovers", "cause", &Cause::ALL, Cause::as_str),
         state("library_artist_credit_proofs", "subject_kind", &ProofSubject::ALL, ProofSubject::as_str),
         state("library_artist_reconciliation_state", "state", &CreditState::ALL, CreditState::as_str),
@@ -4207,6 +4219,11 @@ mod extension_chains {
                 "catalog",
                 "catalog/0005_playlist_declines.sql",
                 "512c4c4015380aea638b9625ee6cb9cf0089513de2e21f6a65eaca1ee6b899fa",
+            ),
+            (
+                "catalog",
+                "catalog/0006_album_provider_matches.sql",
+                "1c73dfa1bf770a7550a84c52107158587c6ee177752ab600697f62d1da25ca18",
             ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {

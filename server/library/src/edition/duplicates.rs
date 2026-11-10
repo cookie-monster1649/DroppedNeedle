@@ -10,7 +10,7 @@
 //! sends the surplus copies to the recycle bin, through the existing merge
 //! and removal routes, so both can be undone the usual ways.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use rusqlite::Connection;
 
@@ -81,13 +81,28 @@ fn album_quality(album: &DuplicateAlbum) -> i64 {
     album.tracks.iter().map(quality).max().unwrap_or(0)
 }
 
-/// Group the files into duplicate groups.
+/// Group the files into duplicate groups: albums with one Deezer match
+/// shared by another album group by that match (singles of one release),
+/// the others by folded artist and title.
 pub(super) fn group(rows: Vec<DuplicateFileRow>) -> Vec<DuplicateGroup> {
+    let mut sharing: HashMap<&str, HashSet<&str>> = HashMap::new();
+    for row in &rows {
+        if let Some(id) = row.provider_album_id.as_deref() {
+            sharing.entry(id).or_default().insert(row.album_id.as_str());
+        }
+    }
+    let shared: HashSet<String> = sharing
+        .into_iter()
+        .filter(|(_, albums)| albums.len() > 1)
+        .map(|(id, _)| id.to_owned())
+        .collect();
     let mut by_key: BTreeMap<(String, String), Vec<DuplicateAlbum>> = BTreeMap::new();
     for row in rows {
-        let albums = by_key
-            .entry((row.artist_folded.clone(), row.title_folded.clone()))
-            .or_default();
+        let key = match &row.provider_album_id {
+            Some(id) if shared.contains(id) => ("\u{0}provider".to_owned(), id.clone()),
+            _ => (row.artist_folded.clone(), row.title_folded.clone()),
+        };
+        let albums = by_key.entry(key).or_default();
         if albums
             .last()
             .is_none_or(|album| album.album_id != row.album_id)
@@ -212,6 +227,7 @@ mod tests {
             bit_depth: None,
             duration_seconds: Some(200.0),
             track_revision: 1,
+            provider_album_id: None,
         }
     }
 
@@ -240,6 +256,20 @@ mod tests {
         assert_eq!(groups[0].albums[0].album_id, "mb");
         // Song A's MP3 goes; its FLAC moves into the kept album.
         assert_eq!(groups[0].surplus_track_ids, vec!["t3".to_owned()]);
+    }
+
+    #[test]
+    fn singles_of_one_release_group_by_their_match() {
+        let mut one = row("s1", None, "t1", "Song A", "flac", 900);
+        one.title_folded = "song a".to_owned();
+        one.provider_album_id = Some("42".to_owned());
+        let mut two = row("s2", None, "t2", "Song B", "flac", 900);
+        two.title_folded = "song b".to_owned();
+        two.provider_album_id = Some("42".to_owned());
+        let groups = group(vec![one, two]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].kind, DuplicateKind::SameAlbum);
+        assert!(groups[0].surplus_track_ids.is_empty());
     }
 
     #[test]

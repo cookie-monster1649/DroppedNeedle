@@ -39,6 +39,12 @@ pub const ALBUM_NOT_FOUND: Reason = reason(
     "This album is not in the library, or none of its files are left.",
     "Rescan the library, then open the album again.",
 );
+/// Fork: no suggestion from another catalogue to decide.
+pub const NO_PROVIDER_MATCH: Reason = reason(
+    "NO_PROVIDER_MATCH",
+    "This album has no suggestion from another catalogue.",
+    "Open Check albums again to see what is suggested now.",
+);
 pub const NO_AUTOMATIC_EDITION: Reason = reason(
     "NO_AUTOMATIC_EDITION",
     "This album has no automatic edition choice to undo.",

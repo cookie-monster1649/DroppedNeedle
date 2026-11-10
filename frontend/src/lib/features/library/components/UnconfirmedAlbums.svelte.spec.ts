@@ -24,7 +24,8 @@ function album(id: string, title: string, code: string, message: string): Waitin
 		identity_revision: 0,
 		guess: null,
 		file_count: 3,
-		looks_wrong_count: 0
+		looks_wrong_count: 0,
+		provider_guess: null
 	};
 }
 
@@ -102,6 +103,46 @@ describe('Check albums', () => {
 		await expect.element(row.getByText('The Closest')).toBeVisible();
 		await expect.element(row.getByRole('button', { name: /^Use this/ })).toBeVisible();
 		await expect.element(row.getByRole('link', { name: 'Compare' })).toBeVisible();
+		await expect.element(row.getByText('Not found')).not.toBeInTheDocument();
+	});
+
+	it("offers Deezer's closest album when MusicBrainz has no candidate", async () => {
+		authStore.setUser(
+			toAuthUser({
+				id: 'user-1',
+				display_name: 'Curator',
+				role: 'trusted',
+				email: null,
+				avatar_url: null,
+				username: 'curator',
+				username_display: 'Curator'
+			})
+		);
+		const lone = album('album-4', 'Lone EP', 'NO_CANDIDATE', 'Nothing on MusicBrainz fits.');
+		lone.provider_guess = {
+			provider: 'deezer',
+			provider_album_id: '42',
+			title: 'Lone EP',
+			artist_name: 'The Lanterns',
+			year: 2019,
+			record_type: 'ep',
+			cover_url: null,
+			url: 'https://www.deezer.com/album/42',
+			track_count: 5,
+			matched_files: 3,
+			score: 0.9
+		};
+		fakeApi({
+			'GET /api/v3/library/unconfirmed': { items: [lone], next_cursor: null, total: 1 }
+		});
+
+		await renderWithQuery(UnconfirmedAlbums, { view: 'unmatched' });
+
+		const row = page.getByRole('listitem').filter({ hasText: 'Lone EP' }).first();
+		await expect.element(row.getByText('Best guess · from Deezer')).toBeVisible();
+		await expect.element(row.getByText(/2019 · 3 of 3 files on its 5 tracks/)).toBeVisible();
+		await expect.element(row.getByRole('button', { name: /^Use this/ })).toBeVisible();
+		await expect.element(row.getByRole('button', { name: /^Not it/ })).toBeVisible();
 		await expect.element(row.getByText('Not found')).not.toBeInTheDocument();
 	});
 });

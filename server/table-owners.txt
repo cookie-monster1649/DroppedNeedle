@@ -186,6 +186,7 @@ library_user_album_plays
 library_album_departures
 library_album_looks_wrong
 library_album_match_state
+library_album_provider_matches
 library_album_takeovers
 library_artist_credit_proofs
 library_artist_reconciliation_dismissals
