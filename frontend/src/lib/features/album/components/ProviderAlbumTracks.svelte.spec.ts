@@ -74,4 +74,52 @@ describe('Deezer track list', () => {
 			isrc: 'GBUM71900001'
 		});
 	});
+
+	it("previews Deezer's names in the files as the stand-in edition", async () => {
+		const api = fakeApi({
+			'POST /api/v3/library/albums/{album_id}/edition/tags': {
+				job_id: 'write-1',
+				preview_token: 'token-1',
+				expires_at: 0
+			},
+			'GET /api/v3/library/albums/{album_id}/edition/tags/{job_id}': {
+				job_id: 'write-1',
+				step: 'planning',
+				undo: false,
+				undo_available: false,
+				row_revision: 1,
+				ready_to_apply: false,
+				expired: false,
+				stale_reasons: [],
+				reason: null,
+				files: []
+			}
+		});
+
+		await renderWithQuery(ProviderAlbumTracks, {
+			match,
+			onplay: vi.fn(),
+			retag: { userId: 'user-1', localId: 'local-1' }
+		});
+
+		await page.getByRole('button', { name: "Use Deezer's title and artist" }).click();
+		await expect.element(page.getByText(/and no MusicBrainz ids/)).toBeVisible();
+		await page.getByRole('button', { name: 'Preview the new tags' }).click();
+		await expect
+			.poll(() => api.calls('POST /api/v3/library/albums/{album_id}/edition/tags').length)
+			.toBe(1);
+		expect(api.calls('POST /api/v3/library/albums/{album_id}/edition/tags')[0].body).toEqual({
+			release_mbid: 'deezer:42',
+			expected_identity_revision: 0
+		});
+	});
+
+	it('offers no write without the right to make one', async () => {
+		fakeApi({});
+
+		await renderWithQuery(ProviderAlbumTracks, { match, onplay: vi.fn() });
+
+		await expect.element(page.getByText('Missing')).toBeVisible();
+		expect(page.getByRole('button', { name: "Use Deezer's title and artist" }).query()).toBeNull();
+	});
 });

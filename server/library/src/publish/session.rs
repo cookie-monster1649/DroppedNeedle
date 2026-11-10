@@ -1349,14 +1349,33 @@ impl Publishing {
         track_id: &str,
     ) -> Result<ReleaseIdentity, ServiceError> {
         let missing = |message: String| ServiceError::Conflict { message };
-        let album = self
-            .identify_store
-            .album_identity(album_id)?
-            .ok_or_else(|| {
-                missing(format!(
-                    "Album {album_id} has no accepted identity; identify it first"
-                ))
-            })?;
+        let Some(album) = self.identify_store.album_identity(album_id)? else {
+            // Fork: an album with no MusicBrainz link, written from its
+            // accepted Deezer match (see `provider_match::edition`).
+            let found = self
+                .db
+                .read_blocking("publish.provider_edition", |conn| {
+                    Ok::<_, DbError>(crate::provider_match::edition::confirmed(conn, album_id)?)
+                })
+                .map_err(gate_error)?
+                .ok_or_else(|| {
+                    missing(format!(
+                        "Album {album_id} has no accepted identity; identify it first"
+                    ))
+                })?;
+            let track = self.identify_store.track_identity(track_id)?;
+            return Ok(ReleaseIdentity {
+                release_mbid: crate::provider_match::edition::edition_id(&found),
+                release_group_mbid: String::new(),
+                recording_mbid: track
+                    .as_ref()
+                    .and_then(|track| track.recording_mbid.clone())
+                    .unwrap_or_default(),
+                release_track_mbid: String::new(),
+                album_identity_revision: 0,
+                mapping_revision: track.map_or(0, |track| track.row_revision),
+            });
+        };
         if album.release_mbid.is_none()
             && let Some(release_group_mbid) = album.release_group_mbid.clone()
         {

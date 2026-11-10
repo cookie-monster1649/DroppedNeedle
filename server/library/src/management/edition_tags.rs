@@ -178,6 +178,14 @@ impl Management {
         expected_identity_revision: i64,
         caller: &Principal,
     ) -> Result<PreviewHandle, EditionTagsError> {
+        if crate::provider_match::edition::is_edition_id(release_mbid) {
+            return self.create_provider_tags(
+                album_id,
+                release_mbid,
+                expected_identity_revision,
+                caller,
+            );
+        }
         let found = self
             .parts
             .db
@@ -255,6 +263,97 @@ impl Management {
                     local_album_id: album_id.to_owned(),
                     release_mbid: current.to_owned(),
                     identity_revision: expected_identity_revision,
+                }),
+                ..JobIntent::default()
+            },
+            proposed_settings_revision: None,
+            retention_hours: stored.preview_retention_hours,
+        })?)
+    }
+
+    /// Fork: queue a preview of the album's accepted Deezer match's names
+    /// in its files (album, album artist, artist, title, track number,
+    /// date, ISRC and label; see [`crate::provider_match::edition`]),
+    /// without renaming or moving anything. `release_mbid` is the match's
+    /// stand-in id and `expected_identity_revision` 0, as the album page
+    /// shows them. Refused once the album has a MusicBrainz link or another
+    /// match. Applied, read and undone like an edition's tag write.
+    /// Blocking.
+    fn create_provider_tags(
+        &self,
+        album_id: &str,
+        release_mbid: &str,
+        expected_identity_revision: i64,
+        caller: &Principal,
+    ) -> Result<PreviewHandle, EditionTagsError> {
+        let (found, matched, track_ids) =
+            self.parts
+                .db
+                .read_blocking("management.provider_tags_album", |conn| {
+                    let found = album(conn, album_id, release_mbid)?;
+                    let matched = crate::provider_match::edition::confirmed(conn, album_id)?;
+                    let mut statement =
+                        conn.prepare(crate::management::sql::ALBUM_INDEXED_TRACK_IDS.text())?;
+                    let ids = statement
+                        .query_map(params![album_id], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<String>>>()?;
+                    Ok::<_, ManagementError>((found, matched, ids))
+                })?;
+        let found = found.ok_or(ManagementError::NotFound(
+            "This album is not in the library.",
+        ))?;
+        let refused = |reason| Err(EditionTagsError::Refused(reason));
+        let Some(matched) = matched else {
+            return refused(NO_EDITION);
+        };
+        if found.identity.is_some()
+            || crate::provider_match::edition::edition_id(&matched) != release_mbid
+            || expected_identity_revision != 0
+        {
+            return refused(STALE);
+        }
+        if found.held {
+            return refused(HELD);
+        }
+        let [root] = found.roots.as_slice() else {
+            return refused(TWO_FOLDERS);
+        };
+        let registry = self.parts.core.live_registry();
+        if found
+            .files
+            .iter()
+            .any(|(root, path)| super::planner::keeps_own_tags(&registry, root, path))
+        {
+            return refused(reasons::KEEPS_OWN_TAGS);
+        }
+        let Some(stored) = self.readable_settings() else {
+            return refused(SETTINGS_UNREADABLE);
+        };
+        let fields: Vec<String> = crate::provider_match::edition::FIELDS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        let pinned = profile::tag_edit_profile(&stored, root, &fields)?;
+        let selection = Selection {
+            kind: SelectionKind::Tracks,
+            ids: track_ids,
+            catalog_filter: None,
+        };
+        Ok(self.start_job(JobSpec {
+            mode: JobMode::Preview,
+            origin: Origin::Manual,
+            actor: Some(caller.user_id()),
+            idempotency_key: None,
+            revisions: profile::revisions(&stored, &pinned, registry.fingerprint()),
+            selection_json: serde_json::to_string(&selection).map_err(ManagementError::from)?,
+            pinned: &pinned,
+            target_root_id: None,
+            linked_job_id: None,
+            intent: JobIntent {
+                edition: Some(EditionPin {
+                    local_album_id: album_id.to_owned(),
+                    release_mbid: release_mbid.to_owned(),
+                    identity_revision: 0,
                 }),
                 ..JobIntent::default()
             },
