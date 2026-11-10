@@ -70,9 +70,11 @@ droppedneedle_kernel::sql! {
              AND (lower(e.recording_mbid) = ?2 OR lower(f.recording_mbid) = ?2))";
     /// Fork: whether playlist `?1` marks the song with want key `?2` or
     /// Spotify track `?3` not to be fetched again (its file was removed).
-    pub(super) ROW_DECLINED = "SELECT EXISTS (SELECT 1 FROM catalog_playlist_declines \
-             WHERE playlist_id = ?1 AND (name_key = ?2 OR (?3 IS NOT NULL AND spotify_track_id = ?3)))";
-    /// Fork: the request status of track key `?1`.
-    pub(super) ROW_REQUEST = "SELECT status FROM request_history \
+    /// Answers with the newest mark's time, seconds, or no row.
+    pub(super) ROW_DECLINED = "SELECT MAX(declined_at) FROM catalog_playlist_declines \
+             WHERE playlist_id = ?1 AND (name_key = ?2 OR (?3 IS NOT NULL AND spotify_track_id = ?3)) \
+             HAVING COUNT(*) > 0";
+    /// Fork: the request status of track key `?1` and when it was asked, seconds.
+    pub(super) ROW_REQUEST = "SELECT status, requested_at / 1000 FROM request_history \
              WHERE musicbrainz_id_lower = 'track:' || ?1";
 }
