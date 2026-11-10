@@ -56298,7 +56298,7 @@
                     },
                     {
                       "$ref": "#/components/schemas/WaitingGuessView",
-                      "description": "What \"That's right\" confirms, for a best guess."
+                      "description": "What \"That's right\" confirms, for a best guess. For an album\nnothing fits (`unmatched`), its closest candidate, to suggest."
                     }
                   ]
                 },
@@ -68961,7 +68961,7 @@
                 "$ref": "#/components/schemas/WaitingGuessView"
               }
             ],
-            "description": "What \"That's right\" confirms, for a best guess."
+            "description": "What \"That's right\" confirms, for a best guess. For an album\nnothing fits (`unmatched`), its closest candidate, to suggest."
           },
           "identity_revision": {
             "type": "integer",
