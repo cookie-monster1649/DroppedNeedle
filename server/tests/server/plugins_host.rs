@@ -1864,3 +1864,44 @@ async fn a_plugin_that_runs_late_is_asked_again_and_a_whole_answer_is_kept() {
         "a whole answer is kept"
     );
 }
+
+/// Fork: a track search hands the indexer the album and the track's
+/// length, so it can tell the song from a longer or shorter version. A
+/// length that is not a real one is sent as none.
+#[tokio::test]
+async fn a_track_search_sends_the_album_and_length() {
+    let rig = rig("track-length").await;
+    let runtime = enable_toy(
+        &rig,
+        "[plugin]\n\
+         name = \"toy\"\n\
+         version = \"1.0.0\"\n\
+         api_version = 2\n\
+         entrypoint = \"plugin:Toy\"\n\
+         capabilities = [\"download_client\", \"indexer\"]\n\
+         [[capability]]\n\
+         id = \"download_client\"\n\
+         [[capability]]\n\
+         id = \"indexer\"\n\
+         target_source = \"plugin:toy\"\n",
+    );
+    runtime.answer(methods::SEARCH_TRACK, Ok(json!([])));
+    rig.host
+        .search_track(
+            "plugin:toy",
+            "Bonobo",
+            "Kerala",
+            Some("Migration"),
+            Some(250.4),
+        )
+        .await;
+    let call = runtime.calls_to(methods::SEARCH_TRACK).pop().unwrap();
+    assert_eq!(call["album_title"], "Migration");
+    assert_eq!(call["duration_seconds"], 250.4);
+    runtime.answer(methods::SEARCH_TRACK, Ok(json!([])));
+    rig.host
+        .search_track("plugin:toy", "Bonobo", "Kerala", None, Some(f64::NAN))
+        .await;
+    let call = runtime.calls_to(methods::SEARCH_TRACK).pop().unwrap();
+    assert!(call["duration_seconds"].is_null());
+}
