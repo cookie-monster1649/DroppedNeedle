@@ -74,7 +74,7 @@ fn fresh_migrate_marks_version_and_seeds() {
     assert_eq!(scalar(&connection, "PRAGMA user_version"), latest_version());
     // 179 upstream tables, plus the extension ledger and the catalogue
     // extension's tables (fork).
-    assert_eq!(table_names(&connection).len(), 185);
+    assert_eq!(table_names(&connection).len(), 186);
     assert_eq!(
         scalar(
             &connection,
@@ -1642,6 +1642,7 @@ const FOREIGN_KEYS: &[(&str, &str, &str, &str)] = &[
     ("catalog_playlist_covers", "playlist_id", "catalog_playlists", "CASCADE"),
     ("catalog_playlist_declines", "playlist_id", "catalog_playlists", "CASCADE"),
     ("library_album_provider_matches", "local_album_id", "local_albums", "CASCADE"),
+    ("library_artist_suggestions", "local_artist_id", "local_artists", "CASCADE"),
     ("catalog_playlist_entry_identities", "entry_id", "catalog_playlist_tracks", "CASCADE"),
     ("acquire_spotify_playlist_syncs", "playlist_id", "catalog_playlists", "CASCADE"),
     ("catalog_playlist_tracks", "playlist_id", "catalog_playlists", "CASCADE"),
@@ -2263,6 +2264,12 @@ fn state_columns() -> Vec<StateColumn> {
             "provider",
             &droppedneedle_library::provider_match::MatchProvider::ALL,
             droppedneedle_library::provider_match::MatchProvider::as_str,
+        ),
+        state(
+            "library_artist_suggestions",
+            "suggestion_state",
+            &droppedneedle_library::artist_match::SuggestionState::ALL,
+            droppedneedle_library::artist_match::SuggestionState::as_str,
         ),
         state("library_album_takeovers", "cause", &Cause::ALL, Cause::as_str),
         state("library_artist_credit_proofs", "subject_kind", &ProofSubject::ALL, ProofSubject::as_str),
@@ -3954,6 +3961,11 @@ mod extension_chains {
                 "catalog",
                 "catalog/0006_album_provider_matches.sql",
                 "1c73dfa1bf770a7550a84c52107158587c6ee177752ab600697f62d1da25ca18",
+            ),
+            (
+                "catalog",
+                "catalog/0007_artist_suggestions.sql",
+                "7bb517c50f257212a2c6f4ff5492c6e479ab173766174076c934f3eacc4bc246",
             ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {

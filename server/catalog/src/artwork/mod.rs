@@ -1501,6 +1501,16 @@ impl CoverArt for ArtworkService {
         size: Option<&'a str>,
     ) -> BoxFuture<'a, Option<CoverBytes>> {
         Box::pin(async move {
+            // Fork: Deezer's picture of the artist wins over a mosaic.
+            match self.local.artist_picture(artist_id).await {
+                Ok(Some(url)) => {
+                    if let Some(picture) = self.provider_cover(&url, size).await {
+                        return Some(picture);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, "artist picture lookup failed"),
+            }
             match self.local.by_artist(artist_id, MOSAIC_CANDIDATES).await {
                 Ok(arts) => self.artist_mosaic(arts, size).await,
                 Err(error) => {

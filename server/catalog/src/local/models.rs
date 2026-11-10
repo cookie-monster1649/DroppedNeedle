@@ -427,6 +427,37 @@ pub struct ArtistView {
     /// MusicBrainz's short note on who this is ("US singer"), set only
     /// when another artist in the library has the same name.
     pub disambiguation: Option<String>,
+    /// Fork: for an artist with no MusicBrainz link, what other catalogues
+    /// (Deezer) know: its page there and the genres of its albums'
+    /// accepted matches. Set on the artist's own read only.
+    pub provider: Option<ArtistProviderView>,
+}
+
+/// Fork: what other catalogues know of an artist with no MusicBrainz link.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct ArtistProviderView {
+    /// `deezer`.
+    pub provider: String,
+    pub provider_artist_id: Option<String>,
+    /// The artist's page there.
+    pub url: Option<String>,
+    /// Fans there.
+    pub fans: Option<i64>,
+    /// The genres of the artist's albums' accepted matches, most albums
+    /// first.
+    pub genres: Vec<String>,
+}
+
+impl From<droppedneedle_library::artist_match::ArtistProviderPage> for ArtistProviderView {
+    fn from(page: droppedneedle_library::artist_match::ArtistProviderPage) -> Self {
+        Self {
+            provider: "deezer".to_owned(),
+            provider_artist_id: page.deezer_artist_id,
+            url: page.deezer_url,
+            fans: page.fans,
+            genres: page.genres,
+        }
+    }
 }
 
 /// A library artist with whether the caller favorited it and whether its
@@ -447,6 +478,7 @@ impl From<(ArtistRecord, bool, bool)> for ArtistView {
             art_missing,
             favorite,
             disambiguation: artist.disambiguation,
+            provider: None,
         }
     }
 }

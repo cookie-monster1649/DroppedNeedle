@@ -46,6 +46,7 @@ pub mod jobs;
 mod loops;
 mod sql;
 pub use loops::{LEFTOVERS_JOB, LOOPS};
+pub mod artist_match;
 pub mod management;
 pub mod matching;
 pub mod policy;

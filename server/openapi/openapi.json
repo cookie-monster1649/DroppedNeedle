@@ -12910,6 +12910,54 @@
         ]
       }
     },
+    "/api/v3/library/artist-suggestions": {
+      "get": {
+        "tags": [
+          "library management"
+        ],
+        "summary": "Fork: artists with no MusicBrainz link, each with a library artist that\nis plainly the same to merge into or the MusicBrainz artist of the same\nname to link. Taking one goes through the artist merge or the\nMusicBrainz link routes.",
+        "operationId": "list_artist_suggestions",
+        "responses": {
+          "200": {
+            "description": "Every open suggestion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtistSuggestionsView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Curator role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/library/artists": {
       "get": {
         "tags": [
@@ -13873,7 +13921,7 @@
           "platform"
         ],
         "summary": "A library artist's picture, a mosaic of the art of their own albums.",
-        "description": "For artists the library holds with no MusicBrainz link, which have no\npicture of their own. Never reaches out to the network. Albums under\nthe artist's name with the newest release come first, studio albums\nbefore compilations. Four or more covers give a 2x2 of the first four,\ntwo or three the first two crosswise, and one that cover alone. A\nmosaic is a JPEG; full size draws it at 1200 pixels.",
+        "description": "For artists the library holds with no MusicBrainz link, which have no\npicture of their own. Fork: an artist whose Deezer artist was found\nshows that artist's picture instead, downloaded once and kept in the\nartwork cache; nothing else reaches out to the network. Albums under\nthe artist's name with the newest release come first, studio albums\nbefore compilations. Four or more covers give a 2x2 of the first four,\ntwo or three the first two crosswise, and one that cover alone. A\nmosaic is a JPEG; full size draws it at 1200 pixels.",
         "operationId": "library_artist_artwork",
         "parameters": [
           {
@@ -14170,6 +14218,68 @@
           },
           "409": {
             "description": "The artist changed since it was read (STALE_REVISION), has no hand-set link (ARTIST_LINK_NOT_CHOSEN), or would be the same MusicBrainz artist as others (ARTIST_LINK_SHARED, listed in details.artists)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/library/artists/{id}/suggestion": {
+      "delete": {
+        "tags": [
+          "library management"
+        ],
+        "summary": "Fork: an artist's suggestion is not them (\"Not it\"). It is not offered\nagain.",
+        "operationId": "decline_artist_suggestion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Local artist id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Turned down"
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Curator role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The artist has no open suggestion (NO_ARTIST_SUGGESTION)",
             "content": {
               "application/json": {
                 "schema": {
@@ -39073,6 +39183,48 @@
           }
         }
       },
+      "ArtistProviderView": {
+        "type": "object",
+        "description": "Fork: what other catalogues know of an artist with no MusicBrainz link.",
+        "required": [
+          "provider",
+          "genres"
+        ],
+        "properties": {
+          "fans": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Fans there."
+          },
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The genres of the artist's albums' accepted matches, most albums\nfirst."
+          },
+          "provider": {
+            "type": "string",
+            "description": "`deezer`."
+          },
+          "provider_artist_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artist's page there."
+          }
+        }
+      },
       "ArtistPurchaseOptionsResponse": {
         "type": "object",
         "description": "`GET /artists/{artist_mbid}/purchase-options`: the artist's own store\npages (Bandcamp, merch shop).",
@@ -39355,6 +39507,86 @@
           "canonical"
         ]
       },
+      "ArtistSuggestionView": {
+        "type": "object",
+        "description": "Fork: an artist with no MusicBrainz link, and what to do about it.",
+        "required": [
+          "artist_id",
+          "name",
+          "artist_revision",
+          "album_count"
+        ],
+        "properties": {
+          "album_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Albums the artist leads."
+          },
+          "artist_id": {
+            "type": "string"
+          },
+          "artist_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The revision a link or merge names."
+          },
+          "deezer_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artist's page on Deezer, whose picture the artist shows."
+          },
+          "fans": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Deezer fans, a hint of who this is."
+          },
+          "merge": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SuggestedMergeView"
+              }
+            ],
+            "description": "Merge the artist into this one."
+          },
+          "musicbrainz": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SuggestedMusicBrainzArtistView"
+              }
+            ],
+            "description": "Link the artist to this MusicBrainz artist; null when a merge is\nsuggested instead."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ArtistSuggestionsView": {
+        "type": "object",
+        "description": "Fork: every open artist suggestion.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtistSuggestionView"
+            }
+          }
+        }
+      },
       "ArtistView": {
         "type": "object",
         "description": "One catalog artist.",
@@ -39436,6 +39668,17 @@
           "name": {
             "type": "string",
             "description": "Display name."
+          },
+          "provider": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtistProviderView"
+              }
+            ],
+            "description": "Fork: for an artist with no MusicBrainz link, what other catalogues\n(Deezer) know: its page there and the genres of its albums'\naccepted matches. Set on the artist's own read only."
           },
           "track_count": {
             "type": "integer",
@@ -67271,6 +67514,58 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "SuggestedMergeView": {
+        "type": "object",
+        "description": "Fork: the library artist an artist suggestion merges into.",
+        "required": [
+          "artist_id",
+          "name",
+          "artist_revision"
+        ],
+        "properties": {
+          "artist_id": {
+            "type": "string"
+          },
+          "artist_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The revision the merge names."
+          },
+          "musicbrainz_artist_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its MusicBrainz link, which the merge keeps."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SuggestedMusicBrainzArtistView": {
+        "type": "object",
+        "description": "Fork: the MusicBrainz artist an artist suggestion links.",
+        "required": [
+          "musicbrainz_artist_id",
+          "name"
+        ],
+        "properties": {
+          "disambiguation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "MusicBrainz's short note on who this is."
+          },
+          "musicbrainz_artist_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },

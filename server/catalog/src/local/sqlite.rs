@@ -436,6 +436,19 @@ impl LocalCatalog {
         .await
     }
 
+    /// Fork: what other catalogues know of an artist with no MusicBrainz
+    /// link. None when nothing.
+    pub async fn artist_provider_page(
+        &self,
+        artist_id: &str,
+    ) -> Result<Option<droppedneedle_library::artist_match::ArtistProviderPage>, StoreError> {
+        let id = artist_id.to_owned();
+        self.read("library.artists.provider_page", move |conn| {
+            droppedneedle_library::artist_match::artist_page(conn, &id)
+        })
+        .await
+    }
+
     /// Why library management leaves the album's files alone. None when
     /// it does not. A person's own choice wins over the app's step back.
     pub async fn management_hold(
