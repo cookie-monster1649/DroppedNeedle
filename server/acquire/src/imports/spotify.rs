@@ -48,6 +48,8 @@ pub struct ImportedTrack {
     pub spotify_track_id: Option<String>,
     /// Fork: the track's ISRC, normalised, when Spotify gave a valid one.
     pub isrc: Option<String>,
+    /// Fork: the Spotify album id, when Spotify gave a well-formed one.
+    pub spotify_album_id: Option<String>,
 }
 
 /// Fork: one populate's result.
@@ -357,6 +359,12 @@ impl SpotifyImportService {
                         .as_ref()
                         .and_then(|ids| ids.isrc.as_deref())
                         .and_then(crate::requests::identities::normalize_isrc),
+                    spotify_album_id: album
+                        .and_then(|album| album.id.as_deref())
+                        .filter(|id| {
+                            id.len() == 22 && id.chars().all(|c| c.is_ascii_alphanumeric())
+                        })
+                        .map(str::to_owned),
                 }
             })
             .collect();
