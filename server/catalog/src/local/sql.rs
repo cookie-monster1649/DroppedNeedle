@@ -320,6 +320,7 @@ droppedneedle_kernel::sql! {
          WHERE r.local_album_id = a.id AND r.state = 'pending' \
          ORDER BY r.created_at DESC, r.id LIMIT 1) AS pending_review_id, \
         (SELECT x.spotify_album_id FROM local_tracks t \
+         INDEXED BY idx_local_tracks_album_availability \
          JOIN catalog_playlist_entry_identities x ON x.spotify_album_id IS NOT NULL \
          AND (x.entry_id IN (SELECT p.id FROM catalog_playlist_tracks p \
               WHERE p.library_file_id = t.id) \
