@@ -11305,6 +11305,95 @@
         ]
       }
     },
+    "/api/v3/library/albums/{album_id}/provider-match": {
+      "put": {
+        "tags": [
+          "library management"
+        ],
+        "summary": "Fork: accept an album's best guess from another catalogue (\"Use this\"),\nor turn it down (\"Not it\"). Accepting gives the album the guess's\ncover, year, label, genres and track list, and links the album and the\nfiles the track list accounts for to it.",
+        "operationId": "decide_provider_match",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "Local album id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderMatchDecisionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The decided match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderMatchDecisionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No `accept` given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Curator role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The album has no suggestion (NO_PROVIDER_MATCH)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/library/albums/{album_id}/reidentification/releases": {
       "get": {
         "tags": [
@@ -12401,7 +12490,7 @@
         "tags": [
           "platform"
         ],
-        "summary": "An album's own art: the folder image or embedded picture the library\nscan found. Never reaches out to the network. Pass the album's\n`cover_version` as `v`: a matching version is cached for good, an older\none revalidates.",
+        "summary": "An album's own art: the folder image or embedded picture the library\nscan found. Fork: an album with neither whose Deezer match a person\naccepted gets that match's cover, downloaded once and kept in the\nartwork cache. Nothing else reaches out to the network. Pass the album's\n`cover_version` as `v`: a matching version is cached for good, an older\none revalidates.",
         "operationId": "album_artwork",
         "parameters": [
           {
@@ -36426,6 +36515,17 @@
                 ],
                 "description": "The album's pending identification review, if any."
               },
+              "provider_match": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AlbumProviderMatchView"
+                  }
+                ],
+                "description": "Fork: the album's accepted match from another catalogue (Deezer),\nfor an album MusicBrainz does not know."
+              },
               "row_revision": {
                 "type": "integer",
                 "format": "int64",
@@ -36898,6 +36998,90 @@
               "$ref": "#/components/schemas/PreviewTrackItem"
             },
             "description": "Sampled tracks in album order."
+          }
+        }
+      },
+      "AlbumProviderMatchView": {
+        "type": "object",
+        "description": "Fork: an album's accepted match from another catalogue.",
+        "required": [
+          "provider",
+          "provider_album_id",
+          "url",
+          "title",
+          "artist_name",
+          "genres",
+          "tracks"
+        ],
+        "properties": {
+          "artist_name": {
+            "type": "string"
+          },
+          "artist_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "description": "`deezer`."
+          },
+          "provider_album_id": {
+            "type": "string"
+          },
+          "provider_artist_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "record_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`album`, `ep`, `single` or `compile`."
+          },
+          "release_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`YYYY-MM-DD`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderTrackView"
+            },
+            "description": "The provider's track list, in album order."
+          },
+          "upc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The barcode."
+          },
+          "url": {
+            "type": "string",
+            "description": "The album's page on the provider."
           }
         }
       },
@@ -56507,6 +56691,17 @@
                   "description": "How many people marked the match \"Looks wrong\".",
                   "minimum": 0
                 },
+                "provider_guess": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProviderGuessView",
+                      "description": "Fork: for an album nothing on MusicBrainz fits, the best guess from\nanother catalogue (Deezer), when one was found."
+                    }
+                  ]
+                },
                 "reason": {
                   "$ref": "#/components/schemas/ReasonView"
                 },
@@ -58796,6 +58991,77 @@
           "previews"
         ]
       },
+      "ProviderGuessView": {
+        "type": "object",
+        "description": "Fork: an album's best guess from another catalogue.",
+        "required": [
+          "provider",
+          "provider_album_id",
+          "title",
+          "artist_name",
+          "url",
+          "track_count",
+          "matched_files",
+          "score"
+        ],
+        "properties": {
+          "artist_name": {
+            "type": "string"
+          },
+          "cover_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider's cover, to show beside the guess."
+          },
+          "matched_files": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The album's files its track list accounts for.",
+            "minimum": 0
+          },
+          "provider": {
+            "type": "string",
+            "description": "`deezer`."
+          },
+          "provider_album_id": {
+            "type": "string"
+          },
+          "record_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`album`, `ep`, `single` or `compile`."
+          },
+          "score": {
+            "type": "number",
+            "format": "double",
+            "description": "0 to 1."
+          },
+          "title": {
+            "type": "string"
+          },
+          "track_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Tracks on the provider's album.",
+            "minimum": 0
+          },
+          "url": {
+            "type": "string",
+            "description": "The album's page on the provider."
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
+      },
       "ProviderLimiterView": {
         "type": "object",
         "description": "One provider's limiter posture.",
@@ -58826,6 +59092,40 @@
           "source": {
             "type": "string",
             "description": "Provider name, e.g. `musicbrainz`."
+          }
+        }
+      },
+      "ProviderMatchDecisionBody": {
+        "type": "object",
+        "description": "Fork: a person's answer to an album's best guess from another catalogue.",
+        "required": [
+          "accept"
+        ],
+        "properties": {
+          "accept": {
+            "type": "boolean",
+            "description": "True for \"Use this\", false for \"Not it\"."
+          }
+        }
+      },
+      "ProviderMatchDecisionView": {
+        "type": "object",
+        "description": "Fork: an album's match from another catalogue, once decided.",
+        "required": [
+          "album_id",
+          "state",
+          "guess"
+        ],
+        "properties": {
+          "album_id": {
+            "type": "string"
+          },
+          "guess": {
+            "$ref": "#/components/schemas/ProviderGuessView"
+          },
+          "state": {
+            "type": "string",
+            "description": "`confirmed` or `declined`."
           }
         }
       },
@@ -58877,6 +59177,52 @@
               "$ref": "#/components/schemas/ProviderLimiterView"
             },
             "description": "Limiter posture per rate row, in name order."
+          }
+        }
+      },
+      "ProviderTrackView": {
+        "type": "object",
+        "description": "Fork: one track of a provider's album, and the file that is it.",
+        "required": [
+          "provider_track_id",
+          "title",
+          "disc",
+          "position"
+        ],
+        "properties": {
+          "disc": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "isrc": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "provider_track_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "track_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album's file that is this track; none when the album lacks it."
           }
         }
       },
@@ -69167,6 +69513,17 @@
             "format": "int32",
             "description": "How many people marked the match \"Looks wrong\".",
             "minimum": 0
+          },
+          "provider_guess": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProviderGuessView"
+              }
+            ],
+            "description": "Fork: for an album nothing on MusicBrainz fits, the best guess from\nanother catalogue (Deezer), when one was found."
           },
           "reason": {
             "$ref": "#/components/schemas/ReasonView"

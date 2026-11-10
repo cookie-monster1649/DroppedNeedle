@@ -693,6 +693,11 @@ const EXACT_EXEMPTIONS: &[(&str, &str, &str)] = &[
         SHARED_ALBUM,
     ),
     (
+        "PUT",
+        "/api/v3/library/albums/{album_id}/provider-match",
+        SHARED_ALBUM,
+    ),
+    (
         "POST",
         "/api/v3/library/albums/{album_id}/edition/extras/remove",
         SHARED_ALBUM,

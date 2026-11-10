@@ -658,6 +658,11 @@ const MATCH_STATE_READS: IdentityRead = IdentityRead {
             "tagging's match gate reads the flag's state and reason",
         ),
         (
+            "library/src/provider_match/sql.rs",
+            1,
+            "fork: the Deezer match loop looks only at albums nothing on MusicBrainz fits",
+        ),
+        (
             "library/src/identify/sql.rs",
             2,
             "identification reads the flag it decides on and folds it into its input stamp",

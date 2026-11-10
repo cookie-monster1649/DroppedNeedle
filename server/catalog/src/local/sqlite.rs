@@ -423,6 +423,19 @@ impl LocalCatalog {
         .await
     }
 
+    /// Fork: the album's accepted match from another catalogue (Deezer),
+    /// with the tracks the album holds marked. None when it has none.
+    pub async fn album_provider_match(
+        &self,
+        album_id: &str,
+    ) -> Result<Option<droppedneedle_library::provider_match::AlbumProviderPage>, StoreError> {
+        let id = album_id.to_owned();
+        self.read("library.albums.provider_match", move |conn| {
+            droppedneedle_library::provider_match::album_page(conn, &id)
+        })
+        .await
+    }
+
     /// Why library management leaves the album's files alone. None when
     /// it does not. A person's own choice wins over the app's step back.
     pub async fn management_hold(

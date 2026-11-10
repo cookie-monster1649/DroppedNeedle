@@ -55,6 +55,8 @@ pub struct AlbumArtContext {
     pub release_group_mbid: Option<String>,
     /// Local art the scan recorded, if any.
     pub local: Option<LocalArt>,
+    /// Fork: the cover of the album's accepted Deezer match, if any.
+    pub provider_cover: Option<String>,
 }
 
 /// Lookups over the catalog tables.
@@ -96,13 +98,16 @@ impl LocalArtwork {
     /// The album's identity and local art.
     pub async fn album(&self, album_id: &str) -> Result<Option<AlbumArtContext>, DbError> {
         let id = album_id.to_owned();
-        let group = self
+        let (group, provider_cover) = self
             .db
             .read("album art identity", move |conn| {
                 let group: Option<Option<String>> = conn
                     .query_row(sql::ALBUM_GROUP.text(), params![id], |row| row.get(0))
                     .optional()?;
-                Ok::<_, DbError>(group)
+                let cover: Option<String> = conn
+                    .query_row(sql::PROVIDER_COVER.text(), params![id], |row| row.get(0))
+                    .optional()?;
+                Ok::<_, DbError>((group, cover))
             })
             .await?;
         let Some(release_group_mbid) = group else {
@@ -112,6 +117,7 @@ impl LocalArtwork {
         Ok(Some(AlbumArtContext {
             release_group_mbid,
             local,
+            provider_cover,
         }))
     }
 

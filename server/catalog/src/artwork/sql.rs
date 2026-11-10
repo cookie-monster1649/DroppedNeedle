@@ -37,6 +37,10 @@ droppedneedle_kernel::sql! {
     pub(super) ALBUM_GROUP = "SELECT ae.release_group_mbid FROM local_albums a \
          LEFT JOIN local_album_external_identities ae ON ae.local_album_id = a.id \
          WHERE a.id = ?1 AND a.retired_into_album_id IS NULL";
+    /// Fork: the cover of album `?1`'s accepted match from another
+    /// catalogue, which stands in when the album has no art of its own.
+    pub(super) PROVIDER_COVER = "SELECT cover_url FROM library_album_provider_matches \
+         WHERE local_album_id = ?1 AND match_state = 'confirmed' AND cover_url IS NOT NULL";
     /// One album's art.
     pub(super) ART_OF_ALBUM = ART_SELECT + " WHERE w.local_album_id = ?1";
     /// The art of the albums identified as one release group.

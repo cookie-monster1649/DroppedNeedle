@@ -50,6 +50,7 @@ pub mod management;
 pub mod matching;
 pub mod policy;
 pub mod preview;
+pub mod provider_match;
 pub mod publish;
 pub mod reasons;
 pub mod reconcile;
