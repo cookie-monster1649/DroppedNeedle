@@ -4,8 +4,10 @@
 //! candidate. These reads go through the same executor and rate row as the
 //! previews. Deezer's API is keyless. Shapes verified against api.deezer.com
 //! on 2026-11-11 (`/search/album`, `/album/153601242`, `/track/isrc:...`,
-//! `/artist/8785546`, `/search/artist`). An unknown id answers the error object with code 800,
-//! which the classifier reads as absence.
+//! `/artist/8785546`). `/search/artist` is read as the artist detail's
+//! fields in a `data` list, the shape the album search has; it was not
+//! recorded. An unknown id answers the error object with code 800, which
+//! the classifier reads as absence.
 
 use serde::{Deserialize, Serialize};
 
