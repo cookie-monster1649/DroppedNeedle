@@ -102,6 +102,9 @@ const RATINGS_WAIT_MS = 5000;
  * A track the browser cannot play while the server is not converting is never asked for: it
  * fails at once, may still move to another source, and is marked with why.
  */
+/** Fork: a track this long that ends unheard was not read. */
+const ENDED_AT_ONCE_MIN_S = 5;
+
 type RecoveryPhase = 'idle' | 'loading' | 'retrying' | 'fallingBack' | 'failed';
 type LoadKind = 'fresh' | 'retry' | 'fallback';
 
@@ -632,6 +635,21 @@ function createPlayerStore() {
 			}
 			if (state === 'paused') session.paused(progress);
 			if (state === 'ended') {
+				// Fork: an original that "ends" before a second of it was heard
+				// was never read (a browser can give up on a file this way,
+				// e.g. one with a malformed cover block): reload it transcoded.
+				const item = queue[currentIndex];
+				if (
+					item &&
+					item.sourceType !== 'youtube' &&
+					!item.isPreview &&
+					!recovery.transcoded &&
+					(item.duration ?? 0) > ENDED_AT_ONCE_MIN_S &&
+					recovery.heard < 1
+				) {
+					handleTrackError(gen, { code: UNPLAYABLE_ERROR, message: 'ended before playing' });
+					return;
+				}
 				void session.end(progress);
 				pick('next', (next) => {
 					if (!isCurrent(gen)) return;
