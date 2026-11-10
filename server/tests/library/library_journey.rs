@@ -7697,6 +7697,94 @@ async fn a_library_folder_reached_through_a_symlink_takes_writes() {
     assert!(second.exists(), "the file stays");
 }
 
+/// Fork: an album nothing fits still shows its closest MusicBrainz
+/// candidate in Check albums, as a suggestion to take or pass on; one with
+/// no candidate shows none.
+#[tokio::test]
+async fn check_albums_suggests_the_closest_candidate_for_an_unmatched_album() {
+    let rig = Rig::start("lib-check-suggest").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-s/01.flac", "flac_full_01.flac");
+    plant(&music, "album-n/01.flac", "flac_full_02.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = |path: &str| {
+        rig.scan_store
+            .track_at("music", path)
+            .unwrap()
+            .expect("track indexed")
+    };
+    let (suggested_track, bare_track) = (track("album-s/01.flac"), track("album-n/01.flac"));
+    let suggested = track_album(app, &headers, &suggested_track).await;
+    let bare = track_album(app, &headers, &bare_track).await;
+    let candidates = json!([
+        {
+            "candidate_key": "rg-1:rel-1",
+            "release_group_mbid": "rg-1",
+            "release_mbid": "rel-1",
+            "album_title": "Closest",
+            "album_artist_name": "Someone",
+            "track_evidence": [{
+                "local_track_id": suggested_track,
+                "classification": "supported",
+                "evidence_kinds": ["title_and_length"],
+                "recording_mbid": null,
+                "release_track_mbid": null
+            }],
+            "score": 0.6,
+            "reason_code": "CLOSE_MATCH"
+        },
+        {
+            "candidate_key": "rg-2:rel-2",
+            "release_group_mbid": "rg-2",
+            "release_mbid": "rel-2",
+            "album_title": "Further",
+            "album_artist_name": "Someone",
+            "track_evidence": [],
+            "score": 0.3,
+            "reason_code": "CLOSE_MATCH"
+        }
+    ]);
+    for (album, code, json) in [
+        (&suggested, "INSUFFICIENT_EVIDENCE", candidates.to_string()),
+        (&bare, "NO_CANDIDATE", "[]".to_owned()),
+    ] {
+        app.seed_with(
+            "INSERT INTO library_album_match_state (local_album_id, state, reason_code, \
+             candidates_json, updated_at) VALUES (?1, 'unmatched', ?2, ?3, 1)",
+            rusqlite::params![album, code, json],
+        )
+        .await;
+    }
+
+    let (status, body) = app
+        .call(
+            "GET",
+            "/api/v3/library/unconfirmed?state=unmatched",
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let row = |album: &str| {
+        body["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|row| row["album_id"] == json!(album))
+            .cloned()
+            .unwrap_or_else(|| panic!("{album} listed: {body}"))
+    };
+    let guess = &row(&suggested)["guess"];
+    assert_eq!(guess["title"], json!("Closest"), "{body}");
+    assert_eq!(guess["release_mbid"], json!("rel-1"), "{body}");
+    assert_eq!(guess["matched_files"], json!(1), "{body}");
+    assert_eq!(row(&bare)["guess"], Value::Null, "{body}");
+}
+
 /// A best guess in Check albums names what "That's right" confirms and
 /// why it is a guess; a "Looks wrong" mark lists the album for curators,
 /// and confirming the guess or approving a review clears every mark.

@@ -24616,7 +24616,10 @@ export interface components {
              * @description Indexed files the album holds.
              */
             file_count: number;
-            /** @description What "That's right" confirms, for a best guess. */
+            /**
+             * @description What "That's right" confirms, for a best guess. For an album
+             *     nothing fits (`unmatched`), its closest candidate, to suggest.
+             */
             guess?: null | components["schemas"]["WaitingGuessView"];
             /**
              * Format: int64

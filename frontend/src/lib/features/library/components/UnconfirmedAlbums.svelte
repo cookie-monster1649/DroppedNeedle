@@ -1,7 +1,8 @@
 <!--
 	One Check albums list: albums whose edition is a best guess, that
 	nothing fits, or that someone marked "Looks wrong". Each row shows the
-	files and, for a guess, what "That's right" confirms. Compare opens the
+	files and, for a guess, what "That's right" confirms. An album nothing
+	fits shows its closest candidate, if any, with "Use this" (fork). Compare opens the
 	album's edition sheet, and Done there comes back here at the next album.
 -->
 <script lang="ts" module>
@@ -21,6 +22,7 @@
 	import { toastStore } from '$lib/stores/toast';
 	import { withBasePath } from '$lib/utils/basePath';
 	import {
+		createChooseAlbumEditionMutation,
 		createClearLooksWrongMutation,
 		createConfirmAlbumEditionMutation,
 		createUndoAlbumEditionMutation,
@@ -48,10 +50,11 @@
 	const query = getWaitingAlbumsQuery(userId, () => view, PAGE);
 	const confirm = createConfirmAlbumEditionMutation();
 	const undo = createUndoAlbumEditionMutation();
+	const choose = createChooseAlbumEditionMutation();
 	const clearMarks = createClearLooksWrongMutation();
 	const items = $derived(query.data?.pages.flatMap((page) => page.items) ?? []);
 	const total = $derived(query.data?.pages[0]?.total ?? 0);
-	const busy = $derived(confirm.isPending || clearMarks.isPending);
+	const busy = $derived(confirm.isPending || clearMarks.isPending || choose.isPending);
 
 	const EMPTY: Record<WaitingView, string> = {
 		unconfirmed: 'No best guesses. Every matched album is confirmed.',
@@ -130,6 +133,31 @@
 		}
 	}
 
+	// A suggestion for an album nothing fits: take its closest candidate.
+	const suggested = (item: WaitingAlbum) =>
+		item.state === 'unmatched' && !needsMatching(item) && !!item.guess?.release_mbid;
+
+	async function useThis(item: WaitingAlbum): Promise<void> {
+		const release = item.guess?.release_mbid;
+		if (!release) return;
+		const next = after(item.album_id);
+		try {
+			await choose.mutateAsync({
+				userId: userId(),
+				localId: item.album_id,
+				releaseMbid: release,
+				identityRevision: item.identity_revision
+			});
+			toastStore.show({
+				message: `${item.title} is now ${item.guess?.title ?? 'that edition'}.`,
+				type: 'success'
+			});
+			void moveTo(next);
+		} catch (error) {
+			failed(error, "This edition couldn't be used. Compare to pick another.");
+		}
+	}
+
 	async function looksFine(item: WaitingAlbum): Promise<void> {
 		const next = after(item.album_id);
 		try {
@@ -148,6 +176,7 @@
 
 	function stateLabel(item: WaitingAlbum): string {
 		if (needsMatching(item)) return NEEDS_MATCHING;
+		if (suggested(item)) return 'Best guess';
 		if (item.state === 'unmatched') return 'Not found';
 		if (item.state === 'unconfirmed') return 'Best guess';
 		if (item.state === 'chosen') return 'Chosen by a person';
@@ -217,11 +246,13 @@
 							<div class="min-w-0">
 								<p
 									class="flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase {item.state ===
-										'unmatched' && !needsMatching(item)
+										'unmatched' &&
+									!needsMatching(item) &&
+									!suggested(item)
 										? 'text-error'
 										: 'text-warning'}"
 								>
-									{#if item.state === 'unmatched' && !needsMatching(item)}
+									{#if item.state === 'unmatched' && !needsMatching(item) && !suggested(item)}
 										<CircleAlert class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
 									{:else}
 										<CircleHelp class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -258,6 +289,15 @@
 									onclick={() => void thatsRight(item)}>That's right</Button
 								>
 							{/if}
+							{#if authStore.isTrusted && suggested(item)}
+								<Button
+									variant="primary"
+									size="sm"
+									disabled={busy}
+									aria-label={`Use this: ${item.title} is ${item.guess?.title ?? 'this edition'}`}
+									onclick={() => void useThis(item)}>Use this</Button
+								>
+							{/if}
 							{#if authStore.isTrusted && view === 'looks_wrong'}
 								<Button
 									variant="ghost"
@@ -270,7 +310,7 @@
 								<Button variant="ghost" size="sm" href={compareHref(item)}
 									>{needsMatching(item)
 										? MATCH_FILES
-										: item.state === 'unmatched'
+										: item.state === 'unmatched' && !suggested(item)
 											? 'Pick an edition'
 											: 'Compare'}</Button
 								>
