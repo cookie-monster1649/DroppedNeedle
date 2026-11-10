@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import PageHeader from '$lib/ui/PageHeader.svelte';
+	import ArtistSuggestions from '$lib/features/library/components/ArtistSuggestions.svelte';
 	import DuplicateAlbums from '$lib/features/library/components/DuplicateAlbums.svelte';
 	import ReviewQueue from '$lib/features/library/components/ReviewQueue.svelte';
 	import UnconfirmedAlbums, {
@@ -12,14 +13,14 @@
 	import Tabs from '$lib/ui/Tabs.svelte';
 	import { authStore } from '$lib/stores/authStore.svelte';
 
-	type Tab = WaitingView | 'duplicates' | 'reviews';
+	type Tab = WaitingView | 'duplicates' | 'artists' | 'reviews';
 
 	// The address holds the open list: ?view=unmatched or ?view=looks_wrong
 	// for those albums, the review list's view, filters and order (?review=<id>
 	// opens one review first), and ?focus=<album id> for the row to come
 	// back to after comparing an album's editions.
 	const params = page.url.searchParams;
-	const VIEWS: Tab[] = ['unconfirmed', 'unmatched', 'looks_wrong', 'duplicates'];
+	const VIEWS: Tab[] = ['unconfirmed', 'unmatched', 'looks_wrong', 'duplicates', 'artists'];
 	const asked = VIEWS.find((view) => view === params.get('view')) ?? 'unconfirmed';
 	let tab = $state<Tab>(ReviewFilters.inAddress(params) ? 'reviews' : asked);
 	const stats = getLibraryStatsQuery();
@@ -29,8 +30,14 @@
 		{ id: 'unmatched' as Tab, label: 'Not found', count: stats.data?.not_found_count },
 		{ id: 'looks_wrong' as Tab, label: 'Looks wrong', count: stats.data?.looks_wrong_count },
 		{ id: 'reviews' as Tab, label: 'Needs you', count: stats.data?.review_count },
-		// Fork: albums held twice (curators).
-		...(authStore.isTrusted ? [{ id: 'duplicates' as Tab, label: 'Duplicates' }] : [])
+		// Fork: albums held twice, and artists with no MusicBrainz link
+		// (curators).
+		...(authStore.isTrusted
+			? [
+					{ id: 'duplicates' as Tab, label: 'Duplicates' },
+					{ id: 'artists' as Tab, label: 'Artists' }
+				]
+			: [])
 	]);
 
 	function show(next: Tab): void {
@@ -71,6 +78,8 @@
 				<ReviewQueue />
 			{:else if tab === 'duplicates'}
 				<DuplicateAlbums />
+			{:else if tab === 'artists'}
+				<ArtistSuggestions />
 			{:else}
 				{#key tab}
 					<UnconfirmedAlbums view={tab} focus={params.get('focus')} />

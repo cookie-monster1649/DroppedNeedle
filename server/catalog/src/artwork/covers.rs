@@ -522,7 +522,9 @@ pub async fn album_artwork(
 /// A library artist's picture, a mosaic of the art of their own albums.
 ///
 /// For artists the library holds with no MusicBrainz link, which have no
-/// picture of their own. Never reaches out to the network. Albums under
+/// picture of their own. Fork: an artist whose Deezer artist was found
+/// shows that artist's picture instead, downloaded once and kept in the
+/// artwork cache; nothing else reaches out to the network. Albums under
 /// the artist's name with the newest release come first, studio albums
 /// before compilations. Four or more covers give a 2x2 of the first four,
 /// two or three the first two crosswise, and one that cover alone. A

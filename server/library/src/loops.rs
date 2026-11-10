@@ -62,7 +62,15 @@ pub const LOOPS: &[&str] = &[
     LEFTOVERS_JOB,
     SAME_FOLDER_JOB,
     PROVIDER_MATCH_JOB,
+    ARTIST_SUGGESTION_JOB,
 ];
+
+/// Fork: suggestions for artists with no MusicBrainz link (a merge, a
+/// MusicBrainz artist, a Deezer picture), a few artists a turn.
+pub const ARTIST_SUGGESTION_JOB: &str = "library-artist-suggestions";
+const ARTIST_SUGGESTION_EVERY: Duration = Duration::from_secs(300);
+const ARTIST_SUGGESTION_BATCH: u32 = 10;
+const ARTIST_SUGGESTION_FAILED: &str = "ARTIST_SUGGESTION_FAILED";
 
 /// Fork: best guesses from Deezer for albums MusicBrainz has nothing for,
 /// a few albums a turn.
@@ -791,6 +799,22 @@ pub(crate) fn start_loops(
         )? {
             Ok(_) => Ok(Next::Continue),
             Err(error) => Err(TickError::new(PROVIDER_MATCH_FAILED, error)),
+        },
+    )?;
+    let (artists, artist_handle) = (services.artist_suggestions.clone(), Handle::current());
+    supervisor.periodic_blocking(
+        ARTIST_SUGGESTION_JOB,
+        Schedule::new(ARTIST_SUGGESTION_EVERY)
+            .with_initial_delay(Duration::from_secs(180))
+            .with_jitter(Duration::from_secs(30))
+            .with_backoff(Duration::from_secs(300), Duration::from_secs(3600)),
+        move |_ctx| match drive(
+            &artist_handle,
+            "artist suggestions",
+            artists.suggest_some(ARTIST_SUGGESTION_BATCH),
+        )? {
+            Ok(_) => Ok(Next::Continue),
+            Err(error) => Err(TickError::new(ARTIST_SUGGESTION_FAILED, error)),
         },
     )?;
     let publish = services.publishing.clone();

@@ -41,6 +41,10 @@ droppedneedle_kernel::sql! {
     /// catalogue, which stands in when the album has no art of its own.
     pub(super) PROVIDER_COVER = "SELECT cover_url FROM library_album_provider_matches \
          WHERE local_album_id = ?1 AND match_state = 'confirmed' AND cover_url IS NOT NULL";
+    /// Fork: the picture of artist `?1`'s Deezer artist, which stands in
+    /// for an artist with no MusicBrainz link.
+    pub(super) ARTIST_PICTURE = "SELECT picture_url FROM library_artist_suggestions \
+         WHERE local_artist_id = ?1 AND picture_url IS NOT NULL";
     /// One album's art.
     pub(super) ART_OF_ALBUM = ART_SELECT + " WHERE w.local_album_id = ?1";
     /// The art of the albums identified as one release group.

@@ -7891,6 +7891,138 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
+/// Fork: an artist with no MusicBrainz link gets the MusicBrainz artist of
+/// the same name as a suggestion in Check albums, and Deezer's artist of
+/// that name as its picture and page; "Not it" turns the suggestion down
+/// for good.
+#[tokio::test]
+async fn check_albums_suggests_a_musicbrainz_artist_for_an_unlinked_artist() {
+    use droppedneedle_library::artist_match::ArtistSuggestions;
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::RequestPriority;
+    use droppedneedle_providers::musicbrainz::MbSource;
+    use droppedneedle_providers::test_support::ScriptedWire;
+
+    let rig = Rig::start("lib-check-artists").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-a/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-a/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    let (status, detail) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let artist = detail["artist_id"].as_str().expect("artist id").to_owned();
+    let name = detail["artist_name"].clone();
+    let mbid = "5b11f4ce-a62d-471e-81fc-a69a8278c7da";
+
+    let wire = Arc::new(ScriptedWire::new());
+    let json_type = [("content-type", "application/json")];
+    wire.answer(
+        "http://127.0.0.1:9/musicbrainz/ws/2/artist",
+        200,
+        &json_type,
+        json!({"count": 1, "offset": 0, "artists": [
+            {"id": mbid, "score": 100, "name": name, "disambiguation": "test band"}
+        ]})
+        .to_string(),
+    );
+    wire.answer(
+        "http://127.0.0.1:9/deezer/search/artist",
+        200,
+        &json_type,
+        json!({"data": [{"id": 55, "name": name, "picture_xl": "http://127.0.0.1:9/pic.jpg",
+            "link": "https://www.deezer.com/artist/55", "nb_fan": 1234}]})
+        .to_string(),
+    );
+    let providers = Providers::unpaced(wire.clone());
+    let suggestions = ArtistSuggestions::new(
+        droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+            .expect("database opens"),
+        providers.previews.clone(),
+        providers.musicbrainz.fixed(
+            MbSource::Official {
+                base_url: "http://127.0.0.1:9/musicbrainz/ws/2".to_owned(),
+            },
+            RequestPriority::BackgroundSync,
+        ),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+    assert_eq!(suggestions.suggest_some(10).await, Ok(1));
+
+    let (status, body) = app
+        .call("GET", "/api/v3/library/artist-suggestions", &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let item = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["artist_id"] == json!(artist))
+        .cloned()
+        .expect("artist suggested");
+    assert_eq!(
+        item["musicbrainz"]["musicbrainz_artist_id"],
+        json!(mbid),
+        "{body}"
+    );
+    assert_eq!(
+        item["musicbrainz"]["disambiguation"],
+        json!("test band"),
+        "{body}"
+    );
+    assert_eq!(item["merge"], Value::Null, "{body}");
+    assert_eq!(item["fans"], json!(1234), "{body}");
+
+    let (status, page) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/artists/{artist}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(
+        page["provider"]["provider_artist_id"],
+        json!("55"),
+        "{page}"
+    );
+    assert_eq!(page["art_missing"], json!(false), "{page}");
+
+    let path = format!("/api/v3/library/artists/{artist}/suggestion");
+    let (status, body) = app.call("DELETE", &path, &headers, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (status, body) = app
+        .call("GET", "/api/v3/library/artist-suggestions", &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["artist_id"] != json!(artist)),
+        "{body}"
+    );
+    let (status, body) = app.call("DELETE", &path, &headers, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
 /// Fork: an album nothing fits still shows its closest MusicBrainz
 /// candidate in Check albums, as a suggestion to take or pass on; one with
 /// no candidate shows none.

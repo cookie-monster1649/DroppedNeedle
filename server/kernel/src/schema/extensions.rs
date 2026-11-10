@@ -45,6 +45,7 @@ pub static CATALOG: ExtensionChain = ExtensionChain {
         extension!(4, "catalog/0004_entry_spotify_album.sql"),
         extension!(5, "catalog/0005_playlist_declines.sql"),
         extension!(6, "catalog/0006_album_provider_matches.sql"),
+        extension!(7, "catalog/0007_artist_suggestions.sql"),
     ],
 };
 
