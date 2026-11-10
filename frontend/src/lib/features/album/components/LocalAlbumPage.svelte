@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { Check, Disc3, FileUp, FolderTree, Play } from 'lucide-svelte';
+	import { Check, Disc3, ExternalLink, FileUp, FolderTree, Play } from 'lucide-svelte';
 	import AlbumImage from '$lib/media/AlbumImage.svelte';
 	import NoFilesBadge from '$lib/features/library/components/NoFilesBadge.svelte';
 	import LocalIdentityBadge from '$lib/features/library/components/LocalIdentityBadge.svelte';
@@ -175,8 +175,28 @@
 				onclick: openContribution
 			});
 		}
+		// Fork: an album that came from Spotify can be added to MusicBrainz
+		// from Spotify's own data (Harmony drafts the release: tracks,
+		// ISRCs, barcode, label, links). Once it is in MusicBrainz, the
+		// album is matched by its Spotify link.
+		const spotifyAlbum = album?.spotify_album_id;
+		if (spotifyAlbum && album?.identity_state === 'local_only') {
+			items.push({
+				label: 'Add to MusicBrainz from Spotify',
+				icon: ExternalLink,
+				onclick: () => window.open(harmonyUrl(spotifyAlbum), '_blank', 'noopener')
+			});
+		}
 		return items;
 	});
+
+	/** Harmony's release draft for Spotify album `id`. */
+	function harmonyUrl(id: string): string {
+		const url = new URL('https://harmony.pulsewidth.org.uk/release');
+		url.searchParams.set('url', `https://open.spotify.com/album/${id}`);
+		url.searchParams.set('category', 'preferred');
+		return url.toString();
+	}
 
 	function openContribution(): void {
 		if (!album) return;

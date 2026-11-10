@@ -1608,6 +1608,7 @@ async fn spotify_sqlite_stores_persist_and_expire() {
         recording_mbid: None,
         spotify_track_id: Some("4uLU6hMCjMI75M1A2tKUQC".to_owned()),
         isrc: Some("USUM71703861".to_owned()),
+        spotify_album_id: None,
     };
     db.write("test.owned_album", |tx| {
         tx.execute_batch(&format!(
