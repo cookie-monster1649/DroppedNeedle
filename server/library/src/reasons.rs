@@ -39,6 +39,13 @@ pub const ALBUM_NOT_FOUND: Reason = reason(
     "This album is not in the library, or none of its files are left.",
     "Rescan the library, then open the album again.",
 );
+/// Fork: no artist suggestion to turn down.
+pub const NO_ARTIST_SUGGESTION: Reason = reason(
+    "NO_ARTIST_SUGGESTION",
+    "This artist has no suggestion to decide.",
+    "Open Check albums again to see what is suggested now.",
+);
+
 /// Fork: no suggestion from another catalogue to decide.
 pub const NO_PROVIDER_MATCH: Reason = reason(
     "NO_PROVIDER_MATCH",

@@ -431,6 +431,8 @@ pub struct LibrarySetup {
     pub imports: Imports,
     /// Fork: Deezer's catalogue, for albums MusicBrainz does not know.
     pub deezer: droppedneedle_providers::preview::PreviewClient,
+    /// Fork: MusicBrainz at background priority, for artist suggestions.
+    pub musicbrainz: droppedneedle_providers::musicbrainz::MusicBrainzView,
 }
 
 impl LibrarySetup {
@@ -471,6 +473,9 @@ impl LibrarySetup {
         );
         let import_acoustid = providers.acoustid.clone();
         let deezer = providers.previews.clone();
+        let musicbrainz = providers
+            .musicbrainz
+            .live(mb_source.clone(), RequestPriority::BackgroundSync);
         Self::assemble(
             platform,
             endpoints.identify,
@@ -480,6 +485,7 @@ impl LibrarySetup {
             imports,
             import_acoustid,
             deezer,
+            musicbrainz,
         )
     }
 
@@ -495,6 +501,7 @@ impl LibrarySetup {
         >,
         import_acoustid: droppedneedle_providers::acoustid::AcoustIdClient,
         deezer: droppedneedle_providers::preview::PreviewClient,
+        musicbrainz: droppedneedle_providers::musicbrainz::MusicBrainzView,
     ) -> Result<Self, String> {
         let db = &platform.db;
         let settings =
@@ -637,6 +644,7 @@ impl LibrarySetup {
             publishing,
             imports,
             deezer,
+            musicbrainz,
         })
     }
 }
@@ -662,6 +670,8 @@ pub struct LibraryServices {
     pub contrib: Arc<ContributionService>,
     /// Fork: albums' matches outside MusicBrainz.
     pub provider_matches: crate::provider_match::ProviderMatches,
+    /// Fork: suggestions for artists with no MusicBrainz link.
+    pub artist_suggestions: crate::artist_match::ArtistSuggestions,
 }
 
 impl LibraryServices {
@@ -693,6 +703,12 @@ impl LibraryServices {
             provider_matches: crate::provider_match::ProviderMatches::new(
                 setup.db.clone(),
                 setup.deezer.clone(),
+                setup.clock.clone(),
+            ),
+            artist_suggestions: crate::artist_match::ArtistSuggestions::new(
+                setup.db.clone(),
+                setup.deezer.clone(),
+                setup.musicbrainz.clone(),
                 setup.clock.clone(),
             ),
             setup: setup.clone(),
@@ -775,4 +791,5 @@ substate!(
     mutations: Mutations,
     contrib: Arc<ContributionService>,
     provider_matches: crate::provider_match::ProviderMatches,
+    artist_suggestions: crate::artist_match::ArtistSuggestions,
 );

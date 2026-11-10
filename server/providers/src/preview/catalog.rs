@@ -4,7 +4,7 @@
 //! candidate. These reads go through the same executor and rate row as the
 //! previews. Deezer's API is keyless. Shapes verified against api.deezer.com
 //! on 2026-11-11 (`/search/album`, `/album/153601242`, `/track/isrc:...`,
-//! `/artist/8785546`). An unknown id answers the error object with code 800,
+//! `/artist/8785546`, `/search/artist`). An unknown id answers the error object with code 800,
 //! which the classifier reads as absence.
 
 use serde::{Deserialize, Serialize};
@@ -320,5 +320,43 @@ impl PreviewClient {
             nb_album: artist.nb_album,
             nb_fan: artist.nb_fan,
         }))
+    }
+
+    /// Artists named like `name`, best first, at most `limit`.
+    ///
+    /// # Errors
+    ///
+    /// The typed failure of the call or of its answer.
+    pub async fn deezer_search_artists(
+        &self,
+        name: &str,
+        limit: u32,
+        priority: RequestPriority,
+    ) -> Result<Vec<DeezerArtistDetail>, ProviderError> {
+        let query = format!(r#"artist:"{}""#, name.replace('"', " "));
+        let limit = limit.clamp(1, 25).to_string();
+        let Some(reply) = self
+            .deezer_get(
+                &["search", "artist"],
+                &[("q", query.as_str()), ("limit", limit.as_str())],
+                priority,
+            )
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        let hits: Hits<WireArtistDetail> = decode(&reply)?;
+        Ok(hits
+            .data
+            .into_iter()
+            .map(|artist| DeezerArtistDetail {
+                id: artist.id,
+                name: artist.name,
+                picture: nonempty(artist.picture_xl),
+                link: nonempty(artist.link),
+                nb_album: artist.nb_album,
+                nb_fan: artist.nb_fan,
+            })
+            .collect())
     }
 }

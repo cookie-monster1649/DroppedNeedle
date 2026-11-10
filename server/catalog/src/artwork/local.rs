@@ -121,6 +121,18 @@ impl LocalArtwork {
         }))
     }
 
+    /// Fork: the picture of the artist's Deezer artist, if one was found.
+    pub async fn artist_picture(&self, artist_id: &str) -> Result<Option<String>, DbError> {
+        let id = artist_id.to_owned();
+        self.db
+            .read("artist picture", move |conn| {
+                conn.query_row(sql::ARTIST_PICTURE.text(), params![id], |row| row.get(0))
+                    .optional()
+                    .map_err(DbError::from)
+            })
+            .await
+    }
+
     /// Local art of any album identified as this release group.
     pub async fn by_release_group(&self, mbid: &str) -> Result<Option<LocalArt>, DbError> {
         self.first("release group art", sql::ART_OF_GROUP, mbid)
