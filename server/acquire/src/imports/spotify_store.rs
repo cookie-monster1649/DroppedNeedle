@@ -418,6 +418,7 @@ fn entry_for(track: &ImportedTrack) -> NewEntry {
         recording_mbid: track.recording_mbid.clone(),
         spotify_track_id: track.spotify_track_id.clone(),
         isrc: track.isrc.clone(),
+        spotify_album_id: track.spotify_album_id.clone(),
         ..NewEntry::default()
     }
 }

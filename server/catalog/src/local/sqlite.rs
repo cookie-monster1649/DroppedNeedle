@@ -416,6 +416,7 @@ impl LocalCatalog {
                     row_revision: row.get("row_revision")?,
                     listing_revision: row.get("listing_revision")?,
                     pending_review_id: row.get("pending_review_id")?,
+                    spotify_album_id: row.get("spotify_album_id")?,
                 })
             })
         })

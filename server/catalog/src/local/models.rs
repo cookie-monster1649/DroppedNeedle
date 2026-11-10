@@ -138,6 +138,9 @@ pub struct AlbumDetailView {
     pub listing_revision: i64,
     /// The album's pending identification review, if any.
     pub pending_review_id: Option<String>,
+    /// Fork: the Spotify album its tracks came from, for "Add to
+    /// MusicBrainz" and "Match to MusicBrainz" from Spotify's data.
+    pub spotify_album_id: Option<String>,
 }
 
 /// One page of catalog albums.

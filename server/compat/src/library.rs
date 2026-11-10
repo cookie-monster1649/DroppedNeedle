@@ -780,6 +780,7 @@ impl CompatLibrary {
                 recording_mbid: None,
                 spotify_track_id: None,
                 isrc: None,
+                spotify_album_id: None,
             })
             .collect())
     }

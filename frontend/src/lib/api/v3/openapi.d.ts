@@ -10160,6 +10160,11 @@ export interface components {
              *     removal echo.
              */
             row_revision: number;
+            /**
+             * @description Fork: the Spotify album its tracks came from, for "Add to
+             *     MusicBrainz" and "Match to MusicBrainz" from Spotify's data.
+             */
+            spotify_album_id?: string | null;
         };
         /** @description One edition (MusicBrainz release) of an album. */
         AlbumEditionItem: {

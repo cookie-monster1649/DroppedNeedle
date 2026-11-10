@@ -215,7 +215,7 @@ droppedneedle_kernel::sql! {
          AND COALESCE(cover_url, '') NOT LIKE '/api/v3/covers/release-group/' || lower(album_id) || '%'";
     /// Fork: an entry's provider ids (`catalog_playlist_entry_identities`).
     pub(super) INSERT_ENTRY_IDENTITY = "INSERT INTO catalog_playlist_entry_identities \
-         (entry_id, spotify_track_id, isrc) VALUES (?1, ?2, ?3)";
+         (entry_id, spotify_track_id, isrc, spotify_album_id) VALUES (?1, ?2, ?3, ?4)";
     /// An entry's preferred source. A recording belongs to the source that
     /// gave it, so another source starts with none.
     pub(super) SET_SOURCE_TYPE = "UPDATE catalog_playlist_tracks SET source_type = ?1, \

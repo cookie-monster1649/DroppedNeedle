@@ -318,7 +318,17 @@ droppedneedle_kernel::sql! {
         a.listing_revision AS listing_revision, \
         (SELECT r.id FROM library_identify_reviews r \
          WHERE r.local_album_id = a.id AND r.state = 'pending' \
-         ORDER BY r.created_at DESC, r.id LIMIT 1) AS pending_review_id \
+         ORDER BY r.created_at DESC, r.id LIMIT 1) AS pending_review_id, \
+        (SELECT x.spotify_album_id FROM local_tracks t \
+         JOIN catalog_playlist_entry_identities x ON x.spotify_album_id IS NOT NULL \
+         AND (x.entry_id IN (SELECT p.id FROM catalog_playlist_tracks p \
+              WHERE p.library_file_id = t.id) \
+           OR x.spotify_track_id IN (SELECT l.external_id FROM local_entity_source_links l \
+              WHERE l.local_track_id = t.id AND l.provider = 'spotify' \
+              AND l.external_entity_type = 'track')) \
+         WHERE t.local_album_id = a.id AND t.availability = 'indexed' \
+         GROUP BY x.spotify_album_id ORDER BY COUNT(*) DESC, x.spotify_album_id LIMIT 1) \
+         AS spotify_album_id \
         FROM local_albums a WHERE a.id = ?";
     /// Why library management leaves an album's files alone: a person's
     /// exclusion first, else the app's step back.
