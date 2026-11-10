@@ -1,11 +1,17 @@
 <script lang="ts">
-	import { Pause, Play, Trash2, TriangleAlert, X } from 'lucide-svelte';
+	import { Link2, Pause, Play, Trash2, TriangleAlert, X } from 'lucide-svelte';
 
 	import { streamUrlFor } from '$lib/features/player/playback/streamUrl';
 	import { isStaleRevision } from '$lib/api/errors';
 	import { createRemoveLibraryTrackMutation } from '$lib/features/library/queries/LibraryMutations.svelte';
 	import { formatCountdown } from '$lib/features/downloads/queries/downloadStatus';
 	import { toastStore } from '$lib/stores/toast';
+	import { authStore } from '$lib/stores/authStore.svelte';
+	import {
+		createMatchEditionFileMutation,
+		getEditionPlanQuery
+	} from '$lib/features/library/queries/EditionQueries.svelte';
+	import { failureSentence } from '$lib/features/library/components/edition/editionCopy';
 	import type { UnmatchedFile } from './albumEdition';
 	import Button from '$lib/ui/Button.svelte';
 	import Card from '$lib/ui/Card.svelte';
@@ -22,6 +28,69 @@
 	let { files, albumMbid, albumId, canRemove = false }: Props = $props();
 
 	const remove = createRemoveLibraryTrackMutation();
+
+	// Fork: put a file on an edition track no file holds, the same hand match
+	// the edition sheet makes, without opening it.
+	const planQuery = getEditionPlanQuery(
+		() => authStore.user?.id ?? '',
+		() => albumId,
+		() => null,
+		() => canRemove && files.length > 0 && Boolean(albumId)
+	);
+	const plan = $derived(planQuery.data);
+	const openTracks = $derived(
+		(plan?.tracks ?? [])
+			.filter((track) => !track.local_track_id && track.release_track_mbid)
+			.sort((a, b) => a.disc_number - b.disc_number || a.position - b.position)
+	);
+	const matchFile = createMatchEditionFileMutation();
+	let matchingId = $state<string | null>(null);
+	let chosen = $state('');
+
+	const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+	/** The open track most like the file: same title first, then nearest length. */
+	function likeliest(file: UnmatchedFile): string {
+		const title = fold(file.title);
+		const named = openTracks.find((track) => fold(track.title) === title);
+		if (named) return named.release_track_mbid;
+		const ms = file.lengthMs ?? 0;
+		const near = [...openTracks].sort(
+			(a, b) => Math.abs((a.length_ms ?? 0) - ms) - Math.abs((b.length_ms ?? 0) - ms)
+		)[0];
+		return near?.release_track_mbid ?? '';
+	}
+
+	function startMatch(file: UnmatchedFile): void {
+		matchingId = file.id;
+		chosen = likeliest(file);
+	}
+
+	function trackLabel(track: (typeof openTracks)[number]): string {
+		const disc = plan && plan.edition.disc_count > 1 ? `${track.disc_number}-` : '';
+		const length = track.length_ms ? ` (${fmt(track.length_ms / 1000)})` : '';
+		return `${disc}${track.position}. ${track.title}${length}`;
+	}
+
+	async function confirmMatch(file: UnmatchedFile): Promise<void> {
+		if (!plan || !chosen) return;
+		const track = openTracks.find((open) => open.release_track_mbid === chosen);
+		try {
+			await matchFile.mutateAsync({
+				localId: albumId,
+				trackId: file.id,
+				releaseTrackMbid: chosen,
+				identityRevision: plan.identity_revision
+			});
+			matchingId = null;
+			toastStore.show({ message: `Matched to ${track?.title ?? 'the track'}`, type: 'success' });
+		} catch (error) {
+			toastStore.show({
+				message: failureSentence(error, "This file couldn't be matched."),
+				type: 'error'
+			});
+		}
+	}
 	// two-step inline confirm: first click arms THIS row, second click removes
 	let confirmingId = $state<string | null>(null);
 
@@ -130,6 +199,11 @@
 						<span class="badge badge-sm badge-warning badge-outline whitespace-nowrap">
 							{file.label}
 						</span>
+						{#if canRemove && openTracks.length > 0 && matchingId !== file.id}
+							<Button variant="ghost" size="xs" icon={Link2} onclick={() => startMatch(file)}>
+								Match to track
+							</Button>
+						{/if}
 						{#if canRemove && file.rowRevision !== null}
 							{#if confirmingId === file.id}
 								<div class="flex items-center gap-1">
@@ -163,6 +237,35 @@
 							{/if}
 						{/if}
 					</div>
+					{#if matchingId === file.id}
+						<div class="mt-2 flex flex-wrap items-center gap-2 pl-11">
+							<select
+								class="select select-sm max-w-full flex-1"
+								aria-label="Edition track for this file"
+								bind:value={chosen}
+							>
+								{#each openTracks as track (track.release_track_mbid)}
+									<option value={track.release_track_mbid}>{trackLabel(track)}</option>
+								{/each}
+							</select>
+							<Button
+								variant="primary"
+								size="xs"
+								icon={Link2}
+								disabled={!chosen || matchFile.isPending}
+								onclick={() => confirmMatch(file)}
+							>
+								Match
+							</Button>
+							<IconButton
+								size="xs"
+								shape="square"
+								icon={X}
+								label="Cancel match"
+								onclick={() => (matchingId = null)}
+							/>
+						</div>
+					{/if}
 					{#if activeId === file.id}
 						<div class="mt-1.5 flex items-center gap-2 pl-11 pr-1">
 							<input
