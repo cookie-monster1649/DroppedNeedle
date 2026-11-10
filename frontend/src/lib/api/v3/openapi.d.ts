@@ -19500,7 +19500,7 @@ export interface components {
          * @description Where one playlist entry stands.
          * @enum {string}
          */
-        PlaylistRowState: "owned" | "missing" | "requested" | "fetching" | "held" | "failed" | "imported";
+        PlaylistRowState: "owned" | "missing" | "requested" | "fetching" | "held" | "failed" | "imported" | "removed";
         /** @description One entry's state. */
         PlaylistRowStatus: {
             state: components["schemas"]["PlaylistRowState"];

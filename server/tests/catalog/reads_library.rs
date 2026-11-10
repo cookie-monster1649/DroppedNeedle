@@ -1696,4 +1696,66 @@ async fn playlist_entries_link_to_the_library_tracks_they_name() {
         .find(|track| track.track_name == "Unknown")
         .and_then(|track| track.library_file_id);
     assert_eq!(unknown.as_deref(), Some("t2"));
+
+    // A file a person removes unlinks its entry and marks the song not to be
+    // fetched again; putting the file back lifts the mark and links it.
+    seed(
+        &fixture,
+        "UPDATE local_tracks SET availability = 'missing' WHERE id = 't1'; \
+         INSERT INTO library_catalog_actions (id, action_kind, local_track_id, before_json, \
+         after_json, created_at) VALUES ('act-1', 'remove_track', 't1', '{}', '{}', 1)",
+    )
+    .await;
+    store.link_library().await.unwrap();
+    let opener = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|track| track.track_name == "Opener")
+        .unwrap();
+    assert_eq!(opener.library_file_id, None);
+    assert_eq!(opener.available_sources, Some(vec![]));
+    let declines = || {
+        let db = fixture.runtime.db().clone();
+        async move {
+            db.read("declines", |conn| {
+                conn.query_row(
+                    "SELECT name_key, library_file_id FROM catalog_playlist_declines",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .map(Some)
+                .or_else(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    other => Err(other),
+                })
+                .map_err(droppedneedle_kernel::db::DbError::from)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(
+        declines().await,
+        Some((
+            droppedneedle_library::matching::strings::want_key("Aurora", "Opener"),
+            Some("t1".to_owned())
+        ))
+    );
+    seed(
+        &fixture,
+        "UPDATE local_tracks SET availability = 'indexed' WHERE id = 't1'",
+    )
+    .await;
+    store.link_library().await.unwrap();
+    assert_eq!(declines().await, None);
+    let opener = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|track| track.track_name == "Opener")
+        .and_then(|track| track.library_file_id);
+    assert_eq!(opener.as_deref(), Some("t1"));
 }
