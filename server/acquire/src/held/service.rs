@@ -185,6 +185,10 @@ pub struct HeldService {
     /// Entries a restart found claimed: the action on them stopped part
     /// way, and the prune finishes them once the library's writes settle.
     cut_off: Mutex<Vec<i64>>,
+    /// Fork: held want files already put to AcoustID, so one it cannot
+    /// place is not looked up again on every pass. Lives as long as the
+    /// service; a file AcoustID couldn't be reached for is taken back out.
+    heard_asked: Mutex<HashSet<i64>>,
 }
 
 impl HeldService {
@@ -203,6 +207,7 @@ impl HeldService {
             folders,
             site,
             cut_off: Mutex::new(Vec::new()),
+            heard_asked: Mutex::new(HashSet::new()),
         }
     }
 
@@ -2052,16 +2057,14 @@ impl HeldService {
     /// the recordings heard in it are looked up on the releases it is
     /// heard on, and one whose title and artists agree with the ask
     /// (`landing::want::heard_agrees`) pairs it. Each file is asked once
-    /// per run, so a file AcoustID cannot place is not looked up again on
-    /// every pass.
+    /// per service (`heard_asked`).
     async fn heard_as_ask(
         &self,
         file_id: i64,
         target: &specs::Target,
         landed: &LandedFile,
     ) -> Option<Pairing> {
-        static ASKED: std::sync::OnceLock<Mutex<HashSet<i64>>> = std::sync::OnceLock::new();
-        let asked = ASKED.get_or_init(|| Mutex::new(HashSet::new()));
+        let asked = &self.heard_asked;
         if !asked
             .lock()
             .map(|mut set| set.insert(file_id))

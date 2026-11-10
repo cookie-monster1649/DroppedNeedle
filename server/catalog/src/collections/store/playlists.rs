@@ -449,6 +449,7 @@ impl PlaylistStore {
     /// fills a playlist, so a download that lands shows on its playlists
     /// without anyone adding it by hand.
     pub async fn link_library(&self) -> Result<usize, StoreError> {
+        let now = i64::try_from(self.db.now_epoch()).unwrap_or(i64::MAX);
         self.db
             .write("playlists.link_library", move |tx| {
                 // A file put back lifts its marks; a file a person removed
@@ -467,9 +468,6 @@ impl PlaylistStore {
                         })
                     })?
                     .collect::<Result<_, _>>()?;
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |since| since.as_secs() as i64);
                 for link in removed {
                     let key = droppedneedle_library::matching::strings::want_key(
                         &link.artist,

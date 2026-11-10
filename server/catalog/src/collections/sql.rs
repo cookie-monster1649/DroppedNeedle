@@ -238,8 +238,11 @@ droppedneedle_kernel::sql! {
            WHERE s.value != 'local') \
          WHERE id = ?1";
     /// Fork: a removed file put back from the recycle bin lifts its mark.
+    /// Starts from the marks, so the track table is reached by id.
     pub(super) UNDECLINE_RESTORED = "DELETE FROM catalog_playlist_declines \
-         WHERE library_file_id IN (SELECT id FROM local_tracks WHERE availability = 'indexed')";
+         WHERE library_file_id IS NOT NULL AND EXISTS (SELECT 1 FROM local_tracks t \
+           WHERE t.id = catalog_playlist_declines.library_file_id \
+           AND t.availability = 'indexed')";
     /// Fork: an entry's provider ids (`catalog_playlist_entry_identities`).
     pub(super) INSERT_ENTRY_IDENTITY = "INSERT INTO catalog_playlist_entry_identities \
          (entry_id, spotify_track_id, isrc, spotify_album_id) VALUES (?1, ?2, ?3, ?4)";

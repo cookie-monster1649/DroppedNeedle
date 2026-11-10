@@ -167,6 +167,7 @@ catalog_mbid_resolutions
 catalog_new_release_seen_marks
 catalog_page_generations
 catalog_playlist_covers
+catalog_playlist_declines
 catalog_playlist_entry_identities
 catalog_playlist_tracks
 catalog_playlists
