@@ -310,7 +310,8 @@ pub struct WaitingAlbum {
     pub updated_at: f64,
     /// The identity's row revision, 0 when the album has none.
     pub identity_revision: i64,
-    /// The guess the identity names, for a best guess.
+    /// The guess the identity names, for a best guess; for an album
+    /// nothing fits, its closest candidate (fork).
     pub guess: Option<CandidateEvidence>,
     /// Indexed files the album holds.
     pub file_count: u32,
@@ -365,8 +366,10 @@ pub fn waiting_albums(
                             Vec::new()
                         }
                     };
+                // Fork: an album nothing fits still names its closest
+                // candidate (stored in ranking order) as a suggestion.
                 let guess = if unmatched {
-                    None
+                    candidates.first().cloned()
                 } else {
                     guess_of(&candidates, row.release_mbid.as_deref()).cloned()
                 };

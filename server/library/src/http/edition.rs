@@ -558,7 +558,8 @@ pub struct WaitingAlbumView {
     /// The identity's row revision, 0 when the album has none. "That's
     /// right" echoes it.
     pub identity_revision: i64,
-    /// What "That's right" confirms, for a best guess.
+    /// What "That's right" confirms, for a best guess. For an album
+    /// nothing fits (`unmatched`), its closest candidate, to suggest.
     pub guess: Option<WaitingGuessView>,
     /// Indexed files the album holds.
     pub file_count: u32,
