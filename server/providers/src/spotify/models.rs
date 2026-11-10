@@ -220,6 +220,29 @@ pub struct ExternalIds {
     pub isrc: Option<String>,
 }
 
+/// Fork: one album as `GET /albums/{id}` gives it, the parts the import
+/// proves it with.
+#[derive(Debug, Deserialize)]
+pub struct AlbumDetail {
+    /// Spotify album id.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// The album's outside ids.
+    #[serde(default)]
+    pub external_ids: Option<AlbumExternalIds>,
+}
+
+/// Fork: an album's outside ids.
+#[derive(Debug, Deserialize)]
+pub struct AlbumExternalIds {
+    /// Universal Product Code (the barcode).
+    #[serde(default)]
+    pub upc: Option<String>,
+    /// European Article Number, when Spotify gives that instead.
+    #[serde(default)]
+    pub ean: Option<String>,
+}
+
 /// A value that may be null but whose key must be present.
 fn nullable<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
     Option::<String>::deserialize(deserializer)
