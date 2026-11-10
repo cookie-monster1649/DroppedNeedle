@@ -1,6 +1,6 @@
 //! Fork: where each entry of a playlist stands for its owner, so the
 //! playlist page can show a missing song the way the album page shows a
-//! missing track (Missing, Fetching, Held, Failed) with its request button.
+//! missing track (Missing, Fetching, Held, Failed, Removed) with its request button.
 //!
 //! An entry's track key is its MusicBrainz recording when it has one, else
 //! the want key its artist and title give (`requests::ledger::want_key`):
@@ -33,6 +33,9 @@ pub enum PlaylistRowState {
     Failed,
     /// Landed; the playlist links it within a couple of minutes.
     Imported,
+    /// Its file was removed by hand; it is not fetched again until the file
+    /// is put back from the recycle bin.
+    Removed,
 }
 
 /// One entry's state.
@@ -102,15 +105,28 @@ pub async fn playlist_rows(
                         row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                         row.get::<_, Option<String>>(3)?.unwrap_or_default(),
                         row.get::<_, bool>(4)?,
+                        row.get::<_, Option<String>>(5)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             let mut held = conn.prepare_cached(sql::ROW_HELD.text())?;
             let mut request = conn.prepare_cached(sql::ROW_REQUEST.text())?;
+            let mut declined = conn.prepare_cached(sql::ROW_DECLINED.text())?;
             let mut rows = Vec::with_capacity(entries.len());
-            for (track_id, recording, artist, title, linked) in entries {
+            for (track_id, recording, artist, title, linked, spotify) in entries {
+                let mut removed = || -> rusqlite::Result<bool> {
+                    if artist.trim().is_empty() && title.trim().is_empty() && spotify.is_none() {
+                        return Ok(false);
+                    }
+                    declined.query_row(
+                        params![playlist_id, want_key(&artist, &title), spotify],
+                        |row| row.get(0),
+                    )
+                };
                 let state = if linked {
                     PlaylistRowState::Owned
+                } else if removed()? {
+                    PlaylistRowState::Removed
                 } else if let Some(key) = key_of(recording.as_deref(), &artist, &title) {
                     let is_held: bool = held.query_row(params![user_id, key], |row| row.get(0))?;
                     let status: Option<String> = request

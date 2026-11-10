@@ -451,6 +451,36 @@ impl PlaylistStore {
     pub async fn link_library(&self) -> Result<usize, StoreError> {
         self.db
             .write("playlists.link_library", move |tx| {
+                // A file put back lifts its marks; a file a person removed
+                // unlinks its entries and marks their songs not to fetch.
+                tx.execute(sql::UNDECLINE_RESTORED.text(), [])?;
+                let removed: Vec<RemovedLink> = tx
+                    .prepare_cached(sql::LINKED_REMOVED.text())?
+                    .query_map([], |row| {
+                        Ok(RemovedLink {
+                            entry: row.get(0)?,
+                            playlist: row.get(1)?,
+                            artist: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                            title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                            spotify: row.get(4)?,
+                            file: row.get(5)?,
+                        })
+                    })?
+                    .collect::<Result<_, _>>()?;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |since| since.as_secs() as i64);
+                for link in removed {
+                    let key = droppedneedle_library::matching::strings::want_key(
+                        &link.artist,
+                        &link.title,
+                    );
+                    tx.execute(
+                        sql::DECLINE.text(),
+                        rusqlite::params![link.playlist, key, link.spotify, link.file, now],
+                    )?;
+                    tx.execute(sql::UNLINK_REMOVED.text(), [&link.entry])?;
+                }
                 let mut linked = tx.execute(sql::LINK_LIBRARY.text(), [])?;
                 // An entry asked for by name links to the track its want's
                 // download landed as, whatever that file's tags say.
@@ -1085,4 +1115,14 @@ impl OwnedPlaylists<'_> {
             })
             .await
     }
+}
+
+/// Fork: an entry linked to a file a person removed.
+struct RemovedLink {
+    entry: String,
+    playlist: String,
+    artist: String,
+    title: String,
+    spotify: Option<String>,
+    file: String,
 }

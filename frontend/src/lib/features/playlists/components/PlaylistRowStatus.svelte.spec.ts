@@ -19,6 +19,12 @@ describe('PlaylistRowStatus', () => {
 		expect(page.getByRole('button', { name: 'Request Elevator' }).query()).toBeNull();
 	});
 
+	it('marks a removed song without a request button', async () => {
+		render(PlaylistRowStatus, { status: 'removed', title: 'Wrong', onrequest: vi.fn() });
+		await expect.element(page.getByText('Removed')).toBeInTheDocument();
+		expect(page.getByRole('button', { name: 'Request Wrong' }).query()).toBeNull();
+	});
+
 	it('points a held song at To decide', async () => {
 		render(PlaylistRowStatus, { status: 'held', title: 'Peace' });
 		await expect.element(page.getByRole('link', { name: /held/ })).toBeInTheDocument();
