@@ -300,7 +300,7 @@ impl SpotifyImportService {
         let info = info?;
         let tracks = tracks?;
 
-        let album_mbid = self.resolve_albums(&tracks).await;
+        let album_mbid = self.resolve_albums(&refresher, &tracks).await;
         let songs = self.resolve_tracks(&tracks, &album_mbid).await;
 
         let rows: Vec<ImportedTrack> = tracks
@@ -381,7 +381,11 @@ impl SpotifyImportService {
     /// MusicBrainz failure stops the lookups for this import: the albums
     /// left are imported unresolved rather than waiting on a service that
     /// is down.
-    async fn resolve_albums(&self, tracks: &[EntryTrack]) -> HashMap<String, ProvenAlbum> {
+    async fn resolve_albums(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        tracks: &[EntryTrack],
+    ) -> HashMap<String, ProvenAlbum> {
         let mut albums: Vec<(String, SpotifyAlbum)> = Vec::new();
         for track in tracks {
             let Some(album) = &track.album else { continue };
@@ -397,6 +401,7 @@ impl SpotifyImportService {
                             title: album.name.clone().unwrap_or_default(),
                             artist: first_artist(track),
                             isrcs: BTreeSet::new(),
+                            spotify_id: album_id.to_owned(),
                         },
                     ));
                     albums.len() - 1
@@ -416,7 +421,34 @@ impl SpotifyImportService {
                 Ok(Some(group)) => {
                     resolved.insert(album_id.clone(), group);
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    // Fork: last, the album's barcode as Spotify gives it.
+                    let code = match self.resolver.kept_barcode(album_id).await {
+                        Some(code) => code,
+                        None => match self.client.album_barcode(refresher, album_id).await {
+                            Ok(code) => {
+                                self.resolver.keep_barcode(album_id, code.as_deref());
+                                code
+                            }
+                            Err(error) => {
+                                tracing::debug!(?error, "spotify album barcode unavailable");
+                                None
+                            }
+                        },
+                    };
+                    if let Some(code) = code {
+                        match self.resolver.resolve_barcode(album, &code).await {
+                            Ok(Some(group)) => {
+                                resolved.insert(album_id.clone(), group);
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                tracing::warn!(%error, "musicbrainz failed on a barcode lookup");
+                                break;
+                            }
+                        }
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(
                         %error,

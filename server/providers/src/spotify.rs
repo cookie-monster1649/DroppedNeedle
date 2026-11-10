@@ -301,6 +301,22 @@ impl SpotifyClient {
         .await
     }
 
+    /// Fork: one album (`GET /albums/{id}`), for its barcode. The batch
+    /// `GET /albums` is gone for development-mode apps (February 2026).
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`].
+    pub async fn album(
+        &self,
+        access_token: &str,
+        album_id: &str,
+        priority: RequestPriority,
+    ) -> Result<models::AlbumDetail, ProviderError> {
+        self.get(access_token, &["albums", album_id], &[], priority)
+            .await
+    }
+
     /// One authenticated Web API GET of `path`. Each path value is one
     /// segment, so an id from a request cannot add a path or a query.
     async fn get<T: serde::de::DeserializeOwned>(
