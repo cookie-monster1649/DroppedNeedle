@@ -149,6 +149,22 @@ droppedneedle_kernel::sql! {
              WHERE e.origin = 'download' AND e.release_group_mbid = lower(?1) \
                AND e.state IN " + OPEN + " AND f.root = 'held' AND f.state = 'held' \
                AND f.created_at <= ?2";
+    /// Fork: download copies held in open entries whose own task has since
+    /// imported everything it was asked for: its newest import decision
+    /// is `imported` with no position missing and nothing of its own held,
+    /// made after the copy was held. Another copy filled the album, so
+    /// these are leftovers; a file held by the very import that filled it
+    /// (a bonus track, say) is not. At most `?1`.
+    pub(super) SUPERSEDED_FILES = "SELECT f.id, f.entry_id, f.path \
+             FROM acquire_held_files f JOIN acquire_held_entries e ON e.id = f.entry_id \
+             WHERE e.origin = 'download' AND e.state = 'held' \
+               AND f.root = 'held' AND f.state = 'held' AND f.source_task_id IS NOT NULL \
+               AND EXISTS (SELECT 1 FROM download_import_decisions d \
+                   WHERE d.id = (SELECT MAX(n.id) FROM download_import_decisions n \
+                                 WHERE n.task_id = f.source_task_id) \
+                     AND d.outcome = 'imported' AND d.missing_positions = '[]' \
+                     AND d.files_held = 0 AND d.decided_at > f.created_at) \
+             ORDER BY f.entry_id, f.id LIMIT ?1";
     /// Owner `?1`'s files held as only the album version by their other
     /// track downloads (not `?3`) of recording `?2`.
     pub(super) ALBUM_VERSION_FILES = FILE_ROW + " f WHERE f.state = 'held' \
