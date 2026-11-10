@@ -74,6 +74,16 @@ droppedneedle_kernel::sql! {
          VALUES (?1, ?2, ?3, 'album', ?4, ?5, 'manual', ?6, ?7, ?7, ?7) \
          ON CONFLICT (local_album_id, provider, external_entity_type, external_id) \
          WHERE local_album_id IS NOT NULL DO NOTHING";
+    /// Album `?1`'s indexed files as their tags stand, in album order:
+    /// what a Deezer tag write plans from.
+    pub(super) EDITION_FILES = "SELECT t.id AS track_id, t.title AS title, \
+         t.artist_name AS artist_name, t.album_artist_name AS album_artist_name, \
+         t.disc_number AS disc_number, t.track_number AS track_number, \
+         t.duration_seconds AS duration_seconds \
+         FROM local_albums a \
+         CROSS JOIN local_tracks t INDEXED BY idx_local_tracks_album_availability \
+         WHERE a.id = ?1 AND t.local_album_id = a.id AND t.availability = 'indexed' \
+         ORDER BY t.disc_number, t.track_number, t.id";
     pub(super) row PendingAlbumRow for [PENDING_ALBUMS] {
         album_id: String,
         title: String,
@@ -103,5 +113,14 @@ droppedneedle_kernel::sql! {
         tracks_json: String,
         score: f64,
         match_state: String,
+    }
+    pub(super) row EditionFileRow for [EDITION_FILES] {
+        track_id: String,
+        title: String,
+        artist_name: Option<String>,
+        album_artist_name: Option<String>,
+        disc_number: i64,
+        track_number: i64,
+        duration_seconds: Option<f64>,
     }
 }

@@ -1430,9 +1430,14 @@ impl From<EditionTagsError> for ApiError {
 /// Preview the edition's tags in the album's files.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct EditionTagsBody {
-    /// The album's edition, as the edition status showed it.
+    /// The album's edition, as the edition status showed it. Fork: for an
+    /// album with an accepted Deezer match and no MusicBrainz link,
+    /// `deezer:` and the match's `provider_album_id`, which writes the
+    /// match's album, album artist, artist, title, track number, date,
+    /// ISRC and label, and no MusicBrainz id.
     pub release_mbid: String,
-    /// The `identity_revision` the edition status showed.
+    /// The `identity_revision` the edition status showed; 0 for a
+    /// `deezer:` edition.
     pub expected_identity_revision: i64,
 }
 

@@ -17,6 +17,7 @@
 //! links. A MusicBrainz link the album gets later wins; the match stays as
 //! extra data.
 
+pub mod edition;
 pub mod sql;
 
 use std::collections::HashMap;
