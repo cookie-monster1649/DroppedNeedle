@@ -259,14 +259,19 @@
 
 	function playFromTrack(index: number) {
 		if (!playlist || playlist.tracks.length === 0) return;
-		const items = playlist.tracks
-			.map(playlistTrackToQueueItem)
-			.filter((item): item is NonNullable<typeof item> => item !== null);
+		// The queue leaves out rows nothing can play, so the row's place in
+		// the queue is the count of playable rows before it, not its index.
+		const mapped = playlist.tracks.map(playlistTrackToQueueItem);
+		const items = mapped.filter((item): item is NonNullable<typeof item> => item !== null);
 		if (items.length === 0) {
 			toastStore.show({ message: 'Nothing here can be played right now', type: 'info' });
 			return;
 		}
-		const startIndex = Math.min(index, items.length - 1);
+		if (mapped[index] == null) {
+			toastStore.show({ message: "This song can't be played right now", type: 'info' });
+			return;
+		}
+		const startIndex = mapped.slice(0, index).filter((item) => item !== null).length;
 		playerStore.playQueue(items, startIndex, false);
 	}
 

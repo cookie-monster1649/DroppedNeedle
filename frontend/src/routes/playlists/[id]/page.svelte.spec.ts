@@ -194,6 +194,30 @@ describe('Playlist detail page', () => {
 		}
 	});
 
+	it('starts the queue at the pressed row when rows before it cannot play', async () => {
+		detailQuery.data = makePlaylist({
+			track_count: 3,
+			tracks: [
+				makeTrack({ id: 'trk-1', position: 0, track_name: 'First Track' }),
+				makeTrack({
+					id: 'trk-2',
+					position: 1,
+					track_name: 'Missing Track',
+					track_source_id: null,
+					source_type: '',
+					available_sources: null
+				}),
+				makeTrack({ id: 'trk-3', position: 2, track_name: 'Third Track', track_source_id: 'vid-3' })
+			]
+		});
+		await renderDetail('pl-1');
+		await page.getByRole('button', { name: 'Play Third Track' }).click();
+		await vi.waitFor(() => expect(mockPlayQueue).toHaveBeenCalled());
+		const [items, startIndex] = mockPlayQueue.mock.calls[0] as [{ trackName: string }[], number];
+		expect(items).toHaveLength(2);
+		expect(items[startIndex].trackName).toBe('Third Track');
+	});
+
 	it('does not cache empty resolve results', async () => {
 		detailQuery.data = makePlaylist();
 		mockResolveMutate.mockResolvedValue({ sources: {} });
