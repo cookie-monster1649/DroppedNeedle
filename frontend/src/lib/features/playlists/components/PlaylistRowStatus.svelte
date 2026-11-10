@@ -40,7 +40,7 @@
 	{:else if status === 'removed'}
 		<span
 			class="badge badge-sm badge-ghost"
-			title="Its file was removed; it won't be fetched again. Put the file back from the album's recycle bin to undo."
+			title="Its file was removed, so syncs won't fetch it again. Request it to fetch it anew."
 			>Removed</span
 		>
 	{:else if status === 'held'}
@@ -55,7 +55,7 @@
 	{:else}
 		<span class="badge badge-sm badge-warning badge-outline">Missing</span>
 	{/if}
-	{#if onrequest && (status === 'missing' || status === 'failed')}
+	{#if onrequest && (status === 'missing' || status === 'failed' || status === 'removed')}
 		<IconButton
 			size="xs"
 			icon={Download}
