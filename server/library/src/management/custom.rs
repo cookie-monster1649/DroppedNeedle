@@ -13,9 +13,13 @@ use crate::matching::{CreditedArtist, Genre, Release, ReleaseMedium, ReleaseTrac
 /// manifest id; they are never written to a file.
 pub const CUSTOM_PREFIX: &str = "custom:";
 
-/// True for a release built from a custom edition manifest.
+/// True for a release built from a custom edition manifest, or (fork)
+/// the stand-in release of an accepted Deezer match: either has no
+/// MusicBrainz release behind it, and its tracks are keyed by library
+/// track id.
 pub fn is_custom(release: &Release) -> bool {
     release.id.starts_with(CUSTOM_PREFIX)
+        || crate::provider_match::edition::is_edition_id(&release.id)
 }
 
 /// The active custom edition of an album, as a release whose tracks are

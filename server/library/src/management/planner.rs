@@ -290,6 +290,43 @@ fn left_unmanaged(conn: &Connection, album_id: &str) -> rusqlite::Result<bool> {
     Ok(excluded || takeover::is_marked(conn, album_id)?)
 }
 
+/// Fork: an album written from its accepted Deezer match (see
+/// [`crate::provider_match::edition`]). Planned only while the album has
+/// no MusicBrainz link, is managed, and its match is still the one pinned.
+fn provider_state(
+    ctx: &PlanContext<'_>,
+    album_id: &str,
+    pin: &EditionPin,
+) -> Result<AlbumState, ManagementError> {
+    let db = &ctx.parts.db;
+    if pin.local_album_id != album_id
+        || pin.identity_revision != 0
+        || ctx.parts.identify_store.album_identity(album_id)?.is_some()
+    {
+        return Ok(AlbumState::Blocked(edition_changed()));
+    }
+    if db.read_blocking("management.edition_held", |conn| {
+        Ok::<_, ManagementError>(left_unmanaged(conn, album_id)?)
+    })? {
+        return Ok(AlbumState::Blocked(edition_held()));
+    }
+    let release = db.read_blocking("management.provider_edition", |conn| {
+        Ok::<_, ManagementError>(crate::provider_match::edition::edition_release(
+            conn, album_id,
+        )?)
+    })?;
+    Ok(match release {
+        Some(release) if release.id == pin.release_mbid => AlbumState::Ready {
+            release_mbid: release.id.clone(),
+            release: Box::new(release),
+            release_group_mbid: String::new(),
+            album_identity_revision: 0,
+            exact: false,
+        },
+        _ => AlbumState::Blocked(edition_changed()),
+    })
+}
+
 fn album_state(
     ctx: &PlanContext<'_>,
     album_id: &str,
@@ -325,6 +362,11 @@ fn album_state(
         return Ok(AlbumState::Blocked(automatic::skip_reason(
             automatic::SCAN_HELD_BACK,
         )));
+    }
+    if let Some(pin) = edition
+        && crate::provider_match::edition::is_edition_id(&pin.release_mbid)
+    {
+        return provider_state(ctx, album_id, pin);
     }
     let Some(identity) = store.album_identity(album_id)? else {
         return Ok(AlbumState::Blocked(reasons::identity_not_accepted()));
