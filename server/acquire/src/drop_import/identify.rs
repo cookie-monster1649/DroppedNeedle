@@ -214,23 +214,49 @@ enum FingerprintFailure {
 }
 
 /// Files a person assigned to one release group: the library's edition of
-/// it when it keeps one, else the group's closest edition, out of the
-/// release the files' tags name (when it is of the group) and the
-/// editions closest by track count. No closeness gate: the person's choice
-/// of album is the authority.
+/// it when it keeps one, else the edition the download asked for (`asked`,
+/// the request's default: the plain album) when the files pair with it,
+/// else the group's closest edition, out of the release the files' tags
+/// name (when it is of the group) and the editions closest by track count.
+/// No closeness gate: the person's choice of album is the authority.
 pub async fn assigned(
     library: &dyn LandingLibrary,
     landing: &Landing,
     release_group_mbid: &str,
+    asked: Option<&str>,
 ) -> Outcome {
     let group = release_group_mbid.trim().to_ascii_lowercase();
     let chosen = match read_chosen(library, &group, PERSON_TRIES).await {
         Ok(chosen) => chosen,
         Err(outcome) => return outcome,
     };
+    // Fork: without a library edition, the asked edition goes first, so a
+    // folder carrying bonus tracks or a second copy's files does not pull
+    // the album onto a bonus or promo edition by track count. The extra
+    // files are left out, as for any pinned edition.
+    if chosen.is_none()
+        && let Some(asked) = asked.map(str::trim).filter(|mbid| !mbid.is_empty())
+    {
+        let outcome = assigned_to(library, landing, &group, Some(asked.to_ascii_lowercase())).await;
+        if !matches!(outcome, Outcome::Review { .. }) {
+            return outcome;
+        }
+    }
+    assigned_to(library, landing, &group, chosen).await
+}
+
+/// [`assigned`] against `pin` when there is one, else the group's closest
+/// edition. A pin MusicBrainz no longer has falls back to the group.
+async fn assigned_to(
+    library: &dyn LandingLibrary,
+    landing: &Landing,
+    group: &str,
+    pin: Option<String>,
+) -> Outcome {
+    let group = group.to_owned();
     let mut target = Target {
         release_group_mbid: group.clone(),
-        release_mbid: chosen,
+        release_mbid: pin,
         ..Target::default()
     };
     let local = local_album(&landing.audio, &target);
