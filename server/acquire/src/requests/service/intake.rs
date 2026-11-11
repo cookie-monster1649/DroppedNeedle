@@ -657,6 +657,16 @@ impl RequestsService {
         self.store
             .add_want_identities(&key, identities, self.now_epoch())
             .await?;
+        // Fork: the album position rides beside the identities, a fact
+        // about the song on that album whatever becomes of this ask.
+        if let Some(track_number) = body.track_number.filter(|number| *number > 0)
+            && album_title != "Single track"
+        {
+            let disc_number = body.disc_number.filter(|disc| *disc > 0).unwrap_or(1);
+            self.store
+                .set_want_position(&key, &album_title, disc_number, track_number, self.now_epoch())
+                .await?;
+        }
         let fields = TrackFields {
             artist_name,
             album_title,

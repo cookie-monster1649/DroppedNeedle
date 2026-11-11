@@ -614,6 +614,8 @@ impl SyncRequests for RequestsSync {
                                 duration_seconds: track.duration,
                                 isrc: track.isrc.clone(),
                                 spotify_track_id: track.spotify_track_id.clone(),
+                                track_number: None,
+                                disc_number: None,
                             },
                         )
                         .await
