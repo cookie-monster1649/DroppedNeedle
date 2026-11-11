@@ -329,26 +329,56 @@ fn credited_names(artists: &str) -> Vec<String> {
 }
 
 /// Fork: whether an indexed track holds the song `artist` - `title`, in
-/// any edition: the folded title is the same and the track's artist or
-/// album artist shares a credited name with `artist`.
+/// any edition ([`held_copy`]).
 pub fn song_held(conn: &Connection, artist: &str, title: &str) -> rusqlite::Result<bool> {
+    Ok(held_copy(conn, artist, title)?.is_some())
+}
+
+const LOSSLESS: &[&str] = &["flac", "alac", "wav", "aiff", "aif", "ape", "wv"];
+
+/// Fork: the best indexed track holding the song `artist` - `title`, in
+/// any edition: the folded title is the same and the track's artist or
+/// album artist shares a credited name with `artist`. Several copies: a
+/// lossless file first, then the deeper, then the higher bitrate, then the
+/// lowest id.
+pub fn held_copy(conn: &Connection, artist: &str, title: &str) -> rusqlite::Result<Option<String>> {
     let title = droppedneedle_kernel::db::fold::fold_text(title);
     let wanted = credited_names(artist);
     if title.is_empty() || wanted.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let mut stmt = conn.prepare_cached(sql::TRACK_TITLE_ARTISTS.text())?;
     let rows = stmt.query_map(params![title], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
+        ))
     })?;
+    let mut best: Option<((bool, i64, i64), String)> = None;
     for row in rows {
-        let (track_artist, album_artist) = row?;
+        let (track_artist, album_artist, id, format, depth, rate) = row?;
         let held = credited_names(&format!("{track_artist}, {album_artist}"));
-        if wanted.iter().any(|name| held.contains(name)) {
-            return Ok(true);
+        if !wanted.iter().any(|name| held.contains(name)) {
+            continue;
+        }
+        let rank = (
+            LOSSLESS.contains(&format.to_ascii_lowercase().as_str()),
+            depth.unwrap_or(0),
+            rate.unwrap_or(0),
+        );
+        let better = match &best {
+            None => true,
+            Some((top, top_id)) => rank > *top || (rank == *top && id < *top_id),
+        };
+        if better {
+            best = Some((rank, id));
         }
     }
-    Ok(false)
+    Ok(best.map(|(_, id)| id))
 }
 
 /// The copy of `release_group_mbid` the library shows, the album

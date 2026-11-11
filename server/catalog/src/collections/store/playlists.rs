@@ -500,6 +500,37 @@ impl PlaylistStore {
                     }
                 }
                 drop(track_of);
+                // Then by name: the library's best copy of the same song,
+                // whatever its edition, unless a person turned the song away.
+                let unlinked: Vec<(String, String, String, String)> = tx
+                    .prepare_cached(sql::UNLINKED_ENTRIES.text())?
+                    .query_map([], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                            row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                        ))
+                    })?
+                    .collect::<Result<_, _>>()?;
+                for (entry, playlist, artist, title) in unlinked {
+                    if artist.trim().is_empty() || title.trim().is_empty() {
+                        continue;
+                    }
+                    let key = droppedneedle_library::matching::strings::want_key(&artist, &title);
+                    let declined: bool = tx
+                        .prepare_cached(sql::IS_DECLINED.text())?
+                        .query_row(rusqlite::params![playlist, key], |row| row.get(0))?;
+                    if declined {
+                        continue;
+                    }
+                    if let Some(track) =
+                        droppedneedle_library::identity::reads::held_copy(tx, &artist, &title)?
+                    {
+                        linked +=
+                            tx.execute(sql::LINK_ENTRY.text(), rusqlite::params![entry, track])?;
+                    }
+                }
                 tx.execute(sql::MARK_LINKED_LOCAL.text(), [])?;
                 tx.execute(sql::FILL_LINKED_LOCAL.text(), [])?;
                 tx.execute(sql::FILL_LINKED_COVER.text(), [])?;
