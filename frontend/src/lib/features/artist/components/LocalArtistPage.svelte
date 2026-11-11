@@ -38,9 +38,7 @@
 	const albumsQuery = getLibraryArtistAlbumsQuery(() => artistId);
 	const artist = $derived(artistQuery.data);
 	const albums = $derived(albumsQuery.data?.items ?? []);
-	const contributionAlbums = $derived(
-		albums.filter((album) => album.identity_state === 'local_only')
-	);
+	const contributionAlbums = $derived(albums.filter((album) => album.identity_state !== 'linked'));
 	const contributing = $derived(authStore.isTrusted && contributionAlbums.length > 0);
 	const contributionMutation = createLibraryContributionMutation();
 	const ratingsQuery = getRatingsQuery(() => (artist ? { artistIds: [artist.id] } : null));
@@ -172,7 +170,7 @@
 						rel="noreferrer">Open on Deezer</Button
 					>
 				{/if}
-				{#if contributing && artist.identity_state === 'local_only'}
+				{#if contributing && artist.identity_state !== 'linked'}
 					<Button variant="outline" icon={FileSearch} href="#musicbrainz-albums">
 						Find existing MusicBrainz artist
 					</Button>

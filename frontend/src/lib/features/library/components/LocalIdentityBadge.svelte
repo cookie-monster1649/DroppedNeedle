@@ -21,8 +21,16 @@
 		className = ''
 	}: Props = $props();
 
+	// Fork: `deezer` is an album with an accepted Deezer match, or an
+	// artist known on Deezer, and no MusicBrainz link.
 	const kind = $derived(
-		state !== 'linked' ? 'local' : subject === 'album' && !releaseMbid ? 'edition' : 'linked'
+		state === 'deezer'
+			? 'deezer'
+			: state !== 'linked'
+				? 'local'
+				: subject === 'album' && !releaseMbid
+					? 'edition'
+					: 'linked'
 	);
 
 	const content = $derived.by(() => {
@@ -31,6 +39,15 @@
 				label: 'Local edition',
 				description:
 					'This album is linked to a MusicBrainz release group, but this exact edition is not.'
+			};
+		}
+		if (kind === 'deezer') {
+			return {
+				label: 'Deezer linked',
+				description:
+					subject === 'album'
+						? 'This exact edition is matched to its album on Deezer.'
+						: 'This artist is linked to their Deezer artist.'
 			};
 		}
 		if (kind === 'linked') {

@@ -12,9 +12,18 @@ use utoipa::{IntoParams, ToSchema};
 
 use super::stores::{AlbumRecord, ArtistRecord, TrackRecord};
 
-/// `linked` when an identity row exists, else `local_only`.
-fn identity_state(linked: bool) -> String {
-    if linked { "linked" } else { "local_only" }.to_owned()
+/// `linked` when a MusicBrainz identity row exists; fork: else `deezer`
+/// when the album has an accepted Deezer match (an artist: is known on
+/// Deezer); else `local_only`.
+fn identity_state(linked: bool, provider_linked: bool) -> String {
+    if linked {
+        "linked"
+    } else if provider_linked {
+        "deezer"
+    } else {
+        "local_only"
+    }
+    .to_owned()
 }
 
 /// One catalog album.
@@ -34,7 +43,7 @@ pub struct AlbumView {
     pub release_mbid: Option<String>,
     /// Linked MusicBrainz artist id, when the artist is identified.
     pub artist_mbid: Option<String>,
-    /// `local_only` or `linked`.
+    /// `linked` (MusicBrainz), `deezer` (fork) or `local_only`.
     pub identity_state: String,
     /// Streamable tracks on this album.
     pub track_count: u64,
@@ -84,7 +93,7 @@ impl From<(AlbumRecord, bool, bool)> for AlbumView {
             release_group_mbid: album.release_group_mbid,
             release_mbid: album.release_mbid,
             artist_mbid: album.artist_mbid,
-            identity_state: identity_state(album.linked),
+            identity_state: identity_state(album.linked, album.provider_linked),
             track_count: album.track_count,
             expected_track_count: None,
             total_duration_seconds: album.total_duration_seconds,
@@ -402,7 +411,7 @@ pub struct ArtistView {
     pub name: String,
     /// Linked MusicBrainz artist id, when identified.
     pub artist_mbid: Option<String>,
-    /// `local_only` or `linked`.
+    /// `linked` (MusicBrainz), `deezer` (fork) or `local_only`.
     pub identity_state: String,
     /// Albums where this artist is the album artist.
     pub album_count: u64,
@@ -468,7 +477,7 @@ impl From<(ArtistRecord, bool, bool)> for ArtistView {
             id: artist.id,
             name: artist.name,
             artist_mbid: artist.artist_mbid,
-            identity_state: identity_state(artist.linked),
+            identity_state: identity_state(artist.linked, artist.provider_linked),
             album_count: artist.album_count,
             track_count: artist.track_count,
             led_track_count: artist.led_track_count,
@@ -724,7 +733,8 @@ pub struct StatsView {
     /// Albums to check, each once: a best guess, marked "Looks wrong" or
     /// with an open review.
     pub check_count: u64,
-    /// Albums with streamable tracks and no MusicBrainz identity.
+    /// Albums with streamable tracks, no MusicBrainz identity and no
+    /// accepted Deezer match.
     pub local_only_count: u64,
     /// When the last library scan finished successfully, unix seconds.
     pub last_scan_at: Option<f64>,
