@@ -87,6 +87,18 @@ vi.mock('$lib/features/discover/queries/DiscoverV3Queries.svelte', () => ({
 	})
 }));
 
+// Fork: the Spotify import status the page waits on, set per test before render.
+const importStatus = {
+	data: { state: 'none' } as { state: string; message?: string },
+	refetch: vi.fn(() => Promise.resolve({ data: importStatus.data }))
+};
+const mockReimport = vi.fn();
+vi.mock('$lib/features/playlists/queries/spotify.svelte', () => ({
+	IMPORT_POLL_MS: 10,
+	getSpotifyImportStatusQuery: () => importStatus,
+	createImportSpotifyPlaylistMutation: () => ({ mutateAsync: mockReimport, isPending: false })
+}));
+
 const mockToastShow = vi.fn();
 vi.mock('$lib/stores/toast', () => ({
 	toastStore: { show: (...args: unknown[]) => mockToastShow(...args) }
@@ -187,6 +199,9 @@ describe('Playlist detail page', () => {
 		mockAddToQueue.mockReset();
 		mockPlayNext.mockReset();
 		mockGoto.mockReset();
+		importStatus.data = { state: 'none' };
+		mockReimport.mockReset();
+		mockReimport.mockResolvedValue({ playlist_id: 'pl-1' });
 		try {
 			localStorage.clear();
 		} catch {
@@ -237,5 +252,43 @@ describe('Playlist detail page', () => {
 		await page.getByRole('button', { name: 'Play Unplayable Track' }).click();
 		expect(mockPlayQueue).toHaveBeenCalledTimes(1);
 		expect(mockToastShow).toHaveBeenCalledWith({ message: 'Track is not playable', type: 'error' });
+	});
+
+	it('waits on a running Spotify import with a loading state, not an empty list', async () => {
+		detailQuery.data = makePlaylist({ source_ref: 'spotify:abc123', track_count: 0, tracks: [] });
+		importStatus.data = { state: 'running' };
+		await renderDetail('pl-1');
+
+		await expect.element(page.getByText('Fetching tracklist from Spotify…')).toBeVisible();
+		await expect.element(page.getByText(/not in your library/)).not.toBeInTheDocument();
+		await expect.element(page.getByText(/Couldn't fetch the tracklist/)).not.toBeInTheDocument();
+	});
+
+	it('shows a failed import with its reason and a retry that imports again', async () => {
+		detailQuery.data = makePlaylist({ source_ref: 'spotify:abc123', track_count: 0, tracks: [] });
+		importStatus.data = { state: 'failed', message: 'Failed to fetch playlist from Spotify' };
+		await renderDetail('pl-1');
+
+		await expect
+			.element(page.getByText(/Couldn't fetch the tracklist from Spotify: Failed to fetch/))
+			.toBeVisible();
+		await expect
+			.element(page.getByText('Fetching tracklist from Spotify…'))
+			.not.toBeInTheDocument();
+		await page.getByRole('button', { name: 'Retry' }).click();
+		await vi.waitFor(() =>
+			expect(mockReimport).toHaveBeenCalledWith({ id: 'abc123', name: 'My Playlist' })
+		);
+	});
+
+	it('shows the tracklist once the import is done', async () => {
+		detailQuery.data = makePlaylist({ source_ref: 'spotify:abc123' });
+		importStatus.data = { state: 'done' };
+		await renderDetail('pl-1');
+
+		await expect.element(page.getByText('First Track')).toBeVisible();
+		await expect
+			.element(page.getByText('Fetching tracklist from Spotify…'))
+			.not.toBeInTheDocument();
 	});
 });

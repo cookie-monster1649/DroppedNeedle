@@ -143,6 +143,13 @@ const PATH_ID_ROWS: &[(Owned, &str, &str, u16, u16)] = &[
         404,
         404,
     ),
+    (
+        Owned::Playlist,
+        "GET",
+        "/api/v3/acquire/spotify/imports/{playlist_id}",
+        404,
+        404,
+    ),
     // Playlists: opening a private one answers its stub to everyone else,
     // admins included, and every other route treats it as not there.
     (

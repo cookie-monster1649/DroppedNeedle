@@ -22,6 +22,10 @@ droppedneedle_kernel::sql! {
     /// Fork: whether playlist `?1` is user `?2`'s, and from Spotify.
     pub(super) OWNED_PLAYLIST_SOURCE = "SELECT COALESCE(source_ref LIKE 'spotify:%', 0) \
              FROM catalog_playlists WHERE id = ?1 AND user_id = ?2";
+    /// Fork: the Spotify playlist id of user `?2`'s playlist `?1`; no row
+    /// when it is not theirs, NULL when it is not from Spotify.
+    pub(super) OWNED_SPOTIFY_ID = "SELECT CASE WHEN source_ref LIKE 'spotify:%' \
+             THEN substr(source_ref, 9) END FROM catalog_playlists WHERE id = ?1 AND user_id = ?2";
     /// Fork: playlist `?1`'s sync setting.
     pub(super) SYNC_OF = "SELECT auto_request, checked_at, last_error \
              FROM acquire_spotify_playlist_syncs WHERE playlist_id = ?1";
