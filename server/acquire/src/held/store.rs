@@ -374,12 +374,19 @@ impl NewFile {
     }
 }
 
+/// Fork: a library track's format, bit rate and bit depth.
+pub type SongQuality = (String, Option<i64>, Option<i64>);
+
 /// Fork: the names a want was asked with.
 #[derive(Debug, Clone, Default)]
 pub struct WantAsk {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub title: Option<String>,
+    /// The disc and track number the provider lists the song at on its
+    /// album (a playlist row's), when known.
+    pub disc_number: Option<i64>,
+    pub track_number: Option<i64>,
 }
 
 /// The held list over one connection: a transaction for writes, any
@@ -781,7 +788,24 @@ impl<'c> HeldRows<'c> {
                     artist: row.get(0)?,
                     album: row.get(1)?,
                     title: row.get(2)?,
+                    disc_number: row.get(3)?,
+                    track_number: row.get(4)?,
                 })
+            })
+            .optional()
+    }
+
+    /// Fork: the library's best copy of the song `artist` - `title` in any
+    /// edition, as its format, bit rate and bit depth.
+    pub fn song_copy(&self, artist: &str, title: &str) -> rusqlite::Result<Option<SongQuality>> {
+        let Some(id) = droppedneedle_library::identity::reads::held_copy(self.conn, artist, title)?
+        else {
+            return Ok(None);
+        };
+        self.conn
+            .prepare_cached(sql::TRACK_QUALITY.text())?
+            .query_row(params![id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
             .optional()
     }

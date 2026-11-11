@@ -1314,7 +1314,25 @@ impl HeldService {
             // track; with none there, it is placed as it is.
             pairing.owned.push((index, track));
         }
+        // Fork: the library's copy of a want's song, in any folder or
+        // edition. The held list's own retry never adds a second one.
+        let mut held_copy: Option<&'static str> = None;
         if let Some((ask, links)) = shape.take() {
+            if want && asker.gate() == Gate::HeldRetry {
+                let (artist, title) = (ask.artist.clone(), ask.title.clone());
+                held_copy = self
+                    .read("held.song_copy", move |rows| {
+                        rows.song_copy(&artist, &title)
+                    })
+                    .await?
+                    .map(|(format, rate, depth)| {
+                        crate::landing::quality::tier_for(
+                            &format,
+                            rate.and_then(|rate| u32::try_from(rate).ok()),
+                            depth.and_then(|depth| u8::try_from(depth).ok()),
+                        )
+                    });
+            }
             let tags: Vec<&droppedneedle_library::tags::read::AudioTag> =
                 batch_files.iter().map(|file| &file.file.tag).collect();
             release = super::want_shape::release(&ask, &tags, &links);
@@ -1332,7 +1350,7 @@ impl HeldService {
                 })
                 .await?
             {
-                release.date = year.map(|year| year.to_string());
+                release.date = year.filter(|year| *year > 0).map(|year| year.to_string());
             }
         }
         let folder = match entry.origin {
@@ -1352,37 +1370,74 @@ impl HeldService {
             owner: actor.map(str::to_owned),
             sidecars: Vec::new(),
         };
-        let placement = match intake::place(library.as_ref(), &batch, pairing, None).await {
-            Ok(placement) => placement,
-            Err(deferred) => {
-                tracing::warn!(
-                    entry_id = entry.id,
-                    detail = %deferred.detail,
-                    code = deferred.reason.code(),
-                    "held import refused"
-                );
-                if deferred.reason == Reason::JournalUnreadable {
-                    return Err(HeldError::Busy("held import".to_owned()));
-                }
-                if deferred.reason != Reason::LibraryChanged {
-                    return Err(refused(deferred.reason));
-                }
-                // The library changed under the import twice: the files
-                // stay held with the publisher's words, to try again.
-                let ids: Vec<i64> = files.iter().map(|file| file.id).collect();
-                let detail = deferred.detail.clone();
-                self.write("held.rehold", move |rows, _| {
-                    for id in &ids {
-                        rows.rehold(*id, Reason::LibraryChanged, Some(&detail))?;
+        // A copy no better than the library's is settled as owned; a better
+        // one waits for a person, who decides which copy stays.
+        let synthetic: Option<Vec<Outcome>> = held_copy.map(|copy| {
+            batch
+                .files
+                .iter()
+                .enumerate()
+                .map(|(index, file)| {
+                    if crate::landing::quality::beats(file.file.tier(), copy) {
+                        Outcome::Held {
+                            track: Some(index),
+                            reason: Reason::OwnedElsewhere,
+                            detail: format!(
+                                "the library already has this song ({copy}); this file is {}",
+                                file.file.tier()
+                            ),
+                        }
+                    } else {
+                        Outcome::AlreadyOwned { track: index }
                     }
-                    Ok(())
                 })
-                .await?;
-                acted
-                    .held
-                    .extend(std::iter::repeat_n(Reason::LibraryChanged, files.len()));
-                return Ok(());
-            }
+                .collect()
+        });
+        let placement = match synthetic {
+            Some(outcomes) => intake::Placement {
+                held: outcomes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, outcome)| matches!(outcome, Outcome::Held { .. }))
+                    .map(|(index, _)| index)
+                    .collect(),
+                outcomes,
+                paths: Vec::new(),
+                tags_kept: 0,
+                fingerprint: None,
+            },
+            None => match intake::place(library.as_ref(), &batch, pairing, None).await {
+                Ok(placement) => placement,
+                Err(deferred) => {
+                    tracing::warn!(
+                        entry_id = entry.id,
+                        detail = %deferred.detail,
+                        code = deferred.reason.code(),
+                        "held import refused"
+                    );
+                    if deferred.reason == Reason::JournalUnreadable {
+                        return Err(HeldError::Busy("held import".to_owned()));
+                    }
+                    if deferred.reason != Reason::LibraryChanged {
+                        return Err(refused(deferred.reason));
+                    }
+                    // The library changed under the import twice: the files
+                    // stay held with the publisher's words, to try again.
+                    let ids: Vec<i64> = files.iter().map(|file| file.id).collect();
+                    let detail = deferred.detail.clone();
+                    self.write("held.rehold", move |rows, _| {
+                        for id in &ids {
+                            rows.rehold(*id, Reason::LibraryChanged, Some(&detail))?;
+                        }
+                        Ok(())
+                    })
+                    .await?;
+                    acted
+                        .held
+                        .extend(std::iter::repeat_n(Reason::LibraryChanged, files.len()));
+                    return Ok(());
+                }
+            },
         };
         let mut imported: Vec<i64> = Vec::new();
         let mut owned: Vec<i64> = Vec::new();
@@ -2546,6 +2601,17 @@ fn want_ask(
             .unwrap_or_default(),
         // The entry's album title is the song for a want; only the request
         // knows the album.
+        number: asked
+            .track_number
+            .and_then(|track| u32::try_from(track).ok())
+            .filter(|track| *track > 0)
+            .map(|track| {
+                let disc = asked
+                    .disc_number
+                    .and_then(|disc| u32::try_from(disc).ok())
+                    .unwrap_or(1);
+                (disc.max(1), track)
+            }),
         album: named(asked.album),
         length_ms: None,
     }

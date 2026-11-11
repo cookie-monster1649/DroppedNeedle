@@ -123,9 +123,23 @@ droppedneedle_kernel::sql! {
     pub(super) WANT_IDENTITIES = "SELECT provider, external_id FROM acquire_want_identities \
              WHERE want_key = ?1 ORDER BY provider, external_id";
     /// Fork: what want `?1` asked for (artist, album, title), newest ask.
-    pub(super) WANT_ASK = "SELECT artist_name, album_title, track_title FROM request_history \
-             WHERE musicbrainz_id_lower = 'track:' || lower(?1) \
-             ORDER BY requested_at DESC LIMIT 1";
+    pub(super) WANT_ASK = "SELECT r.artist_name, r.album_title, r.track_title, \
+             (SELECT p.disc_number FROM catalog_playlist_tracks p \
+               WHERE lower(p.track_name) = lower(r.track_title) \
+                 AND lower(p.artist_name) = lower(r.artist_name) \
+                 AND lower(p.album_name) = lower(r.album_title) AND p.track_number > 0 \
+               ORDER BY p.created_at LIMIT 1), \
+             (SELECT p.track_number FROM catalog_playlist_tracks p \
+               WHERE lower(p.track_name) = lower(r.track_title) \
+                 AND lower(p.artist_name) = lower(r.artist_name) \
+                 AND lower(p.album_name) = lower(r.album_title) AND p.track_number > 0 \
+               ORDER BY p.created_at LIMIT 1) \
+             FROM request_history r \
+             WHERE r.musicbrainz_id_lower = 'track:' || lower(?1) \
+             ORDER BY r.requested_at DESC LIMIT 1";
+    /// Fork: the format, bit rate and bit depth of library track `?1`.
+    pub(super) TRACK_QUALITY = "SELECT coalesce(file_format, ''), bit_rate, bit_depth \
+             FROM local_tracks WHERE id = ?1";
     /// Fork: the year of the library album by album artist `?1` titled
     /// `?2` (both folded), so a song joining it is filed in its folder.
     pub(super) LIBRARY_ALBUM_YEAR = "SELECT year FROM local_albums \
