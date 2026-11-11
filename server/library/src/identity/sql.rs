@@ -555,10 +555,12 @@ droppedneedle_kernel::sql! {
              WHERE b.id = (" + (copy_of_group!("= ?1")) + ")";
     /// Whether any album owns release group `?1` (lowered).
     pub(super) GROUP_OWNED = "SELECT EXISTS (" + (owns_group!("= ?1")) + ")";
-    /// Fork: the artists of every indexed track titled `?1` (folded), for
-    /// "is this song already in the library" whatever the edition.
+    /// Fork: the artists, id and quality of every indexed track titled `?1`
+    /// (folded), for "is this song already in the library" whatever the
+    /// edition.
     pub(super) TRACK_TITLE_ARTISTS = "SELECT coalesce(t.artist_name_folded, ''), \
-             coalesce(t.album_artist_name_folded, '') \
+             coalesce(t.album_artist_name_folded, ''), t.id, \
+             coalesce(t.file_format, ''), t.bit_depth, t.bit_rate \
              FROM local_tracks t INDEXED BY idx_local_tracks_search \
              WHERE t.title_folded = ?1 AND t.availability = 'indexed'";
     /// Whether the album (`?1`) carries a flag a landing must keep: a
