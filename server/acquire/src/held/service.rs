@@ -64,6 +64,8 @@ const RETRY_BATCH: i64 = 20;
 /// does not agree stays unpaired, so a small batch would check the same
 /// first entries forever.
 const UNPAIRED_BATCH: i64 = 500;
+/// Fork: weak album matches the app tries by itself per pass.
+const WEAK_BATCH: i64 = 20;
 
 /// Why an action on the held list did not happen. The sentences are shown
 /// as they are.
@@ -189,6 +191,10 @@ pub struct HeldService {
     /// place is not looked up again on every pass. Lives as long as the
     /// service; a file AcoustID couldn't be reached for is taken back out.
     heard_asked: Mutex<HashSet<i64>>,
+    /// Fork: weak album matches already tried by the app itself, with the
+    /// held files they had: tried again only once that count changes (or
+    /// after a restart).
+    weak_tried: Mutex<HashMap<i64, i64>>,
 }
 
 impl HeldService {
@@ -208,6 +214,7 @@ impl HeldService {
             site,
             cut_off: Mutex::new(Vec::new()),
             heard_asked: Mutex::new(HashSet::new()),
+            weak_tried: Mutex::new(HashMap::new()),
         }
     }
 
@@ -500,7 +507,7 @@ impl HeldService {
                     })
                     .map_err(HeldError::from),
                 EntryOrigin::Download => {
-                    self.match_download(&entry, files, &group, Some(actor))
+                    self.match_download(&entry, files, &group, Some(actor), false)
                         .await
                 }
             },
@@ -1648,6 +1655,7 @@ impl HeldService {
         files: Vec<HeldFile>,
         group: &str,
         actor: Option<&str>,
+        auto: bool,
     ) -> Result<Acted, HeldError> {
         let library = self.library();
         let mut groups: Vec<Vec<HeldFile>> = Vec::new();
@@ -1673,7 +1681,15 @@ impl HeldService {
             if kept.is_empty() {
                 continue;
             }
-            let landing = probe_files(library.as_ref(), paths).await;
+            let mut landing = probe_files(library.as_ref(), paths).await;
+            // Fork: the app matching an album download by itself keeps the
+            // best copy of each track; the other copies stay held.
+            // Files held as they are scored as they were: only a set with
+            // copies to set aside is worth scoring again.
+            if auto && crate::landing::matching::set_aside_copies(&mut landing, |_| true).is_empty()
+            {
+                return Err(refused(Reason::WeakMatch));
+            }
             // Files that no longer read are left as they are.
             let files: Vec<HeldFile> = kept
                 .into_iter()
@@ -1717,6 +1733,12 @@ impl HeldService {
                     return Err(refused(Reason::AcoustidUnavailable));
                 }
             };
+            // Fork: by itself, the app takes only a clear match (see
+            // `clear_album_match`); anything less waits for a person.
+            if auto && let Err(why) = clear_album_match(&summary) {
+                tracing::info!(entry_id = entry.id, why, "held album left for a person");
+                return Err(refused(Reason::WeakMatch));
+            }
             let Some((found, _, pairing)) =
                 crate::drop_import::album_pairing(&summary, landing.audio.len(), true, false)
             else {
@@ -1739,7 +1761,11 @@ impl HeldService {
                     asked: Vec::new(),
                 },
                 origin: self.origin_of(entry, first, task.as_ref(), None),
-                gate: Gate::PersonChoseAlbum,
+                gate: if auto {
+                    Gate::Automatic
+                } else {
+                    Gate::PersonChoseAlbum
+                },
                 owner: actor.map(str::to_owned),
                 sidecars: Vec::new(),
             };
@@ -1948,7 +1974,77 @@ impl HeldService {
         self.discard_superseded().await;
         self.pair_wants().await;
         self.retry_due().await;
+        self.match_weak_albums().await;
         expired
+    }
+
+    /// Fork: album downloads held as weak matches are matched by the app
+    /// itself, as a person's Match would match them to the requested
+    /// album, keeping only the best copy of each track and only when the
+    /// match is clear (`clear_album_match`). Each entry is tried once per
+    /// set of held files.
+    async fn match_weak_albums(&self) {
+        let entries = match self
+            .read("held.weak_albums", |rows| rows.weak_albums(WEAK_BATCH))
+            .await
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(%error, "held weak albums unreadable");
+                return;
+            }
+        };
+        for (entry_id, owner, files) in entries {
+            {
+                let mut tried = self.weak_tried.lock().unwrap_or_else(|p| p.into_inner());
+                if tried.get(&entry_id) == Some(&files) {
+                    continue;
+                }
+                tried.insert(entry_id, files);
+            }
+            let viewer = Viewer {
+                user_id: owner.clone().unwrap_or_default(),
+                admin: owner.is_none(),
+            };
+            let entry = match self.claim(&viewer, entry_id).await {
+                Ok(entry) => entry,
+                Err(_) => {
+                    self.forget_weak(entry_id);
+                    continue;
+                }
+            };
+            let result = match entry.release_group_mbid.clone() {
+                Some(_) if !holds_copies(&entry.files) => Ok(Acted::default()),
+                Some(group) => {
+                    let held: Vec<HeldFile> = entry.files.clone();
+                    self.match_download(&entry, held, &group.to_ascii_lowercase(), None, true)
+                        .await
+                }
+                None => Ok(Acted::default()),
+            };
+            self.release(entry_id).await;
+            match result {
+                Ok(acted) => {
+                    tracing::info!(
+                        entry_id,
+                        imported = acted.imported,
+                        owned = acted.owned,
+                        "held album matched by itself"
+                    );
+                }
+                Err(HeldError::Busy(_) | HeldError::Unavailable(_)) => self.forget_weak(entry_id),
+                Err(error) => {
+                    tracing::info!(entry_id, %error, "held album still waits for a person");
+                }
+            }
+        }
+    }
+
+    fn forget_weak(&self, entry_id: i64) {
+        self.weak_tried
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&entry_id);
     }
 
     /// Fork: discard the held copies a download's own task has since made
@@ -2704,4 +2800,71 @@ pub(crate) fn spawn_held_prune(
             }
         }),
     )
+}
+
+/// Fork: whether the edition the app found for an album download's held
+/// files is a match it may take by itself, as a landing would have: the
+/// album title and artist agree, the album as a whole is within
+/// `ACCEPT_ALBUM`, no file's own MusicBrainz ids contradict it or dispute
+/// its pairing, every pair is within `ACCEPT_TRACK` (a length that
+/// contradicts its track is too far). Which edition is taken is
+/// `identify::assigned`'s choice: the library's edition of the album, else
+/// the one the download asked for, else the closest by track count, so
+/// editions that fit as well are settled the way a person's Match settles
+/// them. Answers why not otherwise.
+fn clear_album_match(summary: &crate::landing::matching::MatchSummary) -> Result<(), &'static str> {
+    use crate::landing::matching::MatchState;
+    use droppedneedle_library::matching::decide::{ACCEPT_ALBUM, ACCEPT_TRACK};
+    if summary.state != MatchState::Matched {
+        return Err("no conflict-free edition");
+    }
+    let Some(found) = summary.best() else {
+        return Err("no edition found");
+    };
+    let scored = &found.scored;
+    if scored.pairs.is_empty() {
+        return Err("no file pairs with a track");
+    }
+    if !scored.names_agree {
+        return Err("the album title or artist does not agree");
+    }
+    if !scored.conflicts.is_empty() || !scored.disputed.is_empty() {
+        return Err("the files' ids or audio dispute the edition");
+    }
+    if scored.worst_track() > ACCEPT_TRACK {
+        return Err("a file is too far from its track");
+    }
+    let distance = scored.library_distance();
+    if distance > ACCEPT_ALBUM {
+        return Err("the album distance is above the automatic threshold");
+    }
+    Ok(())
+}
+
+/// Fork: whether held rows look like two copies of one track (the same
+/// title, letters and digits only, and lengths within two seconds), the
+/// only held sets the app scores again by itself; the files themselves
+/// decide once read.
+fn holds_copies(files: &[HeldFile]) -> bool {
+    let key = |file: &HeldFile| {
+        let title: String = droppedneedle_library::matching::strings::fold(
+            file.pairing
+                .track_title
+                .as_deref()
+                .or(file.evidence_title.as_deref())
+                .unwrap_or_default(),
+        )
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect();
+        (!title.is_empty())
+            .then_some(title)
+            .zip(file.duration_seconds)
+    };
+    let keys: Vec<(String, f64)> = files.iter().filter_map(key).collect();
+    keys.iter().enumerate().any(|(index, (title, seconds))| {
+        keys[index + 1..]
+            .iter()
+            .any(|(other, length)| other == title && (length - seconds).abs() <= 2.0)
+    })
 }

@@ -741,6 +741,18 @@ impl<'c> HeldRows<'c> {
         Ok(())
     }
 
+    /// Fork: album downloads held only as weak matches (entry, owner,
+    /// held files), at most `limit`.
+    pub fn weak_albums(&self, limit: i64) -> rusqlite::Result<Vec<(i64, Option<String>, i64)>> {
+        let mut statement = self.conn.prepare_cached(sql::WEAK_ALBUMS.text())?;
+        let rows = statement
+            .query_map(params![limit], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
     /// Fork: entries asking for a want with files nothing paired yet.
     pub fn unpaired_wants(&self, limit: i64) -> rusqlite::Result<Vec<i64>> {
         let mut statement = self.conn.prepare_cached(sql::UNPAIRED_WANTS.text())?;
