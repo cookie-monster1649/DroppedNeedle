@@ -1646,7 +1646,20 @@ impl HeldService {
                         .to_owned(),
                 ));
             }
-            let summary = match identify::assigned(library.as_ref(), &landing, group).await {
+            // Fork: the edition the download asked for, when the person
+            // matched the files to that same album.
+            let (task, asked) = self.task_target(&files[0]).await?;
+            let asked = asked
+                .filter(|asked| asked.release_group_mbid.eq_ignore_ascii_case(group))
+                .and_then(|asked| asked.release_mbid);
+            let summary = match identify::assigned(
+                library.as_ref(),
+                &landing,
+                group,
+                asked.as_deref(),
+            )
+            .await
+            {
                 identify::Outcome::Matched(summary) => summary,
                 identify::Outcome::Review { reason, .. } => return Err(refused(reason)),
                 identify::Outcome::Busy | identify::Outcome::Closed => {
@@ -1667,7 +1680,6 @@ impl HeldService {
             };
             let release = found.release.clone();
             let first = &files[0];
-            let (task, _) = self.task_target(first).await?;
             let batch = IntakeBatch {
                 files: landing
                     .audio
