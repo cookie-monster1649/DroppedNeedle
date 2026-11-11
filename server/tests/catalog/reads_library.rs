@@ -1779,6 +1779,73 @@ async fn playlist_entries_link_by_name_to_any_edition_of_the_song() {
     );
 }
 
+/// Fork: a song is one song whatever apostrophe spells it. A Spotify
+/// entry "D'Angelo - Can't Wait" links to the file tagged "D’Angelo -
+/// Can’t Wait", a curly entry links to a straight file, and the
+/// already-held check a download import asks answers the same.
+#[tokio::test]
+async fn an_apostrophe_spelling_never_hides_a_held_song() {
+    use droppedneedle_catalog::collections::store::playlists::{NewEntry, PlaylistStore};
+
+    let fixture = sqlite_fixture().await;
+    seed(
+        &fixture,
+        "UPDATE local_tracks SET title = 'Can’t Wait', title_folded = 'can’t wait', \
+         artist_name_folded = 'd’angelo', album_artist_name_folded = 'd’angelo' \
+         WHERE id = 't1'; \
+         UPDATE local_tracks SET title = 'Don''t Go', title_folded = 'don''t go', \
+         artist_name_folded = 'd''angelo', album_artist_name_folded = 'd''angelo' \
+         WHERE id = 't2';",
+    )
+    .await;
+    let store = PlaylistStore::new(droppedneedle_catalog::collections::db::CollectionsDb::new(
+        fixture.runtime.db().clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    ));
+    let entry = |name: &str, artist: &str| NewEntry {
+        track_name: name.to_owned(),
+        artist_name: artist.to_owned(),
+        album_name: "Some Edition".to_owned(),
+        ..NewEntry::default()
+    };
+    let owner = store.owned_by("u1");
+    let (id, _) = owner
+        .create_with(
+            "Spotify",
+            vec![
+                entry("Can't Wait", "D'Angelo"),
+                entry("Don’t Go", "D’Angelo"),
+            ],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(store.link_library().await.unwrap(), 2);
+    let linked: Vec<Option<String>> = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|track| track.library_file_id)
+        .collect();
+    assert_eq!(linked, vec![Some("t1".to_owned()), Some("t2".to_owned())]);
+
+    let held = fixture
+        .runtime
+        .db()
+        .read("apostrophe held", |conn| {
+            Ok::<_, droppedneedle_kernel::db::DbError>((
+                droppedneedle_library::identity::reads::held_copy(conn, "D'Angelo", "Can't Wait")
+                    .map_err(droppedneedle_kernel::db::DbError::from)?,
+                droppedneedle_library::identity::reads::song_held(conn, "Jill Scott", "Can’t Wait")
+                    .map_err(droppedneedle_kernel::db::DbError::from)?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(held, (Some("t1".to_owned()), false));
+}
+
 /// Fork: a mark names the copy a person removed, not the song. An entry
 /// whose file was removed links to another copy of the song the library
 /// still holds, never to the removed one, and the mark lifts.
