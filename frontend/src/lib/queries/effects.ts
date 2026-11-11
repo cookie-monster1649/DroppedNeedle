@@ -220,7 +220,8 @@ export const EFFECTS = {
 	],
 	/** The caller's Spotify playlists. */
 	spotifyPlaylistsChanged: (userId: UserId): Sweep[] => [
-		{ key: SpotifyQueryKeyFactory.playlists(userId) }
+		{ key: SpotifyQueryKeyFactory.playlists(userId) },
+		{ key: SpotifyQueryKeyFactory.importStatusRoot(userId) }
 	],
 	/** The caller's Discover page. */
 	discoverHomeChanged: (userId: UserId): Sweep[] => [

@@ -125,6 +125,31 @@ impl SpotifySyncs {
             .map_err(SyncSettingError::Store)?
     }
 
+    /// Fork: the Spotify playlist id of `user_id`'s playlist: `Err(NotFound)`
+    /// when it is not theirs, `Ok(None)` when it is not from Spotify.
+    pub async fn spotify_id(
+        &self,
+        user_id: &str,
+        playlist_id: &str,
+    ) -> Result<Option<String>, SyncSettingError> {
+        let (user_id, playlist_id) = (user_id.to_owned(), playlist_id.to_owned());
+        let found: Option<Option<String>> = self
+            .db
+            .db()
+            .read("spotify.sync.spotify_id", move |conn| {
+                Ok(conn
+                    .query_row(
+                        sql::OWNED_SPOTIFY_ID.text(),
+                        params![playlist_id, user_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?)
+            })
+            .await
+            .map_err(SyncSettingError::Store)?;
+        found.ok_or(SyncSettingError::NotFound)
+    }
+
     /// Turn sync on (with `auto_request`) or off for `user_id`'s playlist.
     pub async fn set(
         &self,

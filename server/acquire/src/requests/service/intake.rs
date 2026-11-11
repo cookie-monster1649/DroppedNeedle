@@ -664,7 +664,13 @@ impl RequestsService {
         {
             let disc_number = body.disc_number.filter(|disc| *disc > 0).unwrap_or(1);
             self.store
-                .set_want_position(&key, &album_title, disc_number, track_number, self.now_epoch())
+                .set_want_position(
+                    &key,
+                    &album_title,
+                    disc_number,
+                    track_number,
+                    self.now_epoch(),
+                )
                 .await?;
         }
         let fields = TrackFields {
