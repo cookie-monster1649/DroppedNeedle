@@ -518,17 +518,28 @@ impl PlaylistStore {
                         continue;
                     }
                     let key = droppedneedle_library::matching::strings::want_key(&artist, &title);
-                    let declined: bool = tx
-                        .prepare_cached(sql::IS_DECLINED.text())?
-                        .query_row(rusqlite::params![playlist, key], |row| row.get(0))?;
-                    if declined {
-                        continue;
-                    }
-                    if let Some(track) =
-                        droppedneedle_library::identity::reads::held_copy(tx, &artist, &title)?
-                    {
-                        linked +=
+                    // A mark names the copy a person removed or unlinked:
+                    // that copy never links again, but another copy of the
+                    // song does, and lifts the mark. A mark with no file
+                    // keeps the entry unlinked.
+                    let declined: Option<Option<String>> = tx
+                        .prepare_cached(sql::DECLINED_FILE.text())?
+                        .query_row(rusqlite::params![playlist, key], |row| row.get(0))
+                        .optional()?;
+                    let except = match &declined {
+                        Some(None) => continue,
+                        Some(Some(file)) => Some(file.as_str()),
+                        None => None,
+                    };
+                    if let Some(track) = droppedneedle_library::identity::reads::held_copy_except(
+                        tx, &artist, &title, except,
+                    )? {
+                        let made =
                             tx.execute(sql::LINK_ENTRY.text(), rusqlite::params![entry, track])?;
+                        if made > 0 && declined.is_some() {
+                            tx.execute(sql::UNDECLINE.text(), rusqlite::params![playlist, key])?;
+                        }
+                        linked += made;
                     }
                 }
                 tx.execute(sql::MARK_LINKED_LOCAL.text(), [])?;
