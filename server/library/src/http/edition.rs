@@ -631,6 +631,9 @@ pub struct WaitingGuessView {
     pub release_mbid: Option<String>,
     /// Files the guess accounts for closely.
     pub matched_files: u32,
+    /// Fork: how close the guess is, 0 to 1 (`1 - distance`). On the same
+    /// scale as a provider guess's score, so the stronger of the two leads.
+    pub score: f64,
 }
 
 impl From<WaitingAlbum> for WaitingAlbumView {
@@ -643,6 +646,7 @@ impl From<WaitingAlbum> for WaitingAlbumView {
                 artist_name: guess.album_artist_name,
                 release_group_mbid: guess.release_group_mbid,
                 release_mbid: guess.release_mbid,
+                score: guess.score,
             }),
             file_count: album.file_count,
             looks_wrong_count: album.looks_wrong,
@@ -1141,7 +1145,10 @@ pub async fn remove_extras(
 }
 
 /// Albums whose match is a best guess waiting for a look (or, with
-/// `state=unmatched`, albums nothing fits). Newest first.
+/// `state=unmatched`, albums nothing fits). Newest first. Fork: an album
+/// nothing on MusicBrainz fits whose best guess is strong (0.85 or more on
+/// the common 0-to-1 scale, from MusicBrainz or Deezer) is on the best
+/// guess list, with its own state still `unmatched`.
 #[utoipa::path(
     get,
     tag = "library management",
@@ -1168,8 +1175,14 @@ pub async fn list_unconfirmed(
     let (limit, offset) = (paging.limit as u32, paging.after.unwrap_or(0));
     let (items, total) = blocking(move || ops.waiting_albums(which, limit, offset)).await?;
     let mut items: Vec<WaitingAlbumView> = items.into_iter().map(Into::into).collect();
-    if matches!(which, Waiting::Unmatched) {
-        let ids = items.iter().map(|item| item.album_id.clone()).collect();
+    // Fork: every album nothing on MusicBrainz fits carries its Deezer
+    // guess, on either list (Best guess holds the strong ones).
+    if !matches!(which, Waiting::LooksWrong) {
+        let ids = items
+            .iter()
+            .filter(|item| matches!(item.state, EditionState::Unmatched))
+            .map(|item| item.album_id.clone())
+            .collect();
         let found = blocking(move || matches.suggestions_for(ids)).await?;
         for item in &mut items {
             if let Some((found, matched)) = found.get(&item.album_id) {

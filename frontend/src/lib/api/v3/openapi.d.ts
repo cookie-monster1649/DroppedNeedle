@@ -5784,7 +5784,10 @@ export interface paths {
         };
         /**
          * Albums whose match is a best guess waiting for a look (or, with
-         *     `state=unmatched`, albums nothing fits). Newest first.
+         *     `state=unmatched`, albums nothing fits). Newest first. Fork: an album
+         *     nothing on MusicBrainz fits whose best guess is strong (0.85 or more on
+         *     the common 0-to-1 scale, from MusicBrainz or Deezer) is on the best
+         *     guess list, with its own state still `unmatched`.
          */
         get: operations["list_unconfirmed"];
         put?: never;
@@ -24976,6 +24979,12 @@ export interface components {
             matched_files: number;
             release_group_mbid: string;
             release_mbid?: string | null;
+            /**
+             * Format: double
+             * @description Fork: how close the guess is, 0 to 1 (`1 - distance`). On the same
+             *     scale as a provider guess's score, so the stronger of the two leads.
+             */
+            score: number;
             title: string;
         };
         /**

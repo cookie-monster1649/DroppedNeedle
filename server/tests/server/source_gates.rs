@@ -649,8 +649,9 @@ const MATCH_STATE_READS: IdentityRead = IdentityRead {
     sites: &[
         (
             "library/src/edition/sql.rs",
-            3,
-            "the albums waiting on a check and an album's edition view show the flag itself",
+            5,
+            "the albums waiting on a check and an album's edition view show the flag itself; \
+             fork: which Check albums tab an album is on reads its stored candidates",
         ),
         (
             "library/src/management/sql.rs",

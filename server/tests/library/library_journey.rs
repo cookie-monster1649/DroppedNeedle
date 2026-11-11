@@ -7825,6 +7825,9 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
     );
     assert_eq!(matches.suggest_some(10).await, Ok(1));
 
+    // The guess names the album, its artist and its one file: strong, so
+    // the album leaves Not found for Best guess, still unmatched, and the
+    // tab counts move with it.
     let (status, body) = app
         .call(
             "GET",
@@ -7834,13 +7837,28 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let guess = body["items"]
+    assert_eq!(body["total"], json!(0), "{body}");
+    let (status, stats) = app
+        .call("GET", "/api/v3/library/stats", &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stats}");
+    assert_eq!(stats["guess_count"], json!(1), "{stats}");
+    assert_eq!(stats["not_found_count"], json!(0), "{stats}");
+    let (status, body) = app
+        .call("GET", "/api/v3/library/unconfirmed", &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], json!(1), "{body}");
+    let row = body["items"]
         .as_array()
         .expect("items")
         .iter()
         .find(|row| row["album_id"] == json!(album))
-        .map(|row| row["provider_guess"].clone())
+        .cloned()
         .expect("album listed");
+    assert_eq!(row["state"], json!("unmatched"), "{body}");
+    let guess = row["provider_guess"].clone();
+    assert!(guess["score"].as_f64().unwrap_or(0.0) >= 0.85, "{body}");
     assert_eq!(guess["provider"], json!("deezer"), "{body}");
     assert_eq!(guess["provider_album_id"], json!("42"), "{body}");
     assert_eq!(guess["year"], json!(2019), "{body}");
@@ -8327,7 +8345,106 @@ async fn check_albums_suggests_the_closest_candidate_for_an_unmatched_album() {
     assert_eq!(guess["title"], json!("Closest"), "{body}");
     assert_eq!(guess["release_mbid"], json!("rel-1"), "{body}");
     assert_eq!(guess["matched_files"], json!(1), "{body}");
+    assert_eq!(guess["score"], json!(0.6), "{body}");
     assert_eq!(row(&bare)["guess"], Value::Null, "{body}");
+}
+
+/// Fork: an album nothing on MusicBrainz fits whose closest candidate is
+/// strong (0.85 or more, no file contradicting it) is listed under Best
+/// guess, still unmatched, with that candidate to use; a candidate a file
+/// contradicts stays under Not found however close it scores. The tab
+/// counts agree with the lists.
+#[tokio::test]
+async fn check_albums_lists_a_strong_candidate_under_best_guess() {
+    let rig = Rig::start("lib-check-strong").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-s/01.flac", "flac_full_01.flac");
+    plant(&music, "album-c/01.flac", "flac_full_02.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = |path: &str| {
+        rig.scan_store
+            .track_at("music", path)
+            .unwrap()
+            .expect("track indexed")
+    };
+    let (strong_track, contradicted_track) = (track("album-s/01.flac"), track("album-c/01.flac"));
+    let strong = track_album(app, &headers, &strong_track).await;
+    let contradicted = track_album(app, &headers, &contradicted_track).await;
+    let candidate = |track: &str, class: &str| {
+        json!([{
+            "candidate_key": "rg-1:rel-1",
+            "release_group_mbid": "rg-1",
+            "release_mbid": "rel-1",
+            "album_title": "Close",
+            "album_artist_name": "Someone",
+            "track_evidence": [{
+                "local_track_id": track,
+                "classification": class,
+                "evidence_kinds": ["title_and_length"],
+                "recording_mbid": null,
+                "release_track_mbid": null
+            }],
+            "score": 0.92,
+            "reason_code": "CLOSE_MATCH"
+        }])
+        .to_string()
+    };
+    for (album, json) in [
+        (&strong, candidate(&strong_track, "supported")),
+        (
+            &contradicted,
+            candidate(&contradicted_track, "contradictory"),
+        ),
+    ] {
+        app.seed_with(
+            "INSERT INTO library_album_match_state (local_album_id, state, reason_code, \
+             candidates_json, updated_at) VALUES (?1, 'unmatched', 'INSUFFICIENT_EVIDENCE', ?2, 1)",
+            rusqlite::params![album, json],
+        )
+        .await;
+    }
+
+    let list = |state: &'static str| async move {
+        let (status, body) = app
+            .call(
+                "GET",
+                &format!("/api/v3/library/unconfirmed?state={state}"),
+                &headers,
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body
+    };
+    let ids = |body: &Value| -> Vec<String> {
+        body["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|row| row["album_id"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+    let guesses = list("unconfirmed").await;
+    assert_eq!(ids(&guesses), vec![strong.clone()], "{guesses}");
+    assert_eq!(guesses["total"], json!(1), "{guesses}");
+    let row = &guesses["items"][0];
+    assert_eq!(row["state"], json!("unmatched"), "{guesses}");
+    assert_eq!(row["guess"]["release_mbid"], json!("rel-1"), "{guesses}");
+    assert_eq!(row["guess"]["score"], json!(0.92), "{guesses}");
+    let not_found = list("unmatched").await;
+    assert_eq!(ids(&not_found), vec![contradicted.clone()], "{not_found}");
+    assert_eq!(not_found["total"], json!(1), "{not_found}");
+
+    let (status, stats) = app
+        .call("GET", "/api/v3/library/stats", &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stats}");
+    assert_eq!(stats["guess_count"], json!(1), "{stats}");
+    assert_eq!(stats["not_found_count"], json!(1), "{stats}");
 }
 
 /// A best guess in Check albums names what "That's right" confirms and
