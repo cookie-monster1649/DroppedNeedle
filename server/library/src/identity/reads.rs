@@ -298,6 +298,59 @@ pub fn group_owned(conn: &Connection, release_group_mbid: &str) -> rusqlite::Res
         })
 }
 
+/// The credited names in an artist string, folded: "Lusanda, noxz" and
+/// "Sam Wills x Kaisha & David Nuri feat. X" split into their artists.
+fn credited_names(artists: &str) -> Vec<String> {
+    let folded = droppedneedle_kernel::db::fold::fold_text(artists);
+    let mut spaced = format!(" {folded} ");
+    for joiner in [
+        ",",
+        ";",
+        "/",
+        " & ",
+        " x ",
+        " and ",
+        " feat. ",
+        " feat ",
+        " ft. ",
+        " ft ",
+        " featuring ",
+        " with ",
+        " vs. ",
+        " vs ",
+    ] {
+        spaced = spaced.replace(joiner, "\u{1f}");
+    }
+    spaced
+        .split('\u{1f}')
+        .map(|name| name.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// Fork: whether an indexed track holds the song `artist` - `title`, in
+/// any edition: the folded title is the same and the track's artist or
+/// album artist shares a credited name with `artist`.
+pub fn song_held(conn: &Connection, artist: &str, title: &str) -> rusqlite::Result<bool> {
+    let title = droppedneedle_kernel::db::fold::fold_text(title);
+    let wanted = credited_names(artist);
+    if title.is_empty() || wanted.is_empty() {
+        return Ok(false);
+    }
+    let mut stmt = conn.prepare_cached(sql::TRACK_TITLE_ARTISTS.text())?;
+    let rows = stmt.query_map(params![title], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (track_artist, album_artist) = row?;
+        let held = credited_names(&format!("{track_artist}, {album_artist}"));
+        if wanted.iter().any(|name| held.contains(name)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The copy of `release_group_mbid` the library shows, the album
 /// `copy_of_group!` opens, so a download joins the copy a person sees. The
 /// group matches ignoring ASCII case. `None` when no live album is a copy of
@@ -319,4 +372,19 @@ pub fn copy_for_group(
             file_count: copy.file_count,
         })
         .optional()
+}
+
+#[cfg(test)]
+mod song_held_tests {
+    use super::credited_names;
+
+    #[test]
+    fn credits_split_into_their_artists() {
+        assert_eq!(credited_names("Lusanda, noxz"), vec!["lusanda", "noxz"]);
+        assert_eq!(
+            credited_names("Sam Wills x Kaisha & David Nuri feat. Bo"),
+            vec!["sam wills", "kaisha", "david nuri", "bo"]
+        );
+        assert_eq!(credited_names("Sandy Cossett"), vec!["sandy cossett"]);
+    }
 }

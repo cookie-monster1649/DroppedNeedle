@@ -27,6 +27,7 @@ impl DownloadWorker {
     /// Enqueue queued tasks while under the concurrency cap. With no
     /// source on, the queue is held as it is.
     pub(super) async fn enqueue_pass(self: &Arc<Self>, pass: &Pass) {
+        self.settle_held_songs(pass.now).await;
         if pass.sources.is_empty() {
             // No source is on: queued tasks wait untouched, with no look,
             // no enqueue key and no backoff spent, so the first pass after
@@ -241,6 +242,58 @@ impl DownloadWorker {
         }
         self.backoff(&task.id, now);
         false
+    }
+
+    /// Fork: settle every queued track ask whose song the library already
+    /// holds, in any edition, before any source is asked for it. Needs no
+    /// source on: nothing is fetched.
+    async fn settle_held_songs(&self, now: f64) {
+        let Some(queued) = self
+            .read_step("downloads.queued_tracks", |store| {
+                store.list_active(&[TaskStatus::Queued])
+            })
+            .await
+        else {
+            return;
+        };
+        for task in queued.iter().filter(|task| {
+            task.download_type == "track"
+                && task.origin != DispatchOrigin::Upgrade
+                && !Self::parked(task)
+                && !self.landing_in_flight(&task.id)
+        }) {
+            if self.settle_held_song(task, now).await {
+                tracing::info!(task_id = %task.id, "track ask settled: the library holds the song");
+            }
+        }
+    }
+
+    /// Fork: settle one track ask whose song the library already holds as
+    /// done instead of searching for it again. Answers whether it settled.
+    async fn settle_held_song(&self, task: &TaskRow, now: f64) -> bool {
+        let source = task.clone();
+        self.step("downloads.settle_held_song", move |store| {
+            let still_queued = store
+                .get_task(&source.id)?
+                .is_some_and(|task| task.status == TaskStatus::Queued);
+            if !still_queued || !store.song_held(&source)? {
+                return Ok(false);
+            }
+            store.finalize_task_and_attempt(
+                &source.id,
+                TaskStatus::Completed,
+                now,
+                Some(TaskOutcome::new(
+                    Reason::AlreadyInLibrary,
+                    "the library already holds this song",
+                )),
+                None,
+                true,
+            )?;
+            Ok(true)
+        })
+        .await
+        .unwrap_or(false)
     }
 
     /// Settle a parked upgrade: it never waits for a pick. Doing nothing
