@@ -19,7 +19,7 @@ use droppedneedle_acquire::downloads::journal::Journal;
 use droppedneedle_acquire::downloads::worker::{DownloadWorker, run_startup_recovery};
 use droppedneedle_acquire::downloads::{
     state::{AttemptDisposition, AttemptState, TaskStatus},
-    store::{NewTask, TaskOutcome},
+    store::{NewTask, TaskDetails, TaskOutcome},
 };
 use droppedneedle_acquire::reason::Reason;
 use droppedneedle_acquire::test_support::downloads_router;
@@ -1088,4 +1088,98 @@ async fn a_redirected_edition_keeps_its_plan_for_later_targets() {
         1,
         "MusicBrainz is asked once"
     );
+}
+
+// Fork: a track ask whose song the library already holds, in another
+// edition and credited with a featured artist, is settled instead of
+// searched for again: a queued one completes as already in the library,
+// and a failed one's retries stop.
+#[tokio::test]
+async fn a_track_ask_for_a_song_the_library_holds_is_settled() {
+    let db = AcquireDb::scratch().unwrap();
+    db.add_user("u-ada", "Ada", "user").await.unwrap();
+    db.write("test.seed_library", |tx| {
+        tx.execute_batch(
+            "INSERT INTO local_artists (id, display_name, folded_name, kind, created_at, updated_at)
+               VALUES ('ar1', 'Sandy Cossett', 'sandy cossett', 'person', 0, 0);
+             INSERT INTO local_albums (id, root_id, grouping_key, title, title_folded,
+               album_artist_id, album_artist_name, grouping_source, created_at, updated_at)
+               VALUES ('al1', 'r1', 'g', 'Au Bonheur', 'au bonheur', 'ar1', 'Sandy Cossett',
+                 'automatic', 0, 0);
+             INSERT INTO local_tracks (id, local_album_id, root_id, file_path, relative_path,
+               path_hash, file_size_bytes, file_mtime_ns, stat_revision, title, title_folded,
+               artist_name, artist_name_folded, album_title, album_title_folded, file_format,
+               bit_rate, ingest_source, imported_at, membership_source, availability)
+               VALUES ('tr1', 'al1', 'r1', 'a.mp3', 'a.mp3', 'h', 1, 0, 's', 'Sans elle',
+                 'sans elle', 'Sandy Cossett', 'sandy cossett', 'Au Bonheur', 'au bonheur',
+                 'mp3', 320, 'scan', 0, 'automatic', 'indexed');",
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let journal = Arc::new(Journal::new(db.clone(), quiet_ticks()));
+    journal
+        .run("test.seed", |store| {
+            for (id, artist, title) in [
+                ("t-queued", "Sandy Cossett, Someone", "Sans elle"),
+                ("t-failed", "Sandy Cossett", "Sans Elle"),
+                ("t-other", "Sandy Cossett", "Another Song"),
+            ] {
+                let row = NewTask {
+                    artist_name: artist.to_owned(),
+                    release_group_mbid: String::new(),
+                    ..task(id)
+                };
+                store.insert_track_task(&row, &format!("rec-{id}"), 1_000.0)?;
+                store.set_task_details(
+                    id,
+                    &TaskDetails {
+                        track_title: Some(title.to_owned()),
+                        ..TaskDetails::default()
+                    },
+                    1_000.0,
+                )?;
+            }
+            for id in ["t-failed", "t-other"] {
+                store.transition_task(
+                    id,
+                    TaskStatus::Failed,
+                    1_000.0,
+                    Some(TaskOutcome::new(Reason::NoSource, "no peers")),
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let worker = idle_worker(&journal).await;
+
+    worker.run_once(1).await;
+
+    let state = |id: &str| -> (String, Option<String>) {
+        (
+            db.db()
+                .one("SELECT status FROM download_tasks WHERE id = ?1", [id]),
+            db.db().one(
+                "SELECT outcome_code FROM download_tasks WHERE id = ?1",
+                [id],
+            ),
+        )
+    };
+    assert_eq!(
+        state("t-queued"),
+        (
+            "completed".to_owned(),
+            Some("already_in_library".to_owned())
+        )
+    );
+    assert_eq!(
+        state("t-failed"),
+        (
+            "cancelled".to_owned(),
+            Some("already_in_library".to_owned())
+        )
+    );
+    assert_ne!(state("t-other").1.as_deref(), Some("already_in_library"));
 }
