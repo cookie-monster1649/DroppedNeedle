@@ -342,6 +342,17 @@ const LOSSLESS: &[&str] = &["flac", "alac", "wav", "aiff", "aif", "ape", "wv"];
 /// lossless file first, then the deeper, then the higher bitrate, then the
 /// lowest id.
 pub fn held_copy(conn: &Connection, artist: &str, title: &str) -> rusqlite::Result<Option<String>> {
+    held_copy_except(conn, artist, title, None)
+}
+
+/// Fork: [`held_copy`], never answering with file `except` (a copy a
+/// person removed or unlinked from a playlist entry).
+pub fn held_copy_except(
+    conn: &Connection,
+    artist: &str,
+    title: &str,
+    except: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
     let title = droppedneedle_kernel::db::fold::fold_text(title);
     let wanted = credited_names(artist);
     if title.is_empty() || wanted.is_empty() {
@@ -361,6 +372,9 @@ pub fn held_copy(conn: &Connection, artist: &str, title: &str) -> rusqlite::Resu
     let mut best: Option<((bool, i64, i64), String)> = None;
     for row in rows {
         let (track_artist, album_artist, id, format, depth, rate) = row?;
+        if except == Some(id.as_str()) {
+            continue;
+        }
         let held = credited_names(&format!("{track_artist}, {album_artist}"));
         if !wanted.iter().any(|name| held.contains(name)) {
             continue;

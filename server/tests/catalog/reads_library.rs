@@ -1778,3 +1778,74 @@ async fn playlist_entries_link_by_name_to_any_edition_of_the_song() {
         ]
     );
 }
+
+/// Fork: a mark names the copy a person removed, not the song. An entry
+/// whose file was removed links to another copy of the song the library
+/// still holds, never to the removed one, and the mark lifts.
+#[tokio::test]
+async fn a_removed_copy_gives_way_to_another_copy_of_the_song() {
+    use droppedneedle_catalog::collections::store::playlists::{NewEntry, PlaylistStore};
+
+    let fixture = sqlite_fixture().await;
+    let store = PlaylistStore::new(droppedneedle_catalog::collections::db::CollectionsDb::new(
+        fixture.runtime.db().clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    ));
+    let owner = store.owned_by("u1");
+    let (id, _) = owner
+        .create_with(
+            "Spotify",
+            vec![NewEntry {
+                track_name: "Opener".to_owned(),
+                artist_name: "Aurora".to_owned(),
+                album_name: "First Light".to_owned(),
+                ..NewEntry::default()
+            }],
+        )
+        .await
+        .unwrap();
+    let opener = || async {
+        owner
+            .tracks(&id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|track| track.track_name == "Opener")
+            .and_then(|track| track.library_file_id)
+    };
+    store.link_library().await.unwrap();
+    assert_eq!(opener().await.as_deref(), Some("t1"));
+
+    // A second copy, in MP3, then a person removes the FLAC the entry plays.
+    seed(
+        &fixture,
+        "INSERT INTO local_tracks (id, local_album_id, root_id, file_path, relative_path, \
+         path_hash, file_size_bytes, file_mtime_ns, stat_revision, title, title_folded, \
+         artist_name, artist_name_folded, album_title, album_title_folded, album_artist_name, \
+         album_artist_name_folded, disc_number, track_number, year, duration_seconds, \
+         file_format, availability, ingest_source, imported_at, membership_source) VALUES \
+         ('t1b', 'al4', 'r1', '/m/t1b.mp3', 't1b.mp3', 'h1b', 3000000, 1, 's1b', 'Opener', \
+          'opener', 'Aurora', 'aurora', 'First Light (Deluxe)', 'first light (deluxe)', \
+          'Aurora', 'aurora', 1, 1, 1994, 200.0, 'mp3', 'indexed', 'scan', 1300.0, 'automatic'); \
+         UPDATE local_tracks SET availability = 'missing' WHERE id = 't1'; \
+         INSERT INTO library_catalog_actions (id, action_kind, local_track_id, before_json, \
+         after_json, created_at) VALUES ('act-1', 'remove_track', 't1', '{}', '{}', 1)",
+    )
+    .await;
+    store.link_library().await.unwrap();
+    assert_eq!(opener().await.as_deref(), Some("t1b"));
+    let marks = {
+        let db = fixture.runtime.db().clone();
+        db.read("marks", |conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM catalog_playlist_declines",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(droppedneedle_kernel::db::DbError::from)
+        })
+        .await
+        .unwrap()
+    };
+    assert_eq!(marks, 0, "the entry plays another copy, so its mark lifts");
+}
