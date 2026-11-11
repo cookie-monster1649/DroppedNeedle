@@ -2720,3 +2720,52 @@ async fn a_want_for_a_song_the_library_holds_starts_nothing() {
         "nothing is searched"
     );
 }
+
+// Fork: a track asked for by name from a provider's album (a Deezer
+// album's Request) keeps its disc and track number on that album, for the
+// held import to file a file with no number of its own; a single keeps none.
+#[tokio::test]
+async fn a_want_from_an_album_keeps_its_place_on_it() {
+    let (state, _db, dispatch) = setup().await;
+    let (status, asked) = call(
+        &state,
+        Method::POST,
+        "/api/v3/requests/wants",
+        Some(TRUSTED),
+        Some(json!({
+            "artist_name": "Akira Ræ",
+            "track_title": "Departure",
+            "album_title": "Departure",
+            "track_number": 4,
+            "disc_number": 2,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{asked}");
+    let key = asked["key"].as_str().expect("key").to_owned();
+    let (status, single) = call(
+        &state,
+        Method::POST,
+        "/api/v3/requests/wants",
+        Some(TRUSTED),
+        Some(json!({"artist_name": "Akira Ræ", "track_title": "Alone", "track_number": 1})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{single}");
+
+    let kept: Vec<String> = dispatch.dispatch.journal().db().db().column(
+        "SELECT want_key || '|' || album_title || '|' || disc_number || '|' || track_number \
+         FROM acquire_want_positions",
+        [],
+    );
+    assert_eq!(kept, vec![format!("{key}|Departure|2|4")]);
+
+    // The held import reads the ask back with its place on the album.
+    let conn = dispatch.dispatch.journal().db().db().connect();
+    let ask = droppedneedle_acquire::held::store::HeldRows::new(&conn)
+        .want_ask(&key)
+        .expect("ask reads")
+        .expect("ask row");
+    assert_eq!(ask.album.as_deref(), Some("Departure"));
+    assert_eq!((ask.disc_number, ask.track_number), (Some(2), Some(4)));
+}

@@ -25004,6 +25004,11 @@ export interface components {
             artist_name: string;
             /**
              * Format: int64
+             * @description Fork: the disc of `track_number` (1 when absent).
+             */
+            disc_number?: number | null;
+            /**
+             * Format: int64
              * @description Track length in seconds, when known.
              */
             duration_seconds?: number | null;
@@ -25011,6 +25016,12 @@ export interface components {
             isrc?: string | null;
             /** @description The Spotify track: its id, `spotify:track:` URI or link. */
             spotify_track_id?: string | null;
+            /**
+             * Format: int64
+             * @description Fork: the track number on `album_title`, when the ask comes from a
+             *     provider's album; a file with no number of its own is filed there.
+             */
+            track_number?: number | null;
             /** @description Track title, version words included ("Halo (Live)"). */
             track_title: string;
         };

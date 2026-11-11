@@ -69773,6 +69773,14 @@
             "type": "string",
             "description": "Artist name."
           },
+          "disc_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Fork: the disc of `track_number` (1 when absent)."
+          },
           "duration_seconds": {
             "type": [
               "integer",
@@ -69794,6 +69802,14 @@
               "null"
             ],
             "description": "The Spotify track: its id, `spotify:track:` URI or link."
+          },
+          "track_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Fork: the track number on `album_title`, when the ask comes from a\nprovider's album; a file with no number of its own is filed there."
           },
           "track_title": {
             "type": "string",
