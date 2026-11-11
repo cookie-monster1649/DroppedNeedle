@@ -175,6 +175,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/acquire/spotify/imports/{playlist_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: where the newest Spotify import into one of the caller's
+         *     playlists stands: the playlist page shows a loading state while it runs
+         *     and the error, with a retry, when it failed.
+         */
+        get: operations["get_spotify_import_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/acquire/spotify/playlists": {
         parameters: {
             query?: never;
@@ -23718,6 +23739,19 @@ export interface components {
             /** @description Internal playlist id. */
             playlist_id: string;
         };
+        /**
+         * @description Fork: where the newest Spotify import into one of the caller's
+         *     playlists stands, so its page can wait for the tracklist.
+         */
+        SpotifyImportStatus: {
+            /** @description Why it failed, user-safe; only on `failed`. */
+            message?: string | null;
+            /**
+             * @description `running` (queued or fetching), `done`, `failed`, or `none` (never
+             *     imported through the job queue, or not from Spotify).
+             */
+            state: string;
+        };
         /** @description One owned Spotify playlist. */
         SpotifyPlaylistItem: {
             /** @description Picked cover URL, smallest image at least 250 wide. */
@@ -25953,6 +25987,38 @@ export interface operations {
             };
             /** @description Spotify is not set up, or no Redirect Origin is set and the request names no address to build one from */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_spotify_import_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Internal playlist id */
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Import status */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifyImportStatus"];
+                };
+            };
+            /** @description Not the caller's playlist */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

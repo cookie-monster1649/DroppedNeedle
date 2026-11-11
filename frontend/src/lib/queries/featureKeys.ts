@@ -172,7 +172,11 @@ export const SpotifyQueryKeyFactory = {
 	playlists: (userId: UserId) => key(userScope(userId), 'spotify', 'playlists'),
 	// The address follows the saved redirect origin, so a saved change reads it again.
 	redirectUri: (userId: UserId, origin: string | null) =>
-		key(userScope(userId), 'spotify', 'redirect-uri', origin)
+		key(userScope(userId), 'spotify', 'redirect-uri', origin),
+	// Fork: where the newest import into one playlist stands.
+	importStatusRoot: (userId: UserId) => key(userScope(userId), 'spotify', 'import-status'),
+	importStatus: (userId: UserId, playlistId: string | null) =>
+		key(userScope(userId), 'spotify', 'import-status', playlistId)
 };
 
 // Service health is the server's, the same for everyone.
