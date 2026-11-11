@@ -355,6 +355,29 @@ impl LandingService {
             }
         };
         let mut target = target_for(task, &details, &plan);
+        // Fork: a want whose ask carried no length takes Deezer's, from an
+        // accepted album match holding the song, so its file can still be
+        // checked and filed by itself instead of waiting for a person.
+        if target.want_seconds.is_none()
+            && want::want_key(&target).is_some()
+            && let Some(title) = target.track_title.clone()
+        {
+            let artist = target.artist_name.clone();
+            target.want_seconds = self
+                .journal
+                .db()
+                .db()
+                .read("downloads.landing.deezer_length", move |conn| {
+                    Ok::<_, droppedneedle_kernel::db::DbError>(
+                        droppedneedle_library::provider_match::confirmed_track_seconds(
+                            conn, &artist, &title,
+                        )?,
+                    )
+                })
+                .await
+                .ok()
+                .flatten();
+        }
         target.wait_for_files = patient;
         // A waiver covers only the attempt that fetched the candidate the
         // person confirmed, never a failover or a fallback search.

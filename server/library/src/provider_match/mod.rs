@@ -286,6 +286,43 @@ fn tracks_of(album: &DeezerAlbum) -> Vec<MatchTrack> {
 }
 
 /// The album's indexed files.
+/// Fork: the length Deezer gives the song `artist` - `title` on an
+/// accepted match, for checking a downloaded file when the ask carried no
+/// length. The album artist must share a name with `artist` and the track
+/// title must fold the same; `None` when no accepted match has the song.
+pub fn confirmed_track_seconds(
+    conn: &Connection,
+    artist: &str,
+    title: &str,
+) -> rusqlite::Result<Option<f64>> {
+    let (artist, title) = (norm(artist), norm(title));
+    if artist.is_empty() || title.is_empty() {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare_cached(sql::CONFIRMED_TRACK_LISTS.text())?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (album_artist, tracks) = row?;
+        let album_artist = norm(&album_artist);
+        if album_artist.is_empty()
+            || !(artist.contains(&album_artist) || album_artist.contains(&artist))
+        {
+            continue;
+        }
+        let tracks: Vec<MatchTrack> = serde_json::from_str(&tracks).unwrap_or_default();
+        if let Some(seconds) = tracks
+            .iter()
+            .find(|track| norm(&track.title) == title)
+            .and_then(|track| track.duration_seconds)
+        {
+            return Ok(Some(seconds));
+        }
+    }
+    Ok(None)
+}
+
 pub fn held_files(conn: &Connection, album_id: &str) -> rusqlite::Result<Vec<HeldFile>> {
     let mut stmt = conn.prepare_cached(sql::HELD_FILES.text())?;
     let rows = stmt

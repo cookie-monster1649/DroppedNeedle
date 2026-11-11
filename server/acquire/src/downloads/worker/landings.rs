@@ -311,6 +311,17 @@ impl DownloadWorker {
                     // A release that finished but did not deliver what
                     // was asked is blocklisted before the failover, so the
                     // next candidate is a different source; held rows stay.
+                    // Fork: a hold only because MusicBrainz has no release
+                    // to check against says nothing against the copy, so it
+                    // is never blocklisted: a later ask may still take it.
+                    let quarantine = (!matches!(
+                        &report.result,
+                        LandingResult::Held {
+                            code: Reason::NoRelease,
+                            ..
+                        }
+                    ))
+                    .then_some(QuarantineReason::VerifyFailed);
                     self.forget_landing(&task.id);
                     self.fail_over(
                         now,
@@ -322,7 +333,7 @@ impl DownloadWorker {
                             Reason::TracksMissing,
                             "the download did not deliver every requested track",
                         ),
-                        Some(QuarantineReason::VerifyFailed),
+                        quarantine,
                     )
                     .await;
                     return;
