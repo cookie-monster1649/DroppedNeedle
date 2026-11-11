@@ -7872,6 +7872,26 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["state"], json!("confirmed"), "{body}");
 
+    // An accepted match counts as matched: the album leaves Check albums.
+    let (status, stats) = app
+        .call("GET", "/api/v3/library/stats", &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stats}");
+    assert_eq!(stats["guess_count"], json!(0), "{stats}");
+    assert_eq!(stats["not_found_count"], json!(0), "{stats}");
+    for state in ["unconfirmed", "unmatched"] {
+        let (status, body) = app
+            .call(
+                "GET",
+                &format!("/api/v3/library/unconfirmed?state={state}"),
+                &headers,
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["total"], json!(0), "{state}: {body}");
+    }
+
     let (status, detail) = app
         .call(
             "GET",
