@@ -281,6 +281,8 @@ pub struct ArtistRecord {
     pub artist_mbid: Option<String>,
     /// True when an identity row exists.
     pub linked: bool,
+    /// Fork: true when the artist is known on Deezer.
+    pub provider_linked: bool,
     /// Albums led as album artist.
     pub album_count: u64,
     /// Streamable tracks credited.

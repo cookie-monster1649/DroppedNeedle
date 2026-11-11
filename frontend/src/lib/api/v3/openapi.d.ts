@@ -10784,7 +10784,7 @@ export interface components {
             guess_contradicted: boolean;
             /** @description Local album id. */
             id: string;
-            /** @description `local_only` or `linked`. */
+            /** @description `linked` (MusicBrainz), `deezer` (fork) or `local_only`. */
             identity_state: string;
             /** @description True for compilations and various-artists sets. */
             is_compilation: boolean;
@@ -11687,7 +11687,7 @@ export interface components {
             favorite: boolean;
             /** @description Local artist id. */
             id: string;
-            /** @description `local_only` or `linked`. */
+            /** @description `linked` (MusicBrainz), `deezer` (fork) or `local_only`. */
             identity_state: string;
             /**
              * Format: int64
@@ -24119,7 +24119,8 @@ export interface components {
             last_scan_at?: number | null;
             /**
              * Format: int64
-             * @description Albums with streamable tracks and no MusicBrainz identity.
+             * @description Albums with streamable tracks, no MusicBrainz identity and no
+             *     accepted Deezer match.
              */
             local_only_count: number;
             /**
