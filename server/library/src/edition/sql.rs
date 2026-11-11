@@ -8,6 +8,83 @@ use droppedneedle_kernel::db::time::Millis;
 
 use crate::identity::sql::PERSONS;
 
+/// Fork: an unmatched album's best guess is strong, whichever catalogue it
+/// comes from. `$state` names the album's `library_album_match_state` row.
+///
+/// The common scale is 0 to 1. A MusicBrainz candidate scores `1 -
+/// distance` (its stored `score`, the first candidate being the closest);
+/// a Deezer suggestion scores its fit (title 30%, artist 25%, files
+/// accounted for 45%, plus 0.2 for an ISRC hit, capped at 1). Either is
+/// strong at 0.85 or more: a MusicBrainz candidate that close is within
+/// the matcher's accept distance (0.20) with room to spare, and a Deezer
+/// album that close names the album and artist and accounts for nearly
+/// every file. A MusicBrainz candidate any file contradicts is never
+/// strong.
+#[macro_export]
+macro_rules! strong_guess {
+    ($album_id:literal, $state:literal) => {
+        concat!(
+            "(EXISTS (SELECT 1 FROM library_album_provider_matches sgp WHERE sgp.local_album_id = ",
+            $album_id,
+            " AND sgp.match_state = 'suggested' AND sgp.score >= 0.85) \
+             OR (COALESCE(json_extract(",
+            $state,
+            ".candidates_json, '$[0].score'), 0) >= 0.85 \
+             AND NOT EXISTS (SELECT 1 FROM json_each(",
+            $state,
+            ".candidates_json, '$[0].track_evidence') sgt \
+             WHERE json_extract(sgt.value, '$.classification') = 'contradictory')))"
+        )
+    };
+}
+
+/// Fork: the album, a column holding its id, is on Check albums' Best guess
+/// list: an unconfirmed guess, or an unmatched album whose best guess is
+/// strong ([`strong_guess!`]).
+#[macro_export]
+macro_rules! best_guess_listed {
+    ($album_id:literal) => {
+        concat!(
+            "EXISTS (SELECT 1 FROM library_album_match_state bgl WHERE bgl.local_album_id = ",
+            $album_id,
+            " AND (bgl.state = 'unconfirmed' OR (bgl.state = 'unmatched' AND ",
+            $crate::strong_guess!($album_id, "bgl"),
+            ")))"
+        )
+    };
+}
+
+/// Fork: the album, a column holding its id, is on Check albums' Not found
+/// list: unmatched, with no strong best guess.
+#[macro_export]
+macro_rules! not_found_listed {
+    ($album_id:literal) => {
+        concat!(
+            "EXISTS (SELECT 1 FROM library_album_match_state nfl WHERE nfl.local_album_id = ",
+            $album_id,
+            " AND nfl.state = 'unmatched' AND NOT ",
+            $crate::strong_guess!($album_id, "nfl"),
+            ")"
+        )
+    };
+}
+
+/// Fork: the match-state row `s` is on the Check albums list `?1`. Best
+/// guess (`unconfirmed`) holds unconfirmed guesses and unmatched albums
+/// whose best guess is strong, from any catalogue; Not found
+/// (`unmatched`) holds the other unmatched albums.
+macro_rules! waiting_tab {
+    () => {
+        concat!(
+            "((?1 = 'unconfirmed' AND (s.state = 'unconfirmed' OR (s.state = 'unmatched' AND ",
+            $crate::strong_guess!("s.local_album_id", "s"),
+            "))) OR (?1 = 'unmatched' AND s.state = 'unmatched' AND NOT ",
+            $crate::strong_guess!("s.local_album_id", "s"),
+            "))"
+        )
+    };
+}
+
 droppedneedle_kernel::sql! {
     pub(super) PLACED_FILES = "SELECT root_id, relative_path FROM local_tracks WHERE id = ?1";
     pub(super) PLACE_IMPORTED = "SELECT EXISTS(SELECT 1 FROM local_tracks t \
@@ -77,20 +154,20 @@ droppedneedle_kernel::sql! {
            AND pm.match_state IN ('suggested', 'confirmed') \
          WHERE t.local_album_id = a.id AND t.availability = 'indexed' \
            AND a.album_artist_name_folded IS NOT NULL AND a.title_folded IS NOT NULL \
-           AND " + (crate::listed_album!("a")) + " \
+           AND " + (crate::owned_album!("a")) + " \
            AND (EXISTS (SELECT 1 FROM local_albums b WHERE b.id != a.id \
              AND b.album_artist_name_folded = a.album_artist_name_folded \
-             AND b.title_folded = a.title_folded AND " + (crate::listed_album!("b")) + ") \
+             AND b.title_folded = a.title_folded AND " + (crate::owned_album!("b")) + ") \
            OR EXISTS (SELECT 1 FROM library_album_provider_matches pb \
              JOIN local_albums b ON b.id = pb.local_album_id \
              WHERE pb.provider = pm.provider AND pb.provider_album_id = pm.provider_album_id \
              AND pb.local_album_id != a.id AND pb.match_state IN ('suggested', 'confirmed') \
-             AND " + (crate::listed_album!("b")) + ")) \
+             AND " + (crate::owned_album!("b")) + ")) \
          ORDER BY a.album_artist_name_folded, a.title_folded, a.id, t.id";
     pub(super) WAITING_ALBUM_COUNT = "SELECT COUNT(*) FROM library_album_match_state s \
          JOIN local_albums a ON a.id = s.local_album_id \
-         WHERE s.state = ?1 AND " + (crate::owned_album!("a"));
-    pub(super) WAITING_ALBUM_PAGE = "SELECT s.local_album_id, a.title, COALESCE(a.album_artist_name, '') AS artist_name, s.reason_code, \
+         WHERE " + (waiting_tab!()) + " AND " + (crate::owned_album!("a"));
+    pub(super) WAITING_ALBUM_PAGE = "SELECT s.local_album_id, s.state, a.title, COALESCE(a.album_artist_name, '') AS artist_name, s.reason_code, \
          e.release_mbid, e.release_group_mbid, s.updated_at, \
          COALESCE(e.row_revision, 0) AS identity_revision, s.candidates_json, \
          (SELECT COUNT(*) FROM local_tracks t WHERE t.local_album_id = s.local_album_id \
@@ -101,7 +178,7 @@ droppedneedle_kernel::sql! {
          JOIN local_albums a ON a.id = s.local_album_id \
          LEFT JOIN local_album_external_identities e \
            ON e.local_album_id = s.local_album_id AND e.provider = ?2 \
-         WHERE s.state = ?1 AND " + (crate::owned_album!("a")) + " \
+         WHERE " + (waiting_tab!()) + " AND " + (crate::owned_album!("a")) + " \
          ORDER BY s.updated_at DESC, s.local_album_id LIMIT ?3 OFFSET ?4";
     /// The album artist's name, as its files have it.
     pub(super) ALBUM_ARTIST_NAME = "SELECT COALESCE(album_artist_name, '') FROM local_albums WHERE id = ?1";
@@ -196,6 +273,7 @@ droppedneedle_kernel::sql! {
     }
     pub(super) row WaitingAlbumRow for [WAITING_ALBUM_PAGE] {
         local_album_id: String,
+        state: String,
         title: String,
         artist_name: String,
         reason_code: String,

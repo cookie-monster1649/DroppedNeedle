@@ -15,10 +15,10 @@ droppedneedle_kernel::sql! {
          WHERE r.retired_into_artist_id IS NULL AND r.kind != 'various_artists' \
            AND NOT EXISTS (SELECT 1 FROM local_artist_external_identities e \
              WHERE e.local_artist_id = r.id) \
-           AND (EXISTS (SELECT 1 FROM local_albums a WHERE a.album_artist_id = r.id AND " + (crate::listed_album!("a")) + ") \
+           AND (EXISTS (SELECT 1 FROM local_albums a WHERE a.album_artist_id = r.id AND " + (crate::owned_album!("a")) + ") \
              OR EXISTS (SELECT 1 FROM local_album_artists laa \
                JOIN local_albums a ON a.id = laa.local_album_id \
-               WHERE laa.local_artist_id = r.id AND " + (crate::listed_album!("a")) + ")) \
+               WHERE laa.local_artist_id = r.id AND " + (crate::owned_album!("a")) + ")) \
            AND (s.local_artist_id IS NULL \
              OR (s.suggestion_state = 'open' AND s.checked_at < ?2)) \
          ORDER BY NOT EXISTS (SELECT 1 FROM library_album_provider_matches m \
@@ -64,7 +64,7 @@ droppedneedle_kernel::sql! {
     pub(super) OPEN_SUGGESTIONS = "SELECT r.id AS artist_id, r.display_name AS name, \
          r.row_revision AS artist_revision, \
          (SELECT COUNT(*) FROM local_albums a WHERE a.album_artist_id = r.id \
-           AND " + (crate::listed_album!("a")) + ") AS album_count, \
+           AND " + (crate::owned_album!("a")) + ") AS album_count, \
          s.musicbrainz_artist_id AS musicbrainz_artist_id, s.musicbrainz_name AS musicbrainz_name, \
          s.musicbrainz_disambiguation AS musicbrainz_disambiguation, \
          m.id AS merge_artist_id, m.display_name AS merge_name, \
@@ -94,7 +94,7 @@ droppedneedle_kernel::sql! {
     pub(super) ARTIST_MATCH_GENRES = "SELECT m.genres_json AS genres_json \
          FROM local_albums a \
          JOIN library_album_provider_matches m ON m.local_album_id = a.id \
-         WHERE a.album_artist_id = ?1 AND m.match_state = 'confirmed' AND " + (crate::listed_album!("a"));
+         WHERE a.album_artist_id = ?1 AND m.match_state = 'confirmed' AND " + (crate::owned_album!("a"));
     pub(super) row ArtistDeezerRow for [ARTIST_DEEZER] {
         deezer_artist_id: String,
         link_url: Option<String>,

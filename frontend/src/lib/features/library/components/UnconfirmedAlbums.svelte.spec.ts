@@ -90,7 +90,8 @@ describe('Check albums', () => {
 			artist_name: 'The Lanterns',
 			release_group_mbid: 'rg-1',
 			release_mbid: 'rel-1',
-			matched_files: 2
+			matched_files: 2,
+			score: 0.6
 		};
 		fakeApi({
 			'GET /api/v3/library/unconfirmed': { items: [near], next_cursor: null, total: 1 }
@@ -144,5 +145,64 @@ describe('Check albums', () => {
 		await expect.element(row.getByRole('button', { name: /^Use this/ })).toBeVisible();
 		await expect.element(row.getByRole('button', { name: /^Not it/ })).toBeVisible();
 		await expect.element(row.getByText('Not found')).not.toBeInTheDocument();
+	});
+
+	it('shows both guesses with the stronger one first, each with its own Use this', async () => {
+		authStore.setUser(
+			toAuthUser({
+				id: 'user-1',
+				display_name: 'Curator',
+				role: 'trusted',
+				email: null,
+				avatar_url: null,
+				username: 'curator',
+				username_display: 'Curator'
+			})
+		);
+		const both = album('album-5', 'Two Ways', 'INSUFFICIENT_EVIDENCE', 'Not enough to be sure.');
+		both.guess = {
+			title: 'Two Ways (Deluxe)',
+			artist_name: 'The Lanterns',
+			release_group_mbid: 'rg-5',
+			release_mbid: 'rel-5',
+			matched_files: 1,
+			score: 0.62
+		};
+		both.provider_guess = {
+			provider: 'deezer',
+			provider_album_id: '55',
+			title: 'Two Ways',
+			artist_name: 'The Lanterns',
+			year: 2021,
+			record_type: 'album',
+			cover_url: null,
+			url: 'https://www.deezer.com/album/55',
+			track_count: 3,
+			matched_files: 3,
+			score: 0.97
+		};
+		fakeApi({
+			'GET /api/v3/library/unconfirmed': { items: [both], next_cursor: null, total: 1 }
+		});
+
+		await renderWithQuery(UnconfirmedAlbums, { view: 'unconfirmed' });
+
+		const row = page.getByRole('listitem').filter({ hasText: 'Two Ways' }).first();
+		await expect.element(row.getByText('Best guess · from Deezer')).toBeVisible();
+		await expect.element(row.getByText('Also possible · from MusicBrainz')).toBeVisible();
+		const guesses = row.element().querySelectorAll('[data-guess]');
+		expect([...guesses].map((guess) => guess.getAttribute('data-guess'))).toEqual([
+			'deezer',
+			'musicbrainz'
+		]);
+		await expect
+			.element(row.getByRole('button', { name: 'Use this: Two Ways is Two Ways on Deezer' }))
+			.toBeVisible();
+		await expect
+			.element(row.getByRole('button', { name: 'Use this: Two Ways is Two Ways (Deluxe)' }))
+			.toBeVisible();
+		await expect
+			.element(row.getByRole('button', { name: /^That's right/ }))
+			.not.toBeInTheDocument();
 	});
 });
