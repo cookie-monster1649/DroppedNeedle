@@ -67,7 +67,7 @@ const EXPECTED: Record<keyof typeof EFFECTS, Sweep[]> = {
 	userCustomCssChanged: [key('admin', 'appearance', 'user-custom-css', 'u')],
 	connectionsChanged: [key(U, 'me', 'connections')],
 	sourcePlaylistsChanged: [key(U, 'source-playlists', 'job')],
-	spotifyPlaylistsChanged: [key(U, 'spotify', 'playlists')],
+	spotifyPlaylistsChanged: [key(U, 'spotify', 'playlists'), key(U, 'spotify', 'import-status')],
 	discoverHomeChanged: [key(U, 'discover', 'home')],
 	discoveryBatchesChanged: [key(U, 'discover', 'batches')],
 	discoveryBatchChanged: [key(U, 'discover', 'batch', 'job')],
