@@ -58,8 +58,8 @@ use super::player::{
 use super::stores::{AlbumSort, ArtistScope, ArtistSort, TrackSort};
 use droppedneedle_library::identity::asked_groups;
 use droppedneedle_library::{
-    all_owners, copy_of_group, match_flag_state, named_group_guess, not_yet_identified, owns_group,
-    recording_mbid,
+    all_owners, best_guess_listed, copy_of_group, named_group_guess,
+    not_found_listed, not_yet_identified, owns_group, recording_mbid,
 };
 
 /// An album that has not been merged into another, over an album alias.
@@ -671,14 +671,14 @@ droppedneedle_kernel::sql! {
     pub(crate) STATS_EXTRAS = "SELECT \
         (SELECT COUNT(*) FROM library_identify_reviews WHERE state = 'pending') AS reviews, \
         (SELECT COUNT(*) FROM local_albums a WHERE " + (owned_album!("a")) + " \
-         AND " + (match_flag_state!("a.id", "unconfirmed")) + ") AS guesses, \
+         AND " + (best_guess_listed!("a.id")) + ") AS guesses, \
         (SELECT COUNT(*) FROM local_albums a WHERE " + (owned_album!("a")) + " \
-         AND " + (match_flag_state!("a.id", "unmatched")) + ") AS not_found, \
+         AND " + (not_found_listed!("a.id")) + ") AS not_found, \
         (SELECT COUNT(DISTINCT w.local_album_id) FROM library_album_looks_wrong w \
          JOIN local_albums a ON a.id = w.local_album_id \
          WHERE " + (owned_album!("a")) + ") AS looks_wrong, \
         (SELECT COUNT(*) FROM local_albums a WHERE " + (owned_album!("a")) + " AND ("
-        + (match_flag_state!("a.id", "unconfirmed")) + " \
+        + (best_guess_listed!("a.id")) + " \
          OR EXISTS (SELECT 1 FROM library_album_looks_wrong w WHERE w.local_album_id = a.id) \
          OR EXISTS (SELECT 1 FROM library_identify_reviews r \
          WHERE r.local_album_id = a.id AND r.state = 'pending'))) AS to_check, \

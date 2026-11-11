@@ -328,7 +328,9 @@ pub enum Waiting {
 }
 
 /// Albums whose match is unconfirmed, that match nothing, or that someone
-/// marked "Looks wrong", newest first, with the total.
+/// marked "Looks wrong", newest first, with the total. Fork: an unmatched
+/// album whose best guess is strong ([`crate::strong_guess!`]) is listed
+/// with the unconfirmed guesses, not with the albums nothing fits.
 pub fn waiting_albums(
     conn: &Connection,
     which: Waiting,
@@ -340,7 +342,6 @@ pub fn waiting_albums(
         Waiting::Unmatched => "unmatched",
         Waiting::LooksWrong => return looks_wrong_albums(conn, limit, offset),
     };
-    let unmatched = which == Waiting::Unmatched;
     let total: i64 = conn.query_row(
         crate::edition::sql::WAITING_ALBUM_COUNT.text(),
         params![state],
@@ -367,7 +368,10 @@ pub fn waiting_albums(
                         }
                     };
                 // Fork: an album nothing fits still names its closest
-                // candidate (stored in ranking order) as a suggestion.
+                // candidate (stored in ranking order) as a suggestion. The
+                // Best guess list also holds unmatched albums whose best
+                // guess is strong, so the row's own state decides.
+                let unmatched = row.state == "unmatched";
                 let guess = if unmatched {
                     candidates.first().cloned()
                 } else {

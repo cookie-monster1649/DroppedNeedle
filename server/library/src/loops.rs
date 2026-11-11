@@ -66,17 +66,23 @@ pub const LOOPS: &[&str] = &[
 ];
 
 /// Fork: suggestions for artists with no MusicBrainz link (a merge, a
-/// MusicBrainz artist, a Deezer picture), a few artists a turn.
+/// MusicBrainz artist, a Deezer picture), a batch a turn. An artist costs
+/// at most one MusicBrainz search, paced at 1 a second by its rate row, so
+/// a batch of 30 takes about half a minute and the next turn starts a
+/// minute after it ends.
 pub const ARTIST_SUGGESTION_JOB: &str = "library-artist-suggestions";
-const ARTIST_SUGGESTION_EVERY: Duration = Duration::from_secs(300);
-const ARTIST_SUGGESTION_BATCH: u32 = 10;
+const ARTIST_SUGGESTION_EVERY: Duration = Duration::from_secs(60);
+const ARTIST_SUGGESTION_BATCH: u32 = 30;
 const ARTIST_SUGGESTION_FAILED: &str = "ARTIST_SUGGESTION_FAILED";
 
 /// Fork: best guesses from Deezer for albums MusicBrainz has nothing for,
-/// a few albums a turn.
+/// a batch a turn. An album costs at most five Deezer calls (an ISRC, a
+/// search, three album details), paced at 5 a second by the `deezer` rate
+/// row, so a batch of 50 takes under a minute and the next turn starts a
+/// minute after it ends.
 pub const PROVIDER_MATCH_JOB: &str = "library-provider-matches";
-const PROVIDER_MATCH_EVERY: Duration = Duration::from_secs(300);
-const PROVIDER_MATCH_BATCH: u32 = 10;
+const PROVIDER_MATCH_EVERY: Duration = Duration::from_secs(60);
+const PROVIDER_MATCH_BATCH: u32 = 50;
 const PROVIDER_MATCH_FAILED: &str = "PROVIDER_MATCH_FAILED";
 
 /// Fork: the merge of albums that are plainly one album (same folder, same
@@ -789,8 +795,8 @@ pub(crate) fn start_loops(
     supervisor.periodic_blocking(
         PROVIDER_MATCH_JOB,
         Schedule::new(PROVIDER_MATCH_EVERY)
-            .with_initial_delay(Duration::from_secs(120))
-            .with_jitter(Duration::from_secs(30))
+            .with_initial_delay(Duration::from_secs(45))
+            .with_jitter(Duration::from_secs(10))
             .with_backoff(Duration::from_secs(300), Duration::from_secs(3600)),
         move |_ctx| match drive(
             &match_handle,
@@ -805,8 +811,8 @@ pub(crate) fn start_loops(
     supervisor.periodic_blocking(
         ARTIST_SUGGESTION_JOB,
         Schedule::new(ARTIST_SUGGESTION_EVERY)
-            .with_initial_delay(Duration::from_secs(180))
-            .with_jitter(Duration::from_secs(30))
+            .with_initial_delay(Duration::from_secs(60))
+            .with_jitter(Duration::from_secs(10))
             .with_backoff(Duration::from_secs(300), Duration::from_secs(3600)),
         move |_ctx| match drive(
             &artist_handle,

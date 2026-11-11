@@ -13,7 +13,7 @@ droppedneedle_kernel::sql! {
          FROM library_album_match_state s \
          JOIN local_albums a ON a.id = s.local_album_id \
          LEFT JOIN library_album_provider_matches m ON m.local_album_id = a.id \
-         WHERE s.state = 'unmatched' AND " + (crate::listed_album!("a")) + " \
+         WHERE s.state = 'unmatched' AND " + (crate::owned_album!("a")) + " \
            AND NOT EXISTS (SELECT 1 FROM local_album_external_identities e \
              WHERE e.local_album_id = a.id) \
            AND (m.local_album_id IS NULL \
