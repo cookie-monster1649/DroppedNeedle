@@ -629,6 +629,38 @@ async fn sab_job_output_never_reaches_past_its_folder() {
     );
 }
 
+/// Fork: a mount set to the category folder below SAB's `complete_dir`
+/// (`complete/music` for `complete/music/<job>`) still finds the job's
+/// files for the landing, as the storage remap does.
+#[tokio::test]
+async fn sab_materialization_finds_a_job_under_a_category_mount() {
+    let mount = temp_dir("category-mount");
+    write_file(&mount.join("job2/track.flac"), b"FLAC");
+    let mock = SabnzbdMock::new();
+    mock.history_job(
+        "nzo-2",
+        "job2",
+        "Completed",
+        "/data/Downloads/complete/music/job2",
+        4,
+        "",
+    );
+    let (base, _server) = serve_loopback(mock.router()).await.expect("mock serves");
+    let queue = queue_for(&mock, &base, mount.to_path_buf());
+    let material = queue
+        .inspect_materialization(&handle("job2", "nzo-2"))
+        .await
+        .expect("done");
+    assert_eq!(material.state, "completed");
+    let found = std::path::PathBuf::from(&material.workspace_path);
+    assert!(found.ends_with("job2"), "{}", material.workspace_path);
+    assert!(
+        found.join("track.flac").is_file(),
+        "{}",
+        material.workspace_path
+    );
+}
+
 /// Materialization evidence and the mount-health split: a missing mount
 /// root is an environment fault; an empty per-job folder is not. The
 /// storage remap, as the mount diagnosis reads it: `complete_dir` prefix
