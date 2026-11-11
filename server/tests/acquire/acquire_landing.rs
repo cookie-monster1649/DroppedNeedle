@@ -2663,6 +2663,237 @@ async fn a_bonus_file_the_recipe_does_not_list_is_left_out() {
     );
 }
 
+/// Fork: an album download that brought every track twice (two peers'
+/// folders mixed into one job) imports the album complete, one copy of
+/// each track, instead of holding it as a weak match for the copies left
+/// over.
+#[tokio::test]
+async fn an_album_landed_twice_over_imports_one_copy_of_each_track() {
+    let db = AcquireDb::scratch().expect("scratch db");
+    db.add_user("u-ada", "Ada", "user").await.expect("user");
+    let dir = db.path().parent().expect("scratch dir").to_path_buf();
+    let config = Arc::new(
+        ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+            .expect("config"),
+    );
+    let platform = TestPlatform::on(db.db(), &dir)
+        .settings(config)
+        .build()
+        .await;
+    let (library, _) = library_at(&platform);
+    let music = dir.join("music");
+    std::fs::create_dir_all(&music).expect("music root");
+    library
+        .scans
+        .add_root(
+            Some("music".to_owned()),
+            music.to_string_lossy().into_owned(),
+            EffectivePolicy::Automatic,
+        )
+        .expect("root adds");
+    let job = dir.join("downloads").join("job");
+    let copies: Vec<PathBuf> = ["peer-one", "peer-two", "peer-three"]
+        .iter()
+        .flat_map(|peer| {
+            TITLES
+                .iter()
+                .zip(FIXTURES)
+                .zip(1u32..)
+                .map(|((title, fixture), number)| {
+                    land_file(
+                        &job.join(peer),
+                        &format!("{number:02} - {title}.flac"),
+                        fixture,
+                        title,
+                        number,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let lengths: Vec<_> = copies[..TITLES.len()]
+        .iter()
+        .map(|track| length_ms(track))
+        .collect();
+    let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(vec![release(
+        GOOD_RELEASE,
+        GOOD_GROUP,
+        &TITLES[..],
+        &lengths,
+    )]));
+    let acquire = acquire_over(
+        &platform,
+        &library,
+        Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+    );
+    acquire
+        .journal
+        .run("test.seed", |store| {
+            store.insert_task(&new_task("t-twice", GOOD_GROUP), 1.0)
+        })
+        .await
+        .expect("task");
+    let task = acquire.journal.read_task("t-twice").await.unwrap().unwrap();
+    let report = acquire
+        .landing
+        .land(
+            &task,
+            None,
+            Landed {
+                mounts: vec![dir.join("downloads").into()],
+                files: copies.into_iter().map(Reported::path).collect(),
+            },
+            false,
+        )
+        .await;
+    assert!(
+        matches!(report.result, LandingResult::Imported { complete: true }),
+        "{:?}",
+        report.result
+    );
+    assert_eq!(files_under(&music, "flac").len(), TITLES.len());
+}
+
+/// Fork: an album download held as a weak match only for the copies
+/// left over (held before the landing kept one copy of each track) is
+/// matched by the held list itself: the best copy of each track imports
+/// and the other copies stay held. A held set with no copies is left for
+/// its person.
+#[tokio::test]
+async fn a_held_album_with_copies_is_matched_by_the_held_list_itself() {
+    for doubled in [true, false] {
+        let db = AcquireDb::scratch().expect("scratch db");
+        db.add_user("u-ada", "Ada", "user").await.expect("user");
+        let dir = db.path().parent().expect("scratch dir").to_path_buf();
+        let config = Arc::new(
+            ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+                .expect("config"),
+        );
+        let platform = TestPlatform::on(db.db(), &dir)
+            .settings(config)
+            .build()
+            .await;
+        let (library, _) = library_at(&platform);
+        let music = dir.join("music");
+        std::fs::create_dir_all(&music).expect("music root");
+        library
+            .scans
+            .add_root(
+                Some("music".to_owned()),
+                music.to_string_lossy().into_owned(),
+                EffectivePolicy::Automatic,
+            )
+            .expect("root adds");
+        let staging = dir.join("staging");
+        let peers: &[&str] = if doubled {
+            &["peer-one", "peer-two"]
+        } else {
+            &["peer-one"]
+        };
+        let copies: Vec<PathBuf> = peers
+            .iter()
+            .flat_map(|peer| {
+                TITLES
+                    .iter()
+                    .zip(FIXTURES)
+                    .zip(1u32..)
+                    .map(|((title, fixture), number)| {
+                        let file = land_file(
+                            &staging.join(peer),
+                            &format!("{number:02} - {title}.flac"),
+                            fixture,
+                            title,
+                            number,
+                        );
+                        // The tracks name their release, as a scene release's do.
+                        save_tags(
+                            &file,
+                            &[TagEdit::new(
+                                TagField::MusicBrainzReleaseId,
+                                vec![GOOD_RELEASE.to_owned()],
+                            )],
+                        )
+                        .expect("release id");
+                        file
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let lengths: Vec<_> = copies[..TITLES.len()]
+            .iter()
+            .map(|track| length_ms(track))
+            .collect();
+        let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(vec![release(
+            GOOD_RELEASE,
+            GOOD_GROUP,
+            &TITLES[..],
+            &lengths,
+        )]));
+        let acquire = acquire_over(
+            &platform,
+            &library,
+            Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+        );
+        acquire
+            .journal
+            .run("test.seed", |store| {
+                store.insert_task(&new_task("t-held", GOOD_GROUP), 1.0)
+            })
+            .await
+            .expect("task");
+        let held_dir = acquire.held.folders().held.clone();
+        std::fs::create_dir_all(&held_dir).expect("held folder");
+        let mut rows = Vec::new();
+        for (index, copy) in copies.iter().enumerate() {
+            let name = format!("{index}_{}", copy.file_name().unwrap().to_string_lossy());
+            std::fs::copy(copy, held_dir.join(&name)).expect("held copy");
+            let title = TITLES[index % TITLES.len()].to_owned();
+            let seconds = length_ms(copy).map(|ms| ms as f64 / 1000.0);
+            rows.push((name, title, seconds));
+        }
+        acquire
+            .db
+            .write("test.held", move |tx| {
+                tx.execute(
+                    "INSERT INTO acquire_held_entries (id, user_id, origin, group_key, \
+                     release_group_mbid, artist_name, album_title, state, created_at, \
+                     expires_at) VALUES (1, 'u-ada', 'download', ?1, ?2, 'Portishead', \
+                     'Dummy', 'held', 1, 9999999999999)",
+                    rusqlite::params![format!("album:{GOOD_GROUP}"), GOOD_GROUP],
+                )?;
+                for (name, title, seconds) in &rows {
+                    tx.execute(
+                        "INSERT INTO acquire_held_files (entry_id, root, path, original_name, \
+                         track_title, duration_seconds, reason, reason_detail, source, \
+                         source_task_id, state, created_at) VALUES (1, 'held', ?1, ?1, ?2, ?3, \
+                         'weak_match', 'album distance 0.26 is above 0.20', 'soulseek', \
+                         't-held', 'held', 1)",
+                        rusqlite::params![name, title, seconds],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("held rows");
+        acquire.held.tend().await;
+        let states: Vec<String> = acquire
+            .db
+            .db()
+            .column("SELECT state FROM acquire_held_files ORDER BY id", []);
+        if doubled {
+            assert_eq!(files_under(&music, "flac").len(), TITLES.len());
+            assert_eq!(
+                states.iter().filter(|state| *state == "imported").count(),
+                TITLES.len(),
+                "{states:?}"
+            );
+        } else {
+            assert!(files_under(&music, "flac").is_empty());
+            assert!(states.iter().all(|state| state == "held"), "{states:?}");
+        }
+    }
+}
+
 /// A person confirmed a pick outside the quality band: the attempt that
 /// fetched exactly that pick imports its files, while the same files from
 /// any other attempt of the task (a failover) are refused on quality.

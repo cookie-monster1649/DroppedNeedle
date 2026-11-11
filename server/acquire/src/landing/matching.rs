@@ -947,6 +947,94 @@ pub(crate) fn is_various(name: &str) -> bool {
     matches!(fold(name).as_str(), "variousartists" | "various" | "va")
 }
 
+/// Fork: two copies of one track in a landing are within this many seconds
+/// of each other.
+const SAME_COPY_SECS: f64 = 2.0;
+
+/// Fork: a track's title for telling copies apart: folded, with every
+/// character but letters and digits left out, so "Love/Paranoia",
+/// "Love-Paranoia" and "Love Paranoia" or "‘Cause I’m" and "Cause Im"
+/// read the same.
+fn copy_title(file: &LandedFile) -> String {
+    fold(&file.tag.title)
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+/// Fork: whether `a` and `b` are two copies of the same track: the same
+/// title (see [`copy_title`]), measured lengths within
+/// [`SAME_COPY_SECS`], and, when both carry them, the same disc and track
+/// number. A file with no title or no length is never anyone's copy.
+fn same_copy(a: &LandedFile, b: &LandedFile) -> bool {
+    let title = copy_title(a);
+    if title.is_empty() || title != copy_title(b) {
+        return false;
+    }
+    let (Some(left), Some(right)) = (a.header.duration_seconds, b.header.duration_seconds) else {
+        return false;
+    };
+    if (left - right).abs() > SAME_COPY_SECS {
+        return false;
+    }
+    let numbered = |file: &LandedFile| file.tag.track_number > 0;
+    if numbered(a) && numbered(b) {
+        a.tag.track_number == b.tag.track_number
+            && a.tag.disc_number.max(1) == b.tag.disc_number.max(1)
+    } else {
+        true
+    }
+}
+
+/// Fork: an album download that brought the same track more than once
+/// (two peers' folders, an MP3 and a FLAC of one rip) keeps the best copy
+/// of each track and sets the rest aside, so the copies left over never
+/// count as files the release does not account for. The best copy is one
+/// `allowed` (the quality recipe keeps it), then the higher tier, bit
+/// depth, bitrate and size, then the first by path. Answers the paths set
+/// aside, in path order.
+pub fn set_aside_copies(
+    landing: &mut Landing,
+    allowed: impl Fn(&LandedFile) -> bool,
+) -> Vec<std::path::PathBuf> {
+    use droppedneedle_kernel::runtime_config::sections::tier_rank;
+    let rank = |file: &LandedFile| {
+        (
+            allowed(file),
+            tier_rank(file.tier()).unwrap_or(0),
+            file.header.bit_depth.unwrap_or(0),
+            file.header.bitrate_kbps.unwrap_or(0),
+            file.size_bytes,
+        )
+    };
+    let mut set_aside: Vec<usize> = Vec::new();
+    for index in 0..landing.audio.len() {
+        if set_aside.contains(&index) {
+            continue;
+        }
+        let mut best = index;
+        for other in index + 1..landing.audio.len() {
+            if set_aside.contains(&other) || !same_copy(&landing.audio[best], &landing.audio[other])
+            {
+                continue;
+            }
+            if rank(&landing.audio[other]) > rank(&landing.audio[best]) {
+                set_aside.push(best);
+                best = other;
+            } else {
+                set_aside.push(other);
+            }
+        }
+    }
+    set_aside.sort_unstable();
+    let mut aside = Vec::with_capacity(set_aside.len());
+    for index in set_aside.into_iter().rev() {
+        aside.push(landing.audio.remove(index).path);
+    }
+    aside.reverse();
+    aside
+}
+
 #[cfg(test)]
 mod tests {
     use super::{FoundRelease, position_in_name};
@@ -1014,5 +1102,117 @@ mod tests {
         assert_eq!(position_in_name("Album/cover.jpg"), None);
         assert_eq!(position_in_name("Album/101 Title.flac"), Some((1, 1)));
         assert_eq!(position_in_name("Album/214 - Title.flac"), Some((2, 14)));
+    }
+
+    /// Fork: an album download that brought the same tracks from two
+    /// peers keeps the best copy of each (allowed first, then the better
+    /// file) and sets the rest aside; an instrumental, another number or
+    /// another length is another track.
+    #[test]
+    fn copies_of_one_track_keep_the_best() {
+        use super::set_aside_copies;
+        use crate::landing::probe::{LandedFile, Landing};
+        use droppedneedle_library::tags::AudioFormat;
+        use droppedneedle_library::tags::read::{AudioTag, HeaderInfo};
+        let file =
+            |path: &str, format: AudioFormat, title: &str, number: u32, seconds: f64, kbps: u32| {
+                LandedFile {
+                    path: path.into(),
+                    format,
+                    tag: AudioTag {
+                        title: title.to_owned(),
+                        track_number: number,
+                        disc_number: 1,
+                        ..AudioTag::default()
+                    },
+                    header: HeaderInfo {
+                        duration_seconds: Some(seconds),
+                        bitrate_kbps: Some(kbps),
+                        ..HeaderInfo::default()
+                    },
+                    size_bytes: u64::from(kbps) * 1000,
+                }
+            };
+        let mut landing = Landing {
+            audio: vec![
+                file(
+                    "a/01.mp3",
+                    AudioFormat::Mp3,
+                    "Love/Paranoia",
+                    12,
+                    186.5,
+                    320,
+                ),
+                file(
+                    "b/01.flac",
+                    AudioFormat::Flac,
+                    "Love-Paranoia",
+                    12,
+                    186.4,
+                    900,
+                ),
+                file(
+                    "c/01.mp3",
+                    AudioFormat::Mp3,
+                    "Love Paranoia",
+                    12,
+                    186.6,
+                    192,
+                ),
+                file(
+                    "c/12i.mp3",
+                    AudioFormat::Mp3,
+                    "Love/Paranoia (Instrumental)",
+                    12,
+                    184.8,
+                    192,
+                ),
+                file(
+                    "c/14.mp3",
+                    AudioFormat::Mp3,
+                    "Let It Happen",
+                    14,
+                    321.2,
+                    320,
+                ),
+                file(
+                    "a/01b.mp3",
+                    AudioFormat::Mp3,
+                    "Let It Happen",
+                    1,
+                    467.0,
+                    320,
+                ),
+                file("d/untitled.mp3", AudioFormat::Mp3, "", 3, 100.0, 320),
+                file("e/untitled.mp3", AudioFormat::Mp3, "", 3, 100.0, 320),
+            ],
+            ..Landing::default()
+        };
+        let aside = set_aside_copies(&mut landing, |_| true);
+        assert_eq!(
+            aside,
+            vec![
+                std::path::PathBuf::from("a/01.mp3"),
+                std::path::PathBuf::from("c/01.mp3")
+            ]
+        );
+        assert_eq!(landing.audio.len(), 6);
+        assert!(
+            landing
+                .audio
+                .iter()
+                .any(|kept| kept.path.ends_with("b/01.flac"))
+        );
+
+        // A copy the recipe keeps beats a better one it does not.
+        let mut landing = Landing {
+            audio: vec![
+                file("a/01.flac", AudioFormat::Flac, "Nangs", 2, 108.0, 2000),
+                file("b/01.mp3", AudioFormat::Mp3, "Nangs", 2, 108.1, 320),
+            ],
+            ..Landing::default()
+        };
+        let aside = set_aside_copies(&mut landing, |kept| kept.format == AudioFormat::Mp3);
+        assert_eq!(aside, vec![std::path::PathBuf::from("a/01.flac")]);
     }
 }

@@ -432,7 +432,7 @@ impl LandingService {
         let paths: Vec<PathBuf> = reported.into_iter().map(|file| file.path).collect();
         let probed =
             tokio::task::spawn_blocking(move || probe::probe_landed(&paths, &skipped)).await;
-        let landing = match probed {
+        let mut landing = match probed {
             Ok(landing) => Landing {
                 downloads_folders: folders,
                 remote_names: remote_names(&task.id, handle.as_deref()),
@@ -465,6 +465,23 @@ impl LandingService {
             policy.held_tier = library
                 .held_tier(&target.release_group_mbid, target.planned_album_id())
                 .await;
+        }
+        // Fork: an album download holding two copies of a track keeps the
+        // best one; the copies left over stay where they landed.
+        if !target.is_track && want::want_key(&target).is_none() {
+            let recipe = policy.quality_recipe.clone();
+            let aside = matching::set_aside_copies(&mut landing, |file| {
+                quality::recipe_fit(
+                    &recipe,
+                    file.format.as_str(),
+                    file.header.bitrate_kbps.map(|rate| rate as i32),
+                    file.header.bit_depth.map(i32::from),
+                    file.header.sample_rate.map(|rate| rate as i32),
+                ) != quality::RecipeFit::Outside
+            });
+            if !aside.is_empty() {
+                tracing::info!(task_id = %task.id, set_aside = aside.len(), "landing keeps the best copy of each track");
+            }
         }
         let (checks, early) = check_files(&target, &landing, &policy);
         let acted = match early {
