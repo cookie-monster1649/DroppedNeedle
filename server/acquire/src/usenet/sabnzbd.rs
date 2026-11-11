@@ -1712,7 +1712,20 @@ impl SabnzbdQueue {
         let remote = posix_parts(storage);
         let complete = posix_parts(&complete_dir);
         let relative = strip_prefix(&remote, &complete).filter(|rest| !rest.is_empty())?;
-        Some(self.mount.join(relative.join("/")))
+        let direct = self.mount.join(relative.join("/"));
+        if tokio::fs::metadata(&direct).await.is_ok() {
+            return Some(direct);
+        }
+        // Fork: a mount set to a category folder below `complete_dir`
+        // (`…/complete/music` for `…/complete/music/<job>`) holds the job
+        // one level up from the direct join. Find it the way
+        // `local_storage` does, still inside the mount.
+        let mount = self.mount.clone();
+        let owned: Vec<String> = relative.to_vec();
+        let walked = tokio::task::spawn_blocking(move || suffix_walk(&mount, &owned))
+            .await
+            .unwrap_or(None);
+        Some(walked.unwrap_or(direct))
     }
 }
 
