@@ -3822,6 +3822,11 @@ mod extension_chains {
                 "catalog/0007_artist_suggestions.sql",
                 "7bb517c50f257212a2c6f4ff5492c6e479ab173766174076c934f3eacc4bc246",
             ),
+            (
+                "catalog",
+                "catalog/0008_artist_deezer_links.sql",
+                "b34a5566d0a4c4a47cd14356c59081e67f53b2f4b7c81a1920f729414fb22bb8",
+            ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {

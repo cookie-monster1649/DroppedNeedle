@@ -8282,6 +8282,202 @@ async fn check_albums_suggests_a_musicbrainz_artist_for_an_unlinked_artist() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
+/// Fork: an unlinked artist whose accepted Deezer match names a Deezer
+/// artist MusicBrainz links to one artist is linked to it; one whose
+/// MusicBrainz artist another record already holds is offered as a merge
+/// into that record instead; a Deezer artist MusicBrainz has nothing for,
+/// or several artists for, changes nothing. Each is asked once.
+#[tokio::test]
+async fn an_artist_is_linked_by_its_deezer_artists_musicbrainz_link() {
+    use droppedneedle_library::artist_match::{ArtistSuggestions, DeezerLinkTurn};
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::RequestPriority;
+    use droppedneedle_providers::musicbrainz::MbSource;
+    use droppedneedle_providers::test_support::ScriptedWire;
+    const LINKED: &str = "aaaaaaaa-0000-4000-8000-0000000000d1";
+    const HELD: &str = "aaaaaaaa-0000-4000-8000-0000000000d2";
+    const OTHER: &str = "aaaaaaaa-0000-4000-8000-0000000000d3";
+
+    let rig = Rig::start("lib-deezer-links").await;
+    let app = &rig.app;
+    let _paused = rig.pause_identification().await;
+    let music = app.config.root_app_dir.join("music");
+    for (folder, album, name) in [
+        ("a", "Album A", "Solo One"),
+        ("b", "Album B", "Twin"),
+        ("c", "Album C", "Twin Held"),
+        ("d", "Album D", "Nobody"),
+        ("e", "Album E", "Many"),
+    ] {
+        let file = plant(&music, &format!("{folder}/01.flac"), "management_full.flac");
+        tag_artist(&file, album, name, None, None);
+    }
+    app.add_library_folder("music", &music).await;
+    let db = app.db();
+    let artist_of = |album: &str| -> String {
+        db.query_row(
+            "SELECT album_artist_id FROM local_albums WHERE title = ?1",
+            [album],
+            |row| row.get(0),
+        )
+        .expect("album indexed")
+    };
+    let album_of = |album: &str| -> String {
+        db.query_row(
+            "SELECT id FROM local_albums WHERE title = ?1",
+            [album],
+            |row| row.get(0),
+        )
+        .expect("album indexed")
+    };
+    let (a, b, c, d, e) = (
+        artist_of("Album A"),
+        artist_of("Album B"),
+        artist_of("Album C"),
+        artist_of("Album D"),
+        artist_of("Album E"),
+    );
+    app.seed(format!(
+        "INSERT INTO local_artist_external_identities (local_artist_id, provider, \
+         provider_artist_id, decision_source, selected_at) \
+         VALUES ('{c}', 'musicbrainz', '{HELD}', 'manual', 1)"
+    ))
+    .await;
+    for (album, deezer) in [
+        ("Album A", 101),
+        ("Album B", 102),
+        ("Album D", 104),
+        ("Album E", 105),
+    ] {
+        app.seed(format!(
+            "INSERT INTO library_album_provider_matches (local_album_id, provider, \
+             provider_album_id, title, artist_name, provider_artist_id, score, match_state, \
+             created_at, updated_at) VALUES ('{}', 'deezer', '{deezer}0', '{album}', 'x', \
+             '{deezer}', 1.0, 'confirmed', 1, 1)",
+            album_of(album)
+        ))
+        .await;
+    }
+
+    // MusicBrainz's answer for each Deezer artist, asked in artist id order.
+    let relation = |mbid: &str| {
+        json!({"type": "streaming", "type-id": "63cc5d1f-f096-4c94-a43f-ecb32ea94161",
+            "target-type": "artist", "direction": "backward",
+            "artist": {"id": mbid, "name": "someone"}})
+    };
+    let answers: HashMap<&str, (u16, Value)> = HashMap::from([
+        (
+            a.as_str(),
+            (
+                200,
+                json!({"resource": "x", "relations": [relation(LINKED)]}),
+            ),
+        ),
+        (
+            b.as_str(),
+            (200, json!({"resource": "x", "relations": [relation(HELD)]})),
+        ),
+        (d.as_str(), (404, json!({"error": "Not Found"}))),
+        (
+            e.as_str(),
+            (
+                200,
+                json!({"resource": "x", "relations": [relation(LINKED), relation(OTHER)]}),
+            ),
+        ),
+    ]);
+    let mut order: Vec<&str> = answers.keys().copied().collect();
+    order.sort_unstable();
+    let wire = Arc::new(ScriptedWire::new());
+    let json_type = [("content-type", "application/json")];
+    for artist in &order {
+        let (status, body) = &answers[artist];
+        wire.answer(
+            "http://127.0.0.1:9/musicbrainz/ws/2/url",
+            *status,
+            &json_type,
+            body.to_string(),
+        );
+    }
+    let providers = Providers::unpaced(wire.clone());
+    let suggestions = ArtistSuggestions::new(
+        droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+            .expect("database opens"),
+        providers.previews.clone(),
+        providers.musicbrainz.fixed(
+            MbSource::Official {
+                base_url: "http://127.0.0.1:9/musicbrainz/ws/2".to_owned(),
+            },
+            RequestPriority::BackgroundSync,
+        ),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+    assert_eq!(
+        suggestions.link_some(10).await,
+        Ok(DeezerLinkTurn {
+            asked: 4,
+            linked: 1,
+            merges: 1
+        })
+    );
+    let asked: Vec<String> = wire
+        .sent()
+        .iter()
+        .filter_map(|sent| sent.query("resource"))
+        .collect();
+    assert_eq!(asked.len(), 4, "{asked:?}");
+    assert!(
+        asked
+            .iter()
+            .all(|url| url.starts_with("https://www.deezer.com/artist/10")),
+        "{asked:?}"
+    );
+
+    let link = |artist: &str| -> Option<String> {
+        db.query_row(
+            "SELECT provider_artist_id FROM local_artist_external_identities \
+             WHERE local_artist_id = ?1 AND provider = 'musicbrainz'",
+            [artist],
+            |row| row.get(0),
+        )
+        .ok()
+    };
+    assert_eq!(link(&a).as_deref(), Some(LINKED), "the one artist links");
+    assert_eq!(link(&b), None, "another record holds that artist");
+    assert_eq!(link(&d), None, "nothing found changes nothing");
+    assert_eq!(link(&e), None, "two artists found change nothing");
+    let (left, right) = if b < c { (&b, &c) } else { (&c, &b) };
+    let offered: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM local_artist_merge_candidates WHERE left_artist_id = ?1 \
+             AND right_artist_id = ?2 AND reason_code = 'SHARED_PROVIDER_IDENTITY' \
+             AND state = 'open'",
+            [left, right],
+            |row| row.get(0),
+        )
+        .expect("merge read");
+    assert_eq!(offered, 1, "the pair is offered as one artist");
+    let merge: Option<String> = db
+        .query_row(
+            "SELECT merge_artist_id FROM library_artist_suggestions WHERE local_artist_id = ?1",
+            [&b],
+            |row| row.get(0),
+        )
+        .expect("suggestion kept");
+    assert_eq!(
+        merge.as_deref(),
+        Some(c.as_str()),
+        "the Artists tab shows the merge"
+    );
+
+    // Asked once: the next turn asks nobody.
+    assert_eq!(
+        suggestions.link_some(10).await,
+        Ok(DeezerLinkTurn::default())
+    );
+    assert_eq!(wire.sent().len(), 4);
+}
+
 /// Fork: an album nothing fits still shows its closest MusicBrainz
 /// candidate in Check albums, as a suggestion to take or pass on; one with
 /// no candidate shows none.
