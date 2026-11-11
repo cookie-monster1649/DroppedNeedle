@@ -19,6 +19,10 @@ droppedneedle_kernel::sql! {
            AND (m.local_album_id IS NULL \
              OR (m.match_state = 'not_found' AND m.updated_at < ?2)) \
          ORDER BY m.local_album_id IS NOT NULL, s.updated_at DESC, a.id LIMIT ?1";
+    /// Fork: every accepted match's artist and track list, for a want's
+    /// length when its ask carried none.
+    pub(super) CONFIRMED_TRACK_LISTS = "SELECT artist_name, tracks_json \
+         FROM library_album_provider_matches WHERE match_state = 'confirmed'";
     /// Album `?1`'s indexed files, in album order, with an ISRC when a
     /// source link or the playlist entry the file came from carries one.
     pub(super) HELD_FILES = "SELECT t.id AS track_id, t.title AS title, \
