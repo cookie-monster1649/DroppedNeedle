@@ -171,6 +171,13 @@ droppedneedle_kernel::sql! {
          WHERE d.recording_mbid = ?1 AND t.download_task_id IS NOT NULL \
          AND t.availability = 'indexed' \
          ORDER BY t.imported_at DESC, t.id LIMIT 1";
+    /// Fork: every entry still unlinked: id, playlist, artist, title.
+    pub(super) UNLINKED_ENTRIES = "SELECT id, playlist_id, artist_name, track_name \
+         FROM catalog_playlist_tracks WHERE library_file_id IS NULL";
+    /// Fork: whether song `?2` (want key) of playlist `?1` is marked not
+    /// to be fetched: a person removed or unlinked its file.
+    pub(super) IS_DECLINED = "SELECT EXISTS (SELECT 1 FROM catalog_playlist_declines \
+         WHERE playlist_id = ?1 AND name_key = ?2)";
     /// Fork: link entry `?1` to track `?2`.
     pub(super) LINK_ENTRY = "UPDATE catalog_playlist_tracks SET library_file_id = ?2 \
          WHERE id = ?1 AND library_file_id IS NULL";

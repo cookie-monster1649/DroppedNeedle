@@ -1759,3 +1759,62 @@ async fn playlist_entries_link_to_the_library_tracks_they_name() {
         .and_then(|track| track.library_file_id);
     assert_eq!(opener.as_deref(), Some("t1"));
 }
+
+/// Fork: an entry no id links falls back to the library's copy of the same
+/// song by name: the same title and a shared credited artist, whatever the
+/// edition. Another artist's song of that title stays unlinked, and so does
+/// a song a person turned away for that playlist.
+#[tokio::test]
+async fn playlist_entries_link_by_name_to_any_edition_of_the_song() {
+    use droppedneedle_catalog::collections::store::playlists::{NewEntry, PlaylistStore};
+
+    let fixture = sqlite_fixture().await;
+    let store = PlaylistStore::new(droppedneedle_catalog::collections::db::CollectionsDb::new(
+        fixture.runtime.db().clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    ));
+    let entry = |name: &str, artist: &str| NewEntry {
+        track_name: name.to_owned(),
+        artist_name: artist.to_owned(),
+        album_name: "Some Other Edition".to_owned(),
+        ..NewEntry::default()
+    };
+    let owner = store.owned_by("u1");
+    let (id, _) = owner
+        .create_with(
+            "Spotify",
+            vec![
+                entry("PEAK", "Boreal feat. Someone"),
+                entry("Closer", "Somebody Else"),
+                entry("Single", "Aurora"),
+            ],
+        )
+        .await
+        .unwrap();
+    let key = droppedneedle_library::matching::strings::want_key("Aurora", "Single");
+    seed(
+        &fixture,
+        String::leak(format!(
+            "INSERT INTO catalog_playlist_declines (playlist_id, name_key, declined_at) \
+             VALUES ('{id}', '{key}', 1)"
+        )),
+    )
+    .await;
+
+    assert_eq!(store.link_library().await.unwrap(), 1);
+    let linked: Vec<(String, Option<String>)> = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|track| (track.track_name, track.library_file_id))
+        .collect();
+    assert_eq!(
+        linked,
+        vec![
+            ("PEAK".to_owned(), Some("t6".to_owned())),
+            ("Closer".to_owned(), None),
+            ("Single".to_owned(), None),
+        ]
+    );
+}
