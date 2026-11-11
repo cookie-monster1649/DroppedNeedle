@@ -403,7 +403,7 @@ impl DropImports {
         let landing = self
             .probe(library.as_ref(), paths, beneath.as_deref())
             .await;
-        let summary = match identify::assigned(library.as_ref(), &landing, group).await {
+        let summary = match identify::assigned(library.as_ref(), &landing, group, None).await {
             Outcome::Matched(summary) => summary,
             Outcome::Busy | Outcome::Closed => {
                 let mut back = item.clone();

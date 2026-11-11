@@ -1433,3 +1433,69 @@ async fn job_now(
         .find(|job| job.id == id)
         .expect("job")
 }
+
+/// Fork: a hand match of a download keeps to the edition the request asked
+/// for (the plain album) when the library has none, even when the folder
+/// carries more files: a 9-track album held with 12 files (three bonus
+/// remixes) goes onto the 9-track edition, not the 12-track promo whose
+/// count fits. With nothing asked the closest count still wins.
+#[tokio::test]
+async fn a_hand_match_keeps_the_asked_edition_over_a_bonus_one() {
+    use droppedneedle_acquire::drop_import::identify::{Outcome, assigned};
+    const GROUP_T: &str = "0f8ce4c1-0000-4000-8000-000000000001";
+    const STANDARD: &str = "0f8ce4c1-0000-4000-8000-000000000009";
+    const PLUS: &str = "0f8ce4c1-0000-4000-8000-000000000012";
+    let titles: Vec<String> = (1..=9)
+        .map(|n| format!("Song {n}"))
+        .chain((1..=3).map(|n| format!("Song {n} (Remix)")))
+        .collect();
+    let edition = |id: &str, count: usize, status: &str| {
+        let names: Vec<&str> = titles[..count].iter().map(String::as_str).collect();
+        let mut edition = release(&names, &vec![None; count]);
+        edition.id = id.to_owned();
+        edition.release_group_id = GROUP_T.to_owned();
+        edition.title = "Tourist".to_owned();
+        edition.status = Some(status.to_owned());
+        edition.media[0].track_count = count as u32;
+        for (position, track) in edition.tracks.iter_mut().enumerate() {
+            track.id = format!("{}{position:02}", &id[..id.len() - 2]);
+        }
+        edition
+    };
+    let (_db, library, dir, _auth) = bundles().await;
+    let landing_library = LibraryLanding::new(
+        &library,
+        every_priority(Arc::new(LargeGroups(vec![
+            edition(STANDARD, 9, "Official"),
+            edition(PLUS, 12, "Promotion"),
+        ]))),
+    );
+    let work = dir.join("tourist");
+    std::fs::create_dir_all(&work).expect("work dir");
+    let paths: Vec<PathBuf> = titles
+        .iter()
+        .enumerate()
+        .map(|(index, title)| {
+            let track = index as u32 + 1;
+            tagged(&work, "flac_full_01.flac", "Tourist", title, track);
+            work.join(format!("{track:02}-{title}.flac"))
+        })
+        .collect();
+    let landing = droppedneedle_acquire::landing::probe::probe(&paths, &[]);
+    assert_eq!(landing.audio.len(), 12);
+
+    let picked = |outcome: Outcome| match outcome {
+        Outcome::Matched(summary) => summary.best().expect("an edition").release.id.clone(),
+        _ => panic!("no edition matched"),
+    };
+    assert_eq!(
+        picked(assigned(&landing_library, &landing, GROUP_T, Some(STANDARD)).await),
+        STANDARD,
+        "the asked edition stands"
+    );
+    assert_eq!(
+        picked(assigned(&landing_library, &landing, GROUP_T, None).await),
+        PLUS,
+        "nothing asked: the closest track count"
+    );
+}
