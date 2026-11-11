@@ -88,6 +88,7 @@ impl SpotifyCandidate {
                 artist: self.artist.clone(),
                 album: self.album.clone(),
                 length_ms,
+                number: None,
             },
             self.links(),
         )
