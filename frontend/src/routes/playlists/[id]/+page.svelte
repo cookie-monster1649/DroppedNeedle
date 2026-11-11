@@ -31,13 +31,27 @@
 	} from '$lib/features/playlists/queries/playlistV3Adapter';
 	import { queryClient } from '$lib/queries/QueryClient';
 	import { withBasePath } from '$lib/utils/basePath';
-	import { Music, Download, Lock, Loader } from 'lucide-svelte';
+	import {
+		Music,
+		Download,
+		Lock,
+		Loader,
+		LoaderCircle,
+		RefreshCw,
+		TriangleAlert
+	} from 'lucide-svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import type { PageData } from './$types';
 	import PlaylistHeader from '$lib/features/playlists/components/PlaylistHeader.svelte';
 	import PlaylistTrackList from '$lib/features/playlists/components/PlaylistTrackList.svelte';
 	import DeletePlaylistModal from '$lib/features/playlists/components/DeletePlaylistModal.svelte';
 	import PlaylistNotice from '$lib/features/playlists/components/PlaylistNotice.svelte';
+	import {
+		createImportSpotifyPlaylistMutation,
+		getSpotifyImportStatusQuery,
+		IMPORT_POLL_MS
+	} from '$lib/features/playlists/queries/spotify.svelte';
+	import { providerUnavailableMessage } from '$lib/utils/serviceError';
 
 	let { data }: { data: PageData } = $props();
 
@@ -68,6 +82,52 @@
 	let isOwner = $derived(playlist?.is_owner ?? false);
 	let canDelete = $derived(playlist?.can_delete ?? false);
 
+	// Fork: a playlist imported from Spotify fills in the background. While
+	// its import runs the page waits on it (checked every 2 s) instead of
+	// showing an empty list, then shows the tracklist and each song's status
+	// the moment it is in; a failed import shows why, with a retry.
+	let spotifyId = $derived(
+		playlist?.source_ref?.startsWith('spotify:') ? playlist.source_ref.slice(8) : null
+	);
+	const importStatus = getSpotifyImportStatusQuery(() =>
+		isOwner && spotifyId && playlist ? playlist.id : null
+	);
+	const reimport = createImportSpotifyPlaylistMutation();
+	let importState = $derived(importStatus.data?.state ?? null);
+	let importing = $derived(importState === 'running' || reimport.isPending);
+	let importFailed = $derived(
+		!importing && importState === 'failed' && (playlist?.tracks.length ?? 0) === 0
+	);
+	let lastImportState: string | null = null;
+	let importSettledAt = $state(0);
+	$effect(() => {
+		const state = importState;
+		const id = playlist?.id;
+		if (state === lastImportState) return;
+		const finished = lastImportState === 'running' && state !== 'running';
+		lastImportState = state;
+		if (!finished || !id) return;
+		// The tracklist is in: read it and every song's status afresh, and
+		// keep checking the statuses a while for the import's own requests.
+		importSettledAt = Date.now();
+		untrack(() => {
+			void detailQuery.refetch().then(() => loadRowStates(id));
+		});
+	});
+
+	async function retryImport() {
+		if (!playlist || !spotifyId) return;
+		try {
+			await reimport.mutateAsync({ id: spotifyId, name: playlist.name });
+			await importStatus.refetch();
+		} catch (error) {
+			toastStore.show({
+				message: providerUnavailableMessage(error) ?? "Couldn't start the import again",
+				type: 'error'
+			});
+		}
+	}
+
 	// Fork: a missing song already requested (requested, fetching, held, or
 	// landed and not yet linked) is being found; only the rest are offered.
 	const FINDING: ReadonlySet<PlaylistRowState> = new Set([
@@ -95,11 +155,19 @@
 	// refreshed every 15 s while anything is on its way.
 	let rowStates = $state<Map<string, PlaylistRowState> | undefined>(undefined);
 	const ROW_POLL_MS = 15_000;
+	// Fork: how long after an import the statuses keep being read, for the
+	// songs its auto-request asks for.
+	const AFTER_IMPORT_MS = 120_000;
+	// Fork: true from a list change until its statuses are read, so the
+	// "Request N tracks" offer never counts songs already on their way.
+	let rowsStale = $state(false);
 	async function loadRowStates(playlistId: string) {
 		try {
 			rowStates = await fetchPlaylistRows(playlistId);
 		} catch {
 			// Status is extra: the list still works without it.
+		} finally {
+			rowsStale = false;
 		}
 	}
 	let rowsFor = $derived(isOwner ? (playlist?.id ?? null) : null);
@@ -111,7 +179,8 @@
 			const moving = [...(rowStates?.values() ?? [])].some(
 				(state) => state === 'requested' || state === 'fetching' || state === 'imported'
 			);
-			if (moving) void loadRowStates(id);
+			const justImported = Date.now() - importSettledAt < AFTER_IMPORT_MS;
+			if (moving || justImported) void loadRowStates(id);
 		}, ROW_POLL_MS);
 		return () => clearInterval(timer);
 	});
@@ -140,16 +209,19 @@
 	}
 
 	// Fork: "Request all songs" from the prompt after a Spotify import. The
-	// import fills the playlist in the background, so wait until its song
-	// count holds still (checked every 3 s, two minutes at most) first.
+	// import fills the playlist in the background, so wait for it to finish
+	// (two minutes at most), read the list and its statuses, then ask.
 	async function handleRequestAll() {
-		let last = -1;
-		for (let tries = 0; tries < 40; tries += 1) {
-			const fresh = await detailQuery.refetch();
-			const count = fresh.data ? toPageDetail(fresh.data).tracks.length : 0;
-			if (count > 0 && count === last) break;
-			last = count;
-			await new Promise((done) => setTimeout(done, 3000));
+		for (let tries = 0; tries < 60; tries += 1) {
+			const status = await importStatus.refetch();
+			if (status.data?.state !== 'running') break;
+			await new Promise((done) => setTimeout(done, IMPORT_POLL_MS));
+		}
+		const fresh = await detailQuery.refetch();
+		if (fresh.data) {
+			const page = toPageDetail(fresh.data);
+			playlist = { ...page, tracks: page.tracks.map((t) => ({ ...t })) };
+			await loadRowStates(fresh.data.id);
 		}
 		await handleRequestMissing();
 	}
@@ -225,8 +297,15 @@
 			if (d) {
 				// Clone so optimistic child mutations never touch the query cache.
 				const page = toPageDetail(d);
+				const grew = page.tracks.length !== (playlist?.tracks.length ?? -1);
 				playlist = { ...page, tracks: page.tracks.map((t) => ({ ...t })) };
 				void resolveSources(d.id);
+				// Fork: a list that changed (an import landing) reads its
+				// statuses again rather than keeping the ones of the old list.
+				if (grew && page.is_owner) {
+					rowsStale = true;
+					void loadRowStates(d.id);
+				}
 			} else {
 				playlist = null;
 			}
@@ -370,53 +449,91 @@
 		/>
 
 		<div class="mx-auto max-w-7xl space-y-6 px-4 pb-10 sm:px-6 lg:px-8">
-			{#if isOwner && (missingCount > 0 || findingCount > 0)}
-				<div
-					class="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-box border border-warning/60 bg-warning/8 px-4 py-3"
-				>
-					<Download class="size-5 shrink-0 text-warning" aria-hidden="true" />
-					<p class="min-w-0 flex-1 basis-48 text-sm font-medium">
-						{#if missingCount > 0}
-							{missingLabel} not in your library
-						{:else}
-							Not in your library yet
-						{/if}
+			{#if importing && playlist.tracks.length === 0}
+				<div class="space-y-3" aria-busy="true">
+					<p class="flex items-center gap-2 text-sm font-medium" role="status">
+						<LoaderCircle class="size-5 animate-spin motion-keep" aria-hidden="true" />
+						Fetching tracklist from Spotify…
 					</p>
-					{#if findingCount > 0}
-						<Button
-							variant="ghost"
-							size="display-sm"
-							icon={Loader}
-							href={withBasePath('/downloads')}
-						>
-							Finding {findingCount}
-							{findingCount === 1 ? 'track' : 'tracks'}
-						</Button>
-					{/if}
-					{#if missingCount > 0}
-						<Button
-							variant="outline"
-							size="display-sm"
-							icon={Download}
-							loading={requesting}
-							onclick={() => void handleRequestMissing()}
-						>
-							Request {missingLabel}
-						</Button>
-					{/if}
+					{#each Array(6) as _, i (`importing-track-${i}`)}
+						<div class="skeleton h-14 w-full"></div>
+					{/each}
 				</div>
-			{/if}
+			{:else if importFailed}
+				<div
+					class="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-box border border-error/60 bg-error/8 px-4 py-3"
+					role="alert"
+				>
+					<TriangleAlert class="size-5 shrink-0 text-error" aria-hidden="true" />
+					<p class="min-w-0 flex-1 basis-48 text-sm font-medium">
+						Couldn't fetch the tracklist from Spotify: {importStatus.data?.message ??
+							'the import did not finish'}.
+					</p>
+					<Button
+						variant="outline"
+						size="display-sm"
+						icon={RefreshCw}
+						loading={reimport.isPending}
+						onclick={() => void retryImport()}
+					>
+						Retry
+					</Button>
+				</div>
+			{:else}
+				{#if importing}
+					<p class="flex items-center gap-2 text-sm text-muted" role="status">
+						<LoaderCircle class="size-4 animate-spin motion-keep" aria-hidden="true" />
+						Updating from Spotify…
+					</p>
+				{/if}
+				{#if isOwner && !rowsStale && (missingCount > 0 || findingCount > 0)}
+					<div
+						class="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-box border border-warning/60 bg-warning/8 px-4 py-3"
+					>
+						<Download class="size-5 shrink-0 text-warning" aria-hidden="true" />
+						<p class="min-w-0 flex-1 basis-48 text-sm font-medium">
+							{#if missingCount > 0}
+								{missingLabel} not in your library
+							{:else}
+								Not in your library yet
+							{/if}
+						</p>
+						{#if findingCount > 0}
+							<Button
+								variant="ghost"
+								size="display-sm"
+								icon={Loader}
+								href={withBasePath('/downloads')}
+							>
+								Finding {findingCount}
+								{findingCount === 1 ? 'track' : 'tracks'}
+							</Button>
+						{/if}
+						{#if missingCount > 0}
+							<Button
+								variant="outline"
+								size="display-sm"
+								icon={Download}
+								loading={requesting}
+								onclick={() => void handleRequestMissing()}
+							>
+								Request {missingLabel}
+							</Button>
+						{/if}
+					</div>
+				{/if}
 
-			<PlaylistTrackList
-				bind:this={trackList}
-				{playlist}
-				readonly={!isOwner}
-				ontrackchange={() => {}}
-				onsourcechange={handleSourceChange}
-				onplaytrack={playFromTrack}
-				{rowStates}
-				onrequesttrack={handleRequestTrack}
-			/>
+				<PlaylistTrackList
+					bind:this={trackList}
+					{playlist}
+					readonly={!isOwner}
+					ontrackchange={() => {}}
+					onsourcechange={handleSourceChange}
+					onplaytrack={playFromTrack}
+					{rowStates}
+					onrequesttrack={handleRequestTrack}
+				/>
+			{/if}
 		</div>
 
 		<DeletePlaylistModal

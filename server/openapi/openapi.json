@@ -367,6 +367,55 @@
         ]
       }
     },
+    "/api/v3/acquire/spotify/imports/{playlist_id}": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: where the newest Spotify import into one of the caller's\nplaylists stands: the playlist page shows a loading state while it runs\nand the error, with a retry, when it failed.",
+        "operationId": "get_spotify_import_status",
+        "parameters": [
+          {
+            "name": "playlist_id",
+            "in": "path",
+            "description": "Internal playlist id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Import status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifyImportStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's playlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/acquire/spotify/playlists": {
       "get": {
         "tags": [
@@ -66600,6 +66649,26 @@
           "playlist_id": {
             "type": "string",
             "description": "Internal playlist id."
+          }
+        }
+      },
+      "SpotifyImportStatus": {
+        "type": "object",
+        "description": "Fork: where the newest Spotify import into one of the caller's\nplaylists stands, so its page can wait for the tracklist.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it failed, user-safe; only on `failed`."
+          },
+          "state": {
+            "type": "string",
+            "description": "`running` (queued or fetching), `done`, `failed`, or `none` (never\nimported through the job queue, or not from Spotify)."
           }
         }
       },

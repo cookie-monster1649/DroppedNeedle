@@ -34,7 +34,7 @@ use utoipa::IntoParams;
 
 use super::error::ImportsError;
 use super::health::HealthProbes;
-use super::jobs::SpotifyImports;
+use super::jobs::{ImportState, SpotifyImports};
 use super::lidarr::{
     LIDARR_NOT_CONNECTED, LidarrClient, LidarrError, LidarrImportService, ServiceError,
     normalize_lidarr_url,
@@ -42,8 +42,8 @@ use super::lidarr::{
 use super::models::{
     LidarrArtistListResponse, LidarrConnectionSettings, LidarrImportRequest, LidarrImportResponse,
     LidarrTestResponse, SabnzbdStatusResponse, SlskdStatusResponse, SpotifyAuthUrlResponse,
-    SpotifyImportRequest, SpotifyImportResponse, SpotifyPlaylistListResponse, SpotifyRedirectUri,
-    SpotifySettings, SpotifySyncState, SpotifySyncUpdate,
+    SpotifyImportRequest, SpotifyImportResponse, SpotifyImportStatus, SpotifyPlaylistListResponse,
+    SpotifyRedirectUri, SpotifySettings, SpotifySyncState, SpotifySyncUpdate,
 };
 use super::spotify::{ImportFailure, SpotifyImportService};
 use super::spotify_albums::AlbumResolver;
@@ -127,6 +127,7 @@ pub fn routes() -> Routes<ImportsDeps> {
         .public(routes!(spotify_callback))
         .user(routes!(list_spotify_playlists))
         .user(routes!(import_spotify_playlist))
+        .user(routes!(get_spotify_import_status))
         .user(routes!(get_spotify_sync, put_spotify_sync))
         .user(routes!(get_playlist_rows))
         .user(routes!(disconnect_spotify))
@@ -564,6 +565,48 @@ pub async fn import_spotify_playlist(
         .await
         .map_err(job_failed)?;
     Ok(Json(SpotifyImportResponse { playlist_id }))
+}
+
+/// Fork: where the newest Spotify import into one of the caller's
+/// playlists stands: the playlist page shows a loading state while it runs
+/// and the error, with a retry, when it failed.
+#[utoipa::path(get, tag = "imports", path = "/api/v3/acquire/spotify/imports/{playlist_id}",
+    params(("playlist_id" = String, Path, description = "Internal playlist id")),
+    responses(
+        (status = 200, description = "Import status", body = SpotifyImportStatus),
+        (status = 404, description = "Not the caller's playlist"),
+    ))]
+pub async fn get_spotify_import_status(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+    Path(playlist_id): Path<String>,
+) -> Result<Json<SpotifyImportStatus>, ApiError> {
+    let Some(spotify_id) = deps
+        .spotify_syncs
+        .spotify_id(principal.user_id(), &playlist_id)
+        .await
+        .map_err(sync_failed)?
+    else {
+        return Ok(Json(SpotifyImportStatus {
+            state: "none".to_owned(),
+            message: None,
+        }));
+    };
+    let state = deps
+        .spotify_imports
+        .state(principal.user_id(), &spotify_id)
+        .await
+        .map_err(|error| sync_failed(SyncSettingError::Store(error)))?;
+    let (state, message) = match state {
+        None => ("none", None),
+        Some(ImportState::Running) => ("running", None),
+        Some(ImportState::Done) => ("done", None),
+        Some(ImportState::Error { message }) => ("failed", Some(message)),
+    };
+    Ok(Json(SpotifyImportStatus {
+        state: state.to_owned(),
+        message,
+    }))
 }
 
 /// Map a sync setting failure to the wire.

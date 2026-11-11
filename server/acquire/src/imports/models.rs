@@ -191,6 +191,18 @@ pub struct SpotifyImportResponse {
     pub playlist_id: String,
 }
 
+/// Fork: where the newest Spotify import into one of the caller's
+/// playlists stands, so its page can wait for the tracklist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpotifyImportStatus {
+    /// `running` (queued or fetching), `done`, `failed`, or `none` (never
+    /// imported through the job queue, or not from Spotify).
+    pub state: String,
+    /// Why it failed, user-safe; only on `failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 /// Live slskd client status. The mount check belongs to the downloads
 /// module.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]

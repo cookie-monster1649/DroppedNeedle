@@ -1129,6 +1129,30 @@ async fn a_synced_spotify_playlist_follows_spotify_and_asks_for_new_songs() {
         ImportState::Done
     );
 
+    // The page asks how the import went: done once the job settles, and
+    // not there for anyone but the owner.
+    let status_path = format!("/api/v3/acquire/spotify/imports/{playlist_id}");
+    let (status, body) = get_json(
+        authed_app(bundle.deps.clone(), &user_id, Role::User),
+        &status_path,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], "done");
+    assert!(body.get("message").is_none());
+    let (status, _) = get_json(
+        authed_app(bundle.deps.clone(), &admin_id, Role::Admin),
+        &status_path,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "another user's import");
+    let (status, _) = get_json(
+        authed_app(bundle.deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/imports/not-a-playlist",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     let path = format!("/api/v3/acquire/spotify/synced/{playlist_id}");
     let (status, body) =
         get_json(authed_app(bundle.deps.clone(), &user_id, Role::User), &path).await;

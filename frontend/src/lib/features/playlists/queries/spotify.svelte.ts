@@ -45,3 +45,31 @@ export const getSpotifyRedirectUriQuery = (getOrigin: Getter<string | undefined>
 				api.v3.GET(v3('/api/v3/acquire/spotify/redirect-uri'), { signal })
 		};
 	});
+
+/** Fork: how often a running import is checked while its page waits. */
+export const IMPORT_POLL_MS = 2000;
+
+/**
+ * Fork: where the newest Spotify import into `playlistId` stands (`running`,
+ * `done`, `failed` with a message, or `none`), checked every 2 s while it
+ * runs so the page can show the tracklist the moment it is in.
+ */
+export const getSpotifyImportStatusQuery = (getPlaylistId: Getter<string | null>) =>
+	createQuery(() => {
+		const playlistId = getPlaylistId();
+		return {
+			enabled: playlistId !== null && Boolean(authStore.user?.id),
+			refetchOnWindowFocus: false,
+			queryKey: SpotifyQueryKeyFactory.importStatus(authStore.user?.id, playlistId),
+			queryFn: ({ signal }: { signal: AbortSignal }) =>
+				api.v3.GET(
+					v3('/api/v3/acquire/spotify/imports/{playlist_id}', {
+						path: { playlist_id: playlistId ?? '' }
+					}),
+					{ signal }
+				),
+			refetchInterval: (query: { state: { data?: { state: string } } }) =>
+				query.state.data?.state === 'running' ? IMPORT_POLL_MS : false,
+			retry: false
+		};
+	});
