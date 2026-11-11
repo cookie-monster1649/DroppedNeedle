@@ -38,6 +38,20 @@ macro_rules! strong_guess {
     };
 }
 
+/// Fork: the album, a column holding its id, has an accepted catalogue
+/// match (a confirmed Deezer album). It counts as matched: it is on no
+/// Check albums list, though MusicBrainz identification still runs for it.
+#[macro_export]
+macro_rules! provider_confirmed {
+    ($album_id:literal) => {
+        concat!(
+            "EXISTS (SELECT 1 FROM library_album_provider_matches pcm WHERE pcm.local_album_id = ",
+            $album_id,
+            " AND pcm.match_state = 'confirmed')"
+        )
+    };
+}
+
 /// Fork: the album, a column holding its id, is on Check albums' Best guess
 /// list: an unconfirmed guess, or an unmatched album whose best guess is
 /// strong ([`strong_guess!`]).
@@ -47,7 +61,9 @@ macro_rules! best_guess_listed {
         concat!(
             "EXISTS (SELECT 1 FROM library_album_match_state bgl WHERE bgl.local_album_id = ",
             $album_id,
-            " AND (bgl.state = 'unconfirmed' OR (bgl.state = 'unmatched' AND ",
+            " AND (bgl.state = 'unconfirmed' OR (bgl.state = 'unmatched' AND NOT ",
+            $crate::provider_confirmed!($album_id),
+            " AND ",
             $crate::strong_guess!($album_id, "bgl"),
             ")))"
         )
@@ -63,6 +79,8 @@ macro_rules! not_found_listed {
             "EXISTS (SELECT 1 FROM library_album_match_state nfl WHERE nfl.local_album_id = ",
             $album_id,
             " AND nfl.state = 'unmatched' AND NOT ",
+            $crate::provider_confirmed!($album_id),
+            " AND NOT ",
             $crate::strong_guess!($album_id, "nfl"),
             ")"
         )
@@ -76,9 +94,13 @@ macro_rules! not_found_listed {
 macro_rules! waiting_tab {
     () => {
         concat!(
-            "((?1 = 'unconfirmed' AND (s.state = 'unconfirmed' OR (s.state = 'unmatched' AND ",
+            "((?1 = 'unconfirmed' AND (s.state = 'unconfirmed' OR (s.state = 'unmatched' AND NOT ",
+            $crate::provider_confirmed!("s.local_album_id"),
+            " AND ",
             $crate::strong_guess!("s.local_album_id", "s"),
             "))) OR (?1 = 'unmatched' AND s.state = 'unmatched' AND NOT ",
+            $crate::provider_confirmed!("s.local_album_id"),
+            " AND NOT ",
             $crate::strong_guess!("s.local_album_id", "s"),
             "))"
         )
