@@ -18,6 +18,12 @@ droppedneedle_kernel::sql! {
     pub(super) INSERT_WANT_IDENTITY = "INSERT OR IGNORE INTO acquire_want_identities \
              (want_key, provider, external_entity_type, external_id, created_at) \
              VALUES (?1, ?2, ?3, ?4, ?5)";
+    /// Fork: want `?1`'s disc and track number on album `?2`, newest wins.
+    pub(super) UPSERT_WANT_POSITION = "INSERT INTO acquire_want_positions \
+             (want_key, album_title, disc_number, track_number, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (want_key, album_title) DO UPDATE SET \
+             disc_number = excluded.disc_number, track_number = excluded.track_number, \
+             updated_at = excluded.updated_at";
     /// Fork: every identity of want `?1`, by provider then id.
     pub(super) WANT_IDENTITIES = "SELECT provider, external_id FROM acquire_want_identities \
              WHERE want_key = ?1 ORDER BY provider, external_id";

@@ -122,18 +122,23 @@ droppedneedle_kernel::sql! {
     /// area kept them.
     pub(super) WANT_IDENTITIES = "SELECT provider, external_id FROM acquire_want_identities \
              WHERE want_key = ?1 ORDER BY provider, external_id";
-    /// Fork: what want `?1` asked for (artist, album, title), newest ask.
+    /// Fork: what want `?1` asked for (artist, album, title), newest ask,
+    /// and its (disc, track) on that album: the ask's own, else a playlist row's.
     pub(super) WANT_ASK = "SELECT r.artist_name, r.album_title, r.track_title, \
+             coalesce((SELECT wp.disc_number FROM acquire_want_positions wp \
+               WHERE wp.want_key = lower(?1) AND lower(wp.album_title) = lower(r.album_title)), \
              (SELECT p.disc_number FROM catalog_playlist_tracks p \
                WHERE lower(p.track_name) = lower(r.track_title) \
                  AND lower(p.artist_name) = lower(r.artist_name) \
                  AND lower(p.album_name) = lower(r.album_title) AND p.track_number > 0 \
-               ORDER BY p.created_at LIMIT 1), \
+               ORDER BY p.created_at LIMIT 1)), \
+             coalesce((SELECT wp.track_number FROM acquire_want_positions wp \
+               WHERE wp.want_key = lower(?1) AND lower(wp.album_title) = lower(r.album_title)), \
              (SELECT p.track_number FROM catalog_playlist_tracks p \
                WHERE lower(p.track_name) = lower(r.track_title) \
                  AND lower(p.artist_name) = lower(r.artist_name) \
                  AND lower(p.album_name) = lower(r.album_title) AND p.track_number > 0 \
-               ORDER BY p.created_at LIMIT 1) \
+               ORDER BY p.created_at LIMIT 1)) \
              FROM request_history r \
              WHERE r.musicbrainz_id_lower = 'track:' || lower(?1) \
              ORDER BY r.requested_at DESC LIMIT 1";

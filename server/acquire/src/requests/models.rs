@@ -90,6 +90,13 @@ pub struct WantIntake {
     /// The Spotify track: its id, `spotify:track:` URI or link.
     #[serde(default)]
     pub spotify_track_id: Option<String>,
+    /// Fork: the track number on `album_title`, when the ask comes from a
+    /// provider's album; a file with no number of its own is filed there.
+    #[serde(default)]
+    pub track_number: Option<i64>,
+    /// Fork: the disc of `track_number` (1 when absent).
+    #[serde(default)]
+    pub disc_number: Option<i64>,
 }
 
 /// One batch row.

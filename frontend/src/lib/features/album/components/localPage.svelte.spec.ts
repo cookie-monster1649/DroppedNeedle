@@ -277,8 +277,33 @@ describe('local album page for a Deezer-matched album', () => {
 			artist_name: 'Poppy Ajudha',
 			track_title: 'Holy Moly',
 			album_title: 'FEMME',
-			isrc: 'GBUM71900001'
+			isrc: 'GBUM71900001',
+			track_number: 1,
+			disc_number: 1
 		});
+	});
+
+	it('requests every missing track from the In Library button, then shows the plain chip', async () => {
+		const api = fakeDeezerLibrary();
+
+		await renderWithQuery(LocalAlbumPage, { albumId: album.id });
+
+		await page.getByRole('button', { name: 'In Library · 1/2' }).click();
+		await expect.element(page.getByText('Request album?')).toBeVisible();
+		await page.getByRole('button', { name: 'Request album' }).click();
+		await expect.element(page.getByText('Wanted')).toBeVisible();
+		const asks = api.calls('POST /api/v3/requests/wants');
+		expect(asks).toHaveLength(1);
+		expect(asks[0].body).toMatchObject({
+			track_title: 'Holy Moly',
+			album_title: 'FEMME',
+			track_number: 1,
+			disc_number: 1
+		});
+		await expect
+			.element(page.getByRole('button', { name: 'In Library · 1/2' }))
+			.not.toBeInTheDocument();
+		await expect.element(page.getByText('In Library · 1/2')).toBeVisible();
 	});
 
 	it('keeps Open on Deezer and the tag write in the album menu', async () => {
