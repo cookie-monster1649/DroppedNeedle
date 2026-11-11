@@ -301,7 +301,7 @@ pub fn group_owned(conn: &Connection, release_group_mbid: &str) -> rusqlite::Res
 /// The credited names in an artist string, folded: "Lusanda, noxz" and
 /// "Sam Wills x Kaisha & David Nuri feat. X" split into their artists.
 fn credited_names(artists: &str) -> Vec<String> {
-    let folded = droppedneedle_kernel::db::fold::fold_text(artists);
+    let folded = straight_apostrophes(&droppedneedle_kernel::db::fold::fold_text(artists));
     let mut spaced = format!(" {folded} ");
     for joiner in [
         ",",
@@ -336,6 +336,12 @@ pub fn song_held(conn: &Connection, artist: &str, title: &str) -> rusqlite::Resu
 
 const LOSSLESS: &[&str] = &["flac", "alac", "wav", "aiff", "aif", "ape", "wv"];
 
+/// Fork: `text` with every apostrophe look-alike (’ ‘ ʼ `) as `'`, so a
+/// Spotify "D'Angelo" and a tagged "D’Angelo" are one name.
+fn straight_apostrophes(text: &str) -> String {
+    text.replace(['\u{2019}', '\u{2018}', '\u{2bc}', '`'], "'")
+}
+
 /// Fork: the best indexed track holding the song `artist` - `title`, in
 /// any edition: the folded title is the same and the track's artist or
 /// album artist shares a credited name with `artist`. Several copies: a
@@ -358,8 +364,12 @@ pub fn held_copy_except(
     if title.is_empty() || wanted.is_empty() {
         return Ok(None);
     }
+    // Fork: a title matches whatever apostrophe its tag uses; the stored
+    // folded titles keep theirs, so ask for each common spelling.
+    let straight = straight_apostrophes(&title);
+    let curly = straight.replace('\'', "\u{2019}");
     let mut stmt = conn.prepare_cached(sql::TRACK_TITLE_ARTISTS.text())?;
-    let rows = stmt.query_map(params![title], |row| {
+    let rows = stmt.query_map(params![title, straight, curly], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
