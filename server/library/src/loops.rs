@@ -74,6 +74,9 @@ pub const ARTIST_SUGGESTION_JOB: &str = "library-artist-suggestions";
 const ARTIST_SUGGESTION_EVERY: Duration = Duration::from_secs(60);
 const ARTIST_SUGGESTION_BATCH: u32 = 30;
 const ARTIST_SUGGESTION_FAILED: &str = "ARTIST_SUGGESTION_FAILED";
+/// Fork: artists whose Deezer artist is asked of MusicBrainz a turn (at
+/// most three URL lookups each, at MusicBrainz's pace).
+const DEEZER_LINK_BATCH: u32 = 10;
 
 /// Fork: best guesses from Deezer for albums MusicBrainz has nothing for,
 /// a batch a turn. An album costs at most five Deezer calls (an ISRC, a
@@ -814,11 +817,15 @@ pub(crate) fn start_loops(
             .with_initial_delay(Duration::from_secs(60))
             .with_jitter(Duration::from_secs(10))
             .with_backoff(Duration::from_secs(300), Duration::from_secs(3600)),
-        move |_ctx| match drive(
-            &artist_handle,
-            "artist suggestions",
-            artists.suggest_some(ARTIST_SUGGESTION_BATCH),
-        )? {
+        move |_ctx| match drive(&artist_handle, "artist suggestions", {
+            let artists = artists.clone();
+            async move {
+                // Fork: the Deezer artist's own MusicBrainz link first,
+                // so a row it links leaves the name search out.
+                artists.link_some(DEEZER_LINK_BATCH).await?;
+                artists.suggest_some(ARTIST_SUGGESTION_BATCH).await
+            }
+        })? {
             Ok(_) => Ok(Next::Continue),
             Err(error) => Err(TickError::new(ARTIST_SUGGESTION_FAILED, error)),
         },

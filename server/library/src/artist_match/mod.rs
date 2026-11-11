@@ -13,6 +13,12 @@
 //!   artist of an album match a person accepted, or else the one Deezer
 //!   artist of exactly that name.
 //!
+//! Before those, the loop asks MusicBrainz which artist links to the
+//! Deezer artist of an artist's accepted album matches (its URL relation).
+//! Exactly one links the artist outright; when another record already
+//! holds that artist, the pair is offered as a merge and shown here. None
+//! or several change nothing ([`ArtistSuggestions::link_some`]).
+//!
 //! Taking a suggestion goes through the existing routes (the MusicBrainz
 //! link and the artist merge); "Not it" keeps the loop from offering it
 //! again. The picture and genres stay either way.
@@ -35,7 +41,11 @@ use droppedneedle_providers::preview::{PreviewClient, norm};
 use crate::jobs::models::OperationError;
 
 use self::sql::{
-    ArtistDeezerRow, LiveArtistRow, MatchedDeezerRow, OpenSuggestionRow, PendingArtistRow,
+    ArtistDeezerRow, DeezerLinkPendingRow, LiveArtistRow, MatchedDeezerRow, OpenSuggestionRow,
+    PendingArtistRow,
+};
+use crate::identify::artist_links::{
+    ArtistLinkError, LINK_FROM_DEEZER, ProviderLinkOutcome, set_from_provider_link,
 };
 
 /// How long an artist with nothing to offer waits before it is looked at
@@ -50,6 +60,42 @@ const MB_MIN_SCORE: i64 = 90;
 const NEAR_NAME: f64 = 92.0;
 /// Folded names shorter than this must match exactly.
 const NEAR_MIN_LEN: usize = 6;
+/// The most Deezer artists of one artist asked of MusicBrainz a turn.
+const DEEZER_IDS_ASKED: usize = 3;
+
+/// The Deezer artist page MusicBrainz keeps URL relations under.
+fn deezer_artist_url(id: &str) -> String {
+    format!("https://www.deezer.com/artist/{id}")
+}
+
+/// The one MusicBrainz artist the URL relations name, lowercased: none
+/// when they name no artist or more than one.
+fn sole_artist<'a>(
+    relations: impl Iterator<Item = &'a droppedneedle_providers::musicbrainz::models::Relation>,
+) -> Option<String> {
+    let mut ids: Vec<String> = relations
+        .filter_map(|relation| relation.artist.as_ref())
+        .map(|artist| artist.id.to_ascii_lowercase())
+        .filter(|id| is_valid_mbid(id))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    match ids.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
+/// What asking MusicBrainz about an artist's Deezer link did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeezerLinkTurn {
+    /// Artists asked about.
+    pub asked: usize,
+    /// Linked to the one MusicBrainz artist found.
+    pub linked: usize,
+    /// Left with a merge into the artist already linked to it.
+    pub merges: usize,
+}
 
 /// Where an artist's suggestions stand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -354,6 +400,138 @@ impl ArtistSuggestions {
             looked += 1;
         }
         Ok(looked)
+    }
+
+    /// Fork: ask MusicBrainz which artist links to the Deezer artist of
+    /// the accepted album matches of up to `batch` unlinked artists. One
+    /// artist found links the row; when another record holds that artist,
+    /// the pair is offered as a merge (and shown as the row's suggestion)
+    /// instead. None or several change nothing. Each row records what it
+    /// asked, so it is asked again only after [`RECHECK_MS`] or when a new
+    /// match names another Deezer artist.
+    ///
+    /// # Errors
+    ///
+    /// A store fault, or MusicBrainz failing in a way worth backing off
+    /// for.
+    pub async fn link_some(&self, batch: u32) -> Result<DeezerLinkTurn, String> {
+        let before = self.clock.now_ms() - RECHECK_MS;
+        let pending = self
+            .db
+            .read("artist_match.deezer_pending", move |conn| {
+                let rows = conn
+                    .prepare_cached(sql::DEEZER_LINK_PENDING.text())?
+                    .query_map(
+                        params![i64::from(batch), before],
+                        DeezerLinkPendingRow::read,
+                    )?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut pending = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut ids: Vec<String> = conn
+                        .prepare_cached(sql::MATCHED_DEEZER_ARTISTS.text())?
+                        .query_map([&row.artist_id], MatchedDeezerRow::read)?
+                        .map(|found| found.map(|found| found.deezer_artist_id))
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    ids.retain(|id| !id.trim().is_empty());
+                    ids.sort();
+                    ids.dedup();
+                    pending.push((row.artist_id, ids));
+                }
+                Ok::<_, droppedneedle_kernel::db::DbError>(pending)
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut turn = DeezerLinkTurn::default();
+        for (artist, ids) in pending {
+            let mut found: Vec<String> = Vec::new();
+            for id in ids.iter().take(DEEZER_IDS_ASKED) {
+                match self
+                    .musicbrainz
+                    .resolve_url(
+                        &deezer_artist_url(id),
+                        &["artist-rels"],
+                        Criticality::BestEffort,
+                    )
+                    .await
+                {
+                    Ok(resolution) => found.extend(sole_artist(resolution.relations.iter())),
+                    Err(error) if error.is_retriable() => return Err(error.to_string()),
+                    Err(error) => {
+                        tracing::debug!(%error, artist, deezer = id, "deezer link not asked");
+                    }
+                }
+            }
+            found.sort();
+            found.dedup();
+            let mbid = match found.as_slice() {
+                [one] => Some(one.clone()),
+                _ => None,
+            };
+            let asked = ids.join(",");
+            let now = self.clock.now_ms();
+            let outcome = self
+                .db
+                .write(Lane::Background, "artist_match.deezer_link", move |tx| {
+                    tx.prepare_cached(sql::MARK_DEEZER_LINK.text())?
+                        .execute(params![artist, asked, now])?;
+                    let Some(mbid) = mbid else {
+                        return Ok::<_, ArtistLinkError>(ProviderLinkOutcome::Skipped);
+                    };
+                    let declined: Option<Option<String>> = {
+                        use rusqlite::OptionalExtension as _;
+                        tx.prepare_cached(sql::DECLINED_MUSICBRAINZ.text())?
+                            .query_row([&artist], |row| row.get(0))
+                            .optional()?
+                    };
+                    if declined
+                        .flatten()
+                        .is_some_and(|turned_down| turned_down.eq_ignore_ascii_case(&mbid))
+                    {
+                        return Ok(ProviderLinkOutcome::Skipped);
+                    }
+                    let outcome =
+                        set_from_provider_link(tx, &artist, &mbid, LINK_FROM_DEEZER, now)?;
+                    if let ProviderLinkOutcome::Shared(others) = &outcome {
+                        for (other, _) in others {
+                            let (left, right) = if artist.as_str() < other.as_str() {
+                                (artist.as_str(), other.as_str())
+                            } else {
+                                (other.as_str(), artist.as_str())
+                            };
+                            tx.prepare_cached(sql::OFFER_MERGE.text())?
+                                .execute(params![
+                                    format!("provider:{left}:{right}"),
+                                    left,
+                                    right,
+                                    now,
+                                ])?;
+                        }
+                        if let Some((target, _)) = others.first() {
+                            tx.prepare_cached(sql::SUGGEST_DEEZER_MERGE.text())?
+                                .execute(params![artist, target, mbid, now])?;
+                        }
+                    }
+                    Ok::<_, ArtistLinkError>(outcome)
+                })
+                .await
+                .map_err(|error| error.to_string())?;
+            turn.asked += 1;
+            match outcome {
+                ProviderLinkOutcome::Linked => turn.linked += 1,
+                ProviderLinkOutcome::Shared(_) => turn.merges += 1,
+                ProviderLinkOutcome::Skipped => {}
+            }
+        }
+        if turn.linked + turn.merges > 0 {
+            tracing::info!(
+                asked = turn.asked,
+                linked = turn.linked,
+                merges = turn.merges,
+                "artists linked to musicbrainz by their deezer artist"
+            );
+        }
+        Ok(turn)
     }
 
     async fn find(

@@ -49,7 +49,8 @@ droppedneedle_kernel::sql! {
           musicbrainz_disambiguation, deezer_artist_id, picture_url, link_url, fans, \
           suggestion_state, checked_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'open', ?10, ?10) \
-         ON CONFLICT (local_artist_id) DO UPDATE SET merge_artist_id = excluded.merge_artist_id, \
+         ON CONFLICT (local_artist_id) DO UPDATE SET \
+           merge_artist_id = COALESCE(excluded.merge_artist_id, library_artist_suggestions.merge_artist_id), \
            musicbrainz_artist_id = excluded.musicbrainz_artist_id, \
            musicbrainz_name = excluded.musicbrainz_name, \
            musicbrainz_disambiguation = excluded.musicbrainz_disambiguation, \
@@ -81,6 +82,44 @@ droppedneedle_kernel::sql! {
              WHERE e.local_artist_id = r.id) \
            AND (m.id IS NOT NULL OR s.musicbrainz_artist_id IS NOT NULL) \
          ORDER BY r.folded_name, r.id";
+    /// Fork: live artists with no MusicBrainz link that lead an album
+    /// with an accepted Deezer match, whose Deezer artists were never
+    /// asked of MusicBrainz, last asked before `?2`, or not all asked
+    /// (a newer match names another), the never-asked first, at most `?1`.
+    pub(super) DEEZER_LINK_PENDING = "SELECT r.id AS artist_id FROM local_artists r \
+         LEFT JOIN library_artist_suggestions s ON s.local_artist_id = r.id \
+         WHERE r.retired_into_artist_id IS NULL AND r.kind != 'various_artists' \
+           AND NOT EXISTS (SELECT 1 FROM local_artist_external_identities e \
+             WHERE e.local_artist_id = r.id) \
+           AND EXISTS (SELECT 1 FROM local_albums a \
+             JOIN library_album_provider_matches m ON m.local_album_id = a.id \
+             WHERE a.album_artist_id = r.id AND m.provider = 'deezer' \
+               AND m.match_state = 'confirmed' AND COALESCE(m.provider_artist_id, '') != '' \
+               AND (s.deezer_link_checked_at IS NULL OR s.deezer_link_checked_at < ?2 \
+                 OR instr(',' || COALESCE(s.deezer_link_ids, '') || ',', \
+                   ',' || m.provider_artist_id || ',') = 0)) \
+         ORDER BY s.deezer_link_checked_at IS NOT NULL, r.id LIMIT ?1";
+    /// Fork: artist `?1`'s Deezer artists `?2` (comma-joined) were asked
+    /// of MusicBrainz at `?3`. A new row waits for the suggestion loop.
+    pub(super) MARK_DEEZER_LINK = "INSERT INTO library_artist_suggestions \
+         (local_artist_id, suggestion_state, checked_at, updated_at, deezer_link_ids, \
+          deezer_link_checked_at) VALUES (?1, 'open', 0, ?3, ?2, ?3) \
+         ON CONFLICT (local_artist_id) DO UPDATE SET deezer_link_ids = excluded.deezer_link_ids, \
+           deezer_link_checked_at = excluded.deezer_link_checked_at";
+    /// Fork: the MusicBrainz artist a person turned down for artist `?1`,
+    /// when they did.
+    pub(super) DECLINED_MUSICBRAINZ = "SELECT musicbrainz_artist_id FROM library_artist_suggestions \
+         WHERE local_artist_id = ?1 AND suggestion_state = 'declined'";
+    /// Fork: artist `?1`'s open suggestion is a merge into artist `?2`
+    /// (MusicBrainz artist `?3`), as of `?4`.
+    pub(super) SUGGEST_DEEZER_MERGE = "UPDATE library_artist_suggestions \
+         SET merge_artist_id = ?2, musicbrainz_artist_id = ?3, updated_at = ?4 \
+         WHERE local_artist_id = ?1 AND suggestion_state = 'open'";
+    /// Fork: the pair `?2`/`?3` (lower id first) offered as one artist,
+    /// id `?1`, at `?4`, the way two records holding one id are.
+    pub(super) OFFER_MERGE = "INSERT OR IGNORE INTO local_artist_merge_candidates (id, left_artist_id, \
+         right_artist_id, reason_code, state, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, 'SHARED_PROVIDER_IDENTITY', 'open', ?4, ?4)";
     /// A person turns artist `?1`'s suggestions down: user `?2`, at `?3`.
     pub(super) DECLINE = "UPDATE library_artist_suggestions \
          SET suggestion_state = 'declined', decided_by_user_id = ?2, updated_at = ?3 \
@@ -99,6 +138,9 @@ droppedneedle_kernel::sql! {
         deezer_artist_id: String,
         link_url: Option<String>,
         fans: Option<i64>,
+    }
+    pub(super) row DeezerLinkPendingRow for [DEEZER_LINK_PENDING] {
+        artist_id: String,
     }
     pub(super) row PendingArtistRow for [PENDING_ARTISTS] {
         artist_id: String,
