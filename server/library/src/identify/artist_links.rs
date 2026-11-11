@@ -829,6 +829,9 @@ pub const LINK_NOT_PROVEN: &str = "ARTIST_LINK_NOT_PROVEN";
 pub const LINK_GAVE_WAY: &str = "ARTIST_LINK_GAVE_WAY";
 pub const LINK_SET_BY_PERSON: &str = "ARTIST_LINK_SET_BY_PERSON";
 pub const LINK_CLEARED_BY_PERSON: &str = "ARTIST_LINK_CLEARED_BY_PERSON";
+/// Fork: the app linked an unlinked row to the one MusicBrainz artist that
+/// links to the Deezer artist of the row's accepted album matches.
+pub const LINK_FROM_DEEZER: &str = "ARTIST_LINK_FROM_DEEZER";
 
 /// The ids row `artist` is proven to be, when it is a row that can be:
 /// live, not a sentinel and not a Various Artists row.
@@ -1389,6 +1392,68 @@ pub fn set_by_person(
     )?;
     bump_catalog(tx)?;
     artist_link(tx, artist)?.ok_or(ArtistLinkError::Refused(LinkRefusal::NotFound))
+}
+
+/// Fork: what [`set_from_provider_link`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderLinkOutcome {
+    /// The row is linked to the id now.
+    Linked,
+    /// Other live records (id, name) are that artist already: the row is
+    /// left for a merge, never linked alongside them.
+    Shared(Vec<(String, String)>),
+    /// Nothing done: the row is gone, merged, a sentinel or Various
+    /// Artists, already linked, or the id is not a usable artist id.
+    Skipped,
+}
+
+/// Fork: link row `artist`, which has no link, to MusicBrainz artist
+/// `raw_mbid` that another catalogue's own link names (MusicBrainz's URL
+/// relation for the row's Deezer artist). Stored like a link by hand
+/// (`manual`, with no person), so the app's settling, which follows only
+/// album proofs, never takes it away; a person can still clear or move it.
+/// Like a person's link, it is never written where it would group the row
+/// with another record ([`would_group`]): those are answered with the
+/// records, for a merge.
+pub fn set_from_provider_link(
+    tx: &Transaction<'_>,
+    artist: &str,
+    raw_mbid: &str,
+    reason: &str,
+    now_ms: i64,
+) -> Result<ProviderLinkOutcome, ArtistLinkError> {
+    let mbid = raw_mbid.trim().to_ascii_lowercase();
+    if mbid.len() != 36 || uuid::Uuid::parse_str(&mbid).is_err() {
+        return Ok(ProviderLinkOutcome::Skipped);
+    }
+    let mbid = merged_ids::current_id(tx, &mbid)?;
+    if placeholder(&mbid) {
+        return Ok(ProviderLinkOutcome::Skipped);
+    }
+    let provable: Option<bool> = tx
+        .prepare_cached(crate::identify::sql::PERSON_TARGET.text())?
+        .query_row(
+            params![artist, SENTINEL_ARTIST_IDS[0], SENTINEL_ARTIST_IDS[1]],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(current) = artist_link(tx, artist)? else {
+        return Ok(ProviderLinkOutcome::Skipped);
+    };
+    if provable != Some(true) || current.link.is_some() {
+        return Ok(ProviderLinkOutcome::Skipped);
+    }
+    let others = would_group(tx, artist, &mbid)?;
+    if !others.is_empty() {
+        return Ok(ProviderLinkOutcome::Shared(others));
+    }
+    let now = now_ms as f64 / 1000.0;
+    tx.prepare_cached(crate::identify::sql::SET_BY_PERSON.text())?
+        .execute(params![artist, mbid, "", crate::clock::ms(now)])?;
+    touch_artist(tx, artist, now)?;
+    audit_link(tx, "", artist, None, Some(&mbid), reason, now)?;
+    bump_catalog(tx)?;
+    Ok(ProviderLinkOutcome::Linked)
 }
 
 /// A person clears row `artist`'s link, set by a person or carried from
