@@ -37482,7 +37482,7 @@
           },
           "identity_state": {
             "type": "string",
-            "description": "`local_only` or `linked`."
+            "description": "`linked` (MusicBrainz), `deezer` (fork) or `local_only`."
           },
           "is_compilation": {
             "type": "boolean",
@@ -39571,7 +39571,7 @@
           },
           "identity_state": {
             "type": "string",
-            "description": "`local_only` or `linked`."
+            "description": "`linked` (MusicBrainz), `deezer` (fork) or `local_only`."
           },
           "led_track_count": {
             "type": "integer",
@@ -66841,7 +66841,7 @@
           "local_only_count": {
             "type": "integer",
             "format": "int64",
-            "description": "Albums with streamable tracks and no MusicBrainz identity.",
+            "description": "Albums with streamable tracks, no MusicBrainz identity and no\naccepted Deezer match.",
             "minimum": 0
           },
           "looks_wrong_count": {

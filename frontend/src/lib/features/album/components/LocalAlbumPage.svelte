@@ -331,7 +331,7 @@
 				{ label: 'Remove album...', icon: Trash2, onclick: () => (removingAlbum = true) }
 			);
 		}
-		if (authStore.isTrusted && album?.identity_state === 'local_only') {
+		if (authStore.isTrusted && album && album.identity_state !== 'linked') {
 			items.push({
 				label: album.contribution_id ? 'Contribution in progress' : 'Contribute to MusicBrainz',
 				icon: FileUp,
@@ -344,11 +344,24 @@
 		// ISRCs, barcode, label, links). Once it is in MusicBrainz, the
 		// album is matched by its Spotify link.
 		const spotifyAlbum = album?.spotify_album_id;
-		if (spotifyAlbum && album?.identity_state === 'local_only') {
+		if (spotifyAlbum && album && album.identity_state !== 'linked') {
 			items.push({
 				label: 'Add to MusicBrainz from Spotify',
 				icon: ExternalLink,
-				onclick: () => window.open(harmonyUrl(spotifyAlbum), '_blank', 'noopener')
+				onclick: () =>
+					window.open(
+						harmonyUrl(`https://open.spotify.com/album/${spotifyAlbum}`),
+						'_blank',
+						'noopener'
+					)
+			});
+		}
+		// Fork: Harmony drafts a release from Deezer's album as well.
+		if (!spotifyAlbum && deezer && album && album.identity_state !== 'linked') {
+			items.push({
+				label: 'Add to MusicBrainz from Deezer',
+				icon: ExternalLink,
+				onclick: () => window.open(harmonyUrl(deezer.url), '_blank', 'noopener')
 			});
 		}
 		if (deezer) {
@@ -368,10 +381,10 @@
 		return items;
 	});
 
-	/** Harmony's release draft for Spotify album `id`. */
-	function harmonyUrl(id: string): string {
+	/** Harmony's release draft for a Spotify or Deezer album page. */
+	function harmonyUrl(albumUrl: string): string {
 		const url = new URL('https://harmony.pulsewidth.org.uk/release');
-		url.searchParams.set('url', `https://open.spotify.com/album/${id}`);
+		url.searchParams.set('url', albumUrl);
 		url.searchParams.set('category', 'preferred');
 		return url.toString();
 	}

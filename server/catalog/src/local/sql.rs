@@ -248,6 +248,8 @@ droppedneedle_kernel::sql! {
         ae.release_group_mbid AS release_group_mbid, ae.release_mbid AS release_mbid, \
         rte.provider_artist_id AS artist_mbid, \
         (ae.local_album_id IS NOT NULL) AS linked, \
+        EXISTS (SELECT 1 FROM library_album_provider_matches pl WHERE pl.local_album_id = a.id \
+         AND pl.match_state = 'confirmed') AS provider_linked, \
         COUNT(t.id) AS track_count, \
         COALESCE(SUM(t.duration_seconds), 0.0) AS total_duration_seconds, \
         COALESCE(SUM(t.file_size_bytes), 0) AS total_size_bytes, "
@@ -562,6 +564,8 @@ droppedneedle_kernel::sql! {
     /// subquery per row.
     pub(crate) fragment ARTIST_COLUMNS = "r.id AS id, r.display_name AS name, \
         e.provider_artist_id AS artist_mbid, (e.local_artist_id IS NOT NULL) AS linked, \
+        EXISTS (SELECT 1 FROM library_artist_suggestions pl WHERE pl.local_artist_id = r.id \
+         AND pl.deezer_artist_id IS NOT NULL) AS provider_linked, \
         r.created_at / 1000.0 AS date_added, " + ARTIST_DISAMBIGUATION;
     /// MusicBrainz's note on artist `r`'s linked artist (`e`), as
     /// identification stored it, while another live ordinary record has
@@ -701,7 +705,9 @@ droppedneedle_kernel::sql! {
          WHERE r.local_album_id = a.id AND r.state = 'pending'))) AS to_check, \
         (SELECT COUNT(*) FROM local_albums a WHERE " + (owned_album!("a"))
         + " AND NOT EXISTS (SELECT 1 FROM local_album_external_identities i \
-        WHERE i.local_album_id = a.id AND " + (musicbrainz!("i")) + ")) AS local_only, \
+        WHERE i.local_album_id = a.id AND " + (musicbrainz!("i")) + ") \
+         AND NOT EXISTS (SELECT 1 FROM library_album_provider_matches pl \
+         WHERE pl.local_album_id = a.id AND pl.match_state = 'confirmed')) AS local_only, \
         (SELECT MAX(terminal_at) / 1000.0 FROM library_scan_runs WHERE state = 'completed') AS last_scan";
 
     /// Which of a page of ids a user favorited, for one kind.

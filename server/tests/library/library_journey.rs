@@ -7879,6 +7879,7 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
     assert_eq!(status, StatusCode::OK, "{stats}");
     assert_eq!(stats["guess_count"], json!(0), "{stats}");
     assert_eq!(stats["not_found_count"], json!(0), "{stats}");
+    assert_eq!(stats["local_only_count"], json!(0), "{stats}");
     for state in ["unconfirmed", "unmatched"] {
         let (status, body) = app
             .call(
@@ -7902,6 +7903,7 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
         .await;
     assert_eq!(status, StatusCode::OK, "{detail}");
     let found = &detail["provider_match"];
+    assert_eq!(detail["identity_state"], json!("deezer"), "{detail}");
     assert_eq!(found["label"], json!("Own Label"), "{detail}");
     assert_eq!(found["upc"], json!("0123"), "{detail}");
     assert_eq!(found["genres"], json!(["Jazz"]), "{detail}");
