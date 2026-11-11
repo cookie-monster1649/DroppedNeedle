@@ -16,7 +16,9 @@
 	import AlbumHero from './AlbumHero.svelte';
 	import AlbumHeroSkeleton from './AlbumHeroSkeleton.svelte';
 	import AlbumSourceBar from './AlbumSourceBar.svelte';
-	import ProviderAlbumTracks from './ProviderAlbumTracks.svelte';
+	import TagWritePreview from '$lib/features/library/components/edition/TagWritePreview.svelte';
+	import { createWantTrackMutation } from '$lib/features/album/queries/AlbumMutations.svelte';
+	import type { TrackSlot } from '$lib/features/library/components/LocalAlbumTrackList.svelte';
 	import BackButton from '$lib/ui/BackButton.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import Card from '$lib/ui/Card.svelte';
@@ -106,19 +108,101 @@
 		trackIdNote(editionPlan?.files.filter(isTrackIdCorrected).length ?? 0)
 	);
 
-	function play(shuffle: boolean): void {
-		const queue = buildDiscoveryQueueFromLocal(tracks);
-		if (!queue.length) return;
-		playerStore.playQueue(queue, 0, shuffle);
+	// Fork: an album MusicBrainz lacks, matched to a Deezer album, reads
+	// like a MusicBrainz one: Deezer's whole track list with the files in
+	// it and the tracks the library lacks inline as Missing (Request asks
+	// for one by name), Deezer's facts in the hero, and its type above the
+	// title. Files Deezer's list doesn't name follow at the end.
+	const deezer = $derived(
+		album?.provider_match && !album.release_group_mbid ? album.provider_match : null
+	);
+	const DEEZER_TYPES: Record<string, string> = {
+		album: 'Album',
+		ep: 'EP',
+		single: 'Single',
+		compile: 'Compilation'
+	};
+	const wantTrack = createWantTrackMutation();
+	let asking = $state<string | null>(null);
+	let wanted = $state<Set<string>>(new Set());
+	let retagging = $state(false);
+	const RETAG_SENTENCE =
+		"Writes Deezer's album, album artist, artist, title, track number, date, ISRC and label into this album's files, and no MusicBrainz ids. The album takes the new names once its folder is scanned, which starts by itself.";
+
+	type DeezerTrack = NonNullable<typeof deezer>['tracks'][number];
+
+	async function want(track: DeezerTrack): Promise<void> {
+		if (!deezer) return;
+		asking = track.provider_track_id;
+		try {
+			await wantTrack.mutateAsync({
+				artistName: deezer.artist_name,
+				trackTitle: track.title,
+				albumTitle: deezer.title,
+				durationSeconds: track.duration_seconds ?? null,
+				isrc: track.isrc ?? null
+			});
+			wanted = new Set([...wanted, track.provider_track_id]);
+			toastStore.show({ message: `Asked for ${track.title}.`, type: 'success' });
+		} catch {
+			toastStore.show({ message: `Couldn't ask for ${track.title}.`, type: 'error' });
+		} finally {
+			asking = null;
+		}
 	}
 
-	// Fork: play the album from one of its files (a held track of its
-	// Deezer track list).
-	function playFile(trackId: string): void {
-		const queue = buildDiscoveryQueueFromLocal(tracks);
-		const start = queue.findIndex((item) => item.trackSourceId === trackId);
-		if (start < 0) return;
-		playerStore.playQueue(queue, start, false);
+	const deezerHeld = $derived(deezer ? deezer.tracks.filter((track) => track.track_id).length : 0);
+	const deezerLength = $derived(
+		deezer ? deezer.tracks.reduce((sum, track) => sum + (track.duration_seconds ?? 0), 0) : 0
+	);
+	const slots = $derived.by((): TrackSlot[] | undefined => {
+		if (!deezer) return undefined;
+		const multiDisc = deezer.tracks.some((track) => track.disc > 1);
+		const byId = new Map(tracks.map((track) => [track.id, track]));
+		const list: TrackSlot[] = deezer.tracks.map((entry) => {
+			const number = multiDisc ? `${entry.disc}.${entry.position}` : `${entry.position}`;
+			const held = entry.track_id ? byId.get(entry.track_id) : undefined;
+			if (held) {
+				return { key: held.id, number, track: held };
+			}
+			return {
+				key: `deezer-${entry.provider_track_id}`,
+				number,
+				missing: {
+					title: entry.title,
+					duration_seconds: entry.duration_seconds ?? null,
+					wanted: wanted.has(entry.provider_track_id),
+					pending: asking === entry.provider_track_id,
+					onwant: authStore.isTrusted ? () => void want(entry) : undefined
+				}
+			};
+		});
+		const placed = deezer.tracks.map((entry) => entry.track_id);
+		for (const track of tracks) {
+			if (!placed.includes(track.id)) {
+				list.push({ key: track.id, number: `${track.disc_number}.${track.track_number}`, track });
+			}
+		}
+		return list;
+	});
+	// The files in play order: Deezer's order on a Deezer-matched album.
+	const orderedTracks = $derived(
+		slots ? slots.flatMap((slot) => ('track' in slot ? [slot.track] : [])) : tracks
+	);
+	const deezerFacts = $derived(
+		deezer
+			? [
+					...(deezer.label ? [{ label: 'Label', value: deezer.label }] : []),
+					...(deezer.release_date ? [{ label: 'Released', value: deezer.release_date }] : []),
+					...(deezer.upc ? [{ label: 'Barcode', value: deezer.upc }] : [])
+				]
+			: []
+	);
+
+	function play(shuffle: boolean): void {
+		const queue = buildDiscoveryQueueFromLocal(orderedTracks);
+		if (!queue.length) return;
+		playerStore.playQueue(queue, 0, shuffle);
 	}
 
 	let playlistModal = $state<{ open: (tracks: QueueItem[]) => void } | null>(null);
@@ -271,6 +355,20 @@
 				onclick: () => window.open(harmonyUrl(spotifyAlbum), '_blank', 'noopener')
 			});
 		}
+		if (deezer) {
+			items.push({
+				label: 'Open on Deezer',
+				icon: ExternalLink,
+				onclick: () => window.open(deezer.url, '_blank', 'noopener')
+			});
+			if (authStore.isAdmin) {
+				items.push({
+					label: "Use Deezer's title and artist...",
+					icon: FileUp,
+					onclick: () => (retagging = true)
+				});
+			}
+		}
 		return items;
 	});
 
@@ -310,7 +408,16 @@
 			</div>
 		</div>
 	{:else}
-		<AlbumHero eyebrow={album.is_compilation ? 'Compilation' : 'Album'} title={album.title} {back}>
+		<AlbumHero
+			eyebrow={deezer?.record_type
+				? (DEEZER_TYPES[deezer.record_type] ?? deezer.record_type)
+				: album.is_compilation
+					? 'Compilation'
+					: 'Album'}
+			title={album.title}
+			facts={deezerFacts}
+			{back}
+		>
 			{#snippet cover()}
 				<AlbumImage
 					albumId={album.id}
@@ -333,10 +440,18 @@
 				<span class="opacity-50" aria-hidden="true">•</span>
 				<span>{album.year ?? 'Year unknown'}</span>
 				<span class="opacity-50" aria-hidden="true">•</span>
-				<span>{album.track_count} {album.track_count === 1 ? 'track' : 'tracks'}</span>
-				{#if album.total_duration_seconds}
-					<span class="opacity-50" aria-hidden="true">•</span>
-					<span>{formatTotalDurationSec(album.total_duration_seconds)}</span>
+				{#if deezer}
+					<span>{deezer.tracks.length} {deezer.tracks.length === 1 ? 'track' : 'tracks'}</span>
+					{#if deezerLength}
+						<span class="opacity-50" aria-hidden="true">•</span>
+						<span>{formatTotalDurationSec(deezerLength)}</span>
+					{/if}
+				{:else}
+					<span>{album.track_count} {album.track_count === 1 ? 'track' : 'tracks'}</span>
+					{#if album.total_duration_seconds}
+						<span class="opacity-50" aria-hidden="true">•</span>
+						<span>{formatTotalDurationSec(album.total_duration_seconds)}</span>
+					{/if}
 				{/if}
 				{#if hasFiles && formatLabel}
 					<span class="opacity-50" aria-hidden="true">•</span>
@@ -368,6 +483,13 @@
 					/>
 				</div>
 				<EditionPlate copies={[album]} />
+				{#if deezer?.genres.length}
+					<ul class="flex flex-wrap gap-1.5" aria-label="Album genres">
+						{#each deezer.genres as genre (genre)}
+							<li class="badge badge-ghost badge-sm">{genre}</li>
+						{/each}
+					</ul>
+				{/if}
 			{/snippet}
 
 			{#snippet actions()}
@@ -379,7 +501,13 @@
 						disabled={!tracks.length}
 						onclick={() => play(false)}>Play</Button
 					>
-					<StatusChip size="md" icon={Check}>In Library</StatusChip>
+					{#if deezer && deezerHeld < deezer.tracks.length}
+						<StatusChip tone="warning" size="md" icon={Check}>
+							In Library · {deezerHeld}/{deezer.tracks.length}
+						</StatusChip>
+					{:else}
+						<StatusChip size="md" icon={Check}>In Library</StatusChip>
+					{/if}
 					<AlbumDownloadButton
 						albumId={album.id}
 						mbid={null}
@@ -397,6 +525,17 @@
 		<div class="dn-album-page space-y-8 pt-0">
 			<section class="space-y-3" aria-labelledby="local-tracks-title">
 				<h2 id="local-tracks-title" class="text-2xl text-base-content sm:text-3xl">Tracks</h2>
+				{#if deezer && retagging && authStore.isAdmin}
+					<div class="rounded-box border border-base-content/10 bg-base-100 p-3">
+						<TagWritePreview
+							album={{ userId: authStore.user?.id, localId: album.id }}
+							edition={{ releaseMbid: `deezer:${deezer.provider_album_id}`, identityRevision: 0 }}
+							placing={false}
+							placingSentenceId="provider-tags-sentence"
+							sentence={RETAG_SENTENCE}
+						/>
+					</div>
+				{/if}
 				{#if tracksQuery.isLoading}
 					<PaperPanel>
 						<ul class="divide-y divide-paper-border" aria-busy="true">
@@ -425,8 +564,8 @@
 							<AlbumSourceBar
 								sourceLabel="Local Files"
 								sourceColor="var(--color-accent)"
-								trackCount={tracks.length}
-								totalTracks={tracks.length}
+								trackCount={deezer ? deezerHeld : tracks.length}
+								totalTracks={deezer ? deezer.tracks.length : tracks.length}
 								extraBadge={formatLabel}
 								onPlayAll={() => play(false)}
 								onShuffle={() => play(true)}
@@ -437,7 +576,8 @@
 							</AlbumSourceBar>
 						{/snippet}
 						<LocalAlbumTrackList
-							{tracks}
+							tracks={orderedTracks}
+							{slots}
 							framed={false}
 							notes={fileNotes}
 							getTrackMenuItems={getLocalTrackMenuItems}
@@ -449,15 +589,13 @@
 						/>
 					</PaperPanel>
 				{/if}
+				{#if deezer?.release_date}
+					<p class="text-xs text-muted">
+						<span class="font-semibold">Release Date:</span>
+						{deezer.release_date}
+					</p>
+				{/if}
 			</section>
-
-			{#if album.provider_match && !album.release_group_mbid}
-				<ProviderAlbumTracks
-					match={album.provider_match}
-					onplay={playFile}
-					retag={authStore.isAdmin ? { userId: authStore.user?.id, localId: album.id } : null}
-				/>
-			{/if}
 
 			{#if authStore.isAdmin}
 				<ManagementHoldSection {album} />

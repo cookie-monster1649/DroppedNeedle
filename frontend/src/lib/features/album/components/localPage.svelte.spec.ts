@@ -190,3 +190,105 @@ describe('local album page with a pending review', () => {
 		}
 	});
 });
+
+describe('local album page for a Deezer-matched album', () => {
+	const deezerAlbum = {
+		...album,
+		title: 'FEMME',
+		provider_match: {
+			provider: 'deezer',
+			provider_album_id: '42',
+			url: 'https://www.deezer.com/album/42',
+			title: 'FEMME',
+			artist_name: 'Poppy Ajudha',
+			provider_artist_id: '7',
+			artist_picture_url: null,
+			release_date: '2019-05-03',
+			label: 'Own Label',
+			upc: '0123',
+			record_type: 'ep',
+			genres: ['R&B'],
+			tracks: [
+				{
+					provider_track_id: '1001',
+					title: 'Holy Moly',
+					duration_seconds: 180,
+					disc: 1,
+					position: 1,
+					isrc: 'GBUM71900001',
+					track_id: null
+				},
+				{
+					provider_track_id: '1002',
+					title: 'Unmatched Song',
+					duration_seconds: 181,
+					disc: 1,
+					position: 2,
+					isrc: null,
+					track_id: track.id
+				}
+			]
+		}
+	} as RouteData<'GET /api/v3/library/albums/{id}'>;
+
+	function fakeDeezerLibrary(): FakeApi {
+		const api = fakeLibrary({ downloadAllowed: true });
+		api.use({
+			'GET /api/v3/library/albums/{id}': deezerAlbum,
+			'GET /api/v3/library/albums': { items: [], total: 0, next: null },
+			'GET /api/v3/library/albums/{album_id}/removals': { items: [] },
+			'GET /api/v3/library/retag-pairs': { items: [], next_cursor: null, total: 0 },
+			'POST /api/v3/requests/wants': { key: 'want-1', status: 'queued' }
+		});
+		return api;
+	}
+
+	beforeEach(() => {
+		authStore.setUser(
+			toAuthUser({
+				id: 'admin-1',
+				display_name: 'Admin',
+				role: 'admin',
+				email: null,
+				avatar_url: null,
+				username: 'admin',
+				username_display: 'Admin'
+			})
+		);
+	});
+
+	it('lists Deezer’s tracks in order with the missing one inline, and asks for it', async () => {
+		const api = fakeDeezerLibrary();
+
+		await renderWithQuery(LocalAlbumPage, { albumId: album.id });
+
+		await expect.element(page.getByText('Holy Moly')).toBeVisible();
+		await expect.element(page.getByText('Missing')).toBeVisible();
+		await expect.element(page.getByText('EP', { exact: true })).toBeVisible();
+		await expect.element(page.getByText('In Library · 1/2')).toBeVisible();
+		await expect.element(page.getByText('Own Label').first()).toBeVisible();
+		const rows = page.getByRole('listitem').filter({ hasText: /Holy Moly|Unmatched Song/ });
+		await expect.element(rows.first()).toHaveTextContent(/Holy Moly/);
+		await expect.element(page.getByText('The full album')).not.toBeInTheDocument();
+
+		await page.getByRole('button', { name: 'Request Holy Moly' }).click();
+		await expect.element(page.getByText('Wanted')).toBeVisible();
+		expect(api.calls('POST /api/v3/requests/wants')[0].body).toMatchObject({
+			artist_name: 'Poppy Ajudha',
+			track_title: 'Holy Moly',
+			album_title: 'FEMME',
+			isrc: 'GBUM71900001'
+		});
+	});
+
+	it('keeps Open on Deezer and the tag write in the album menu', async () => {
+		fakeDeezerLibrary();
+
+		await renderWithQuery(LocalAlbumPage, { albumId: album.id });
+
+		await page.getByLabelText('More album actions').click();
+		await expect.element(page.getByText('Open on Deezer')).toBeVisible();
+		await page.getByText("Use Deezer's title and artist...").click();
+		await expect.element(page.getByText(/and no MusicBrainz ids/)).toBeVisible();
+	});
+});
