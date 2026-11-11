@@ -8590,6 +8590,65 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
     );
     assert_eq!(discarded, vec!["t-right".to_owned()]);
 
+    // Fork: a retry for the same want brings yet another copy on a task of
+    // its own. The library holds the song, so the loop settles it as owned
+    // instead of filing a second copy.
+    let seed_seconds = seconds;
+    acquire
+        .journal
+        .run("test.seed_retry", move |store| {
+            let task = NewTask {
+                artist_name: "Portishead".to_owned(),
+                album_title: String::new(),
+                ..new_task("t-retry", "")
+            };
+            store.insert_track_task(&task, WANT, 1.0)?;
+            store.set_task_details(
+                "t-retry",
+                &TaskDetails {
+                    track_title: Some("Sour Times".to_owned()),
+                    ..TaskDetails::default()
+                },
+                1.0,
+            )?;
+            store.set_task_plan(
+                "t-retry",
+                &TaskPlan {
+                    expected_tracks: vec![ExpectedTrack {
+                        track_number: 0,
+                        disc_number: 1,
+                        duration_seconds: Some(seed_seconds + 3.0),
+                        recording_mbid: None,
+                        title: Some("Sour Times".to_owned()),
+                        release_track_mbid: None,
+                    }],
+                    ..TaskPlan::default()
+                },
+                1.0,
+            )
+        })
+        .await
+        .expect("retry task");
+    let retry = land_file(
+        &mount.join("d"),
+        "sour-retry.flac",
+        "flac_full_01.flac",
+        "Sour Times",
+        1,
+    );
+    land("t-retry", retry).await;
+    acquire.held.tend().await;
+    assert_eq!(
+        files_under(&music, "flac").len(),
+        1,
+        "the retry's copy is not filed a second time"
+    );
+    let retried: Vec<String> = acquire.db.db().column(
+        "SELECT state FROM acquire_held_files WHERE source_task_id = 't-retry'",
+        [],
+    );
+    assert_eq!(retried, vec!["already_owned".to_owned()]);
+
     // Fork: the person matches the other song to a song of their Spotify
     // playlist; it goes in tagged from Spotify, with its Spotify id.
     acquire

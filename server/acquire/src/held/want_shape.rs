@@ -22,6 +22,9 @@ pub struct Ask {
     pub artist: String,
     pub album: Option<String>,
     pub length_ms: Option<u64>,
+    /// Fork: the (disc, track) the provider lists the song at on `album`,
+    /// used when the file's own tags carry no number.
+    pub number: Option<(u32, u32)>,
 }
 
 fn named(value: Option<&str>) -> Option<&str> {
@@ -66,7 +69,7 @@ pub fn release(ask: &Ask, tags: &[&AudioTag], links: &[SourceLink]) -> Release {
     let year = tags
         .iter()
         .filter(|tag| same_album(tag))
-        .find_map(|tag| tag.year);
+        .find_map(|tag| tag.year.filter(|year| *year > 0));
 
     let isrcs: Vec<String> = links
         .iter()
@@ -84,6 +87,8 @@ pub fn release(ask: &Ask, tags: &[&AudioTag], links: &[SourceLink]) -> Release {
             let fallback = u32::try_from(index + 1).unwrap_or(u32::MAX);
             let (disc, position) = if same_album(tag) && tag.track_number > 0 {
                 (tag.disc_number.max(1), tag.track_number)
+            } else if let (Some(number), Some(_)) = (ask.number, asked_album) {
+                number
             } else {
                 (1, fallback)
             };
@@ -135,6 +140,7 @@ mod tests {
             artist: artist.to_owned(),
             album: album.map(str::to_owned),
             length_ms: None,
+            number: None,
         }
     }
 
@@ -170,6 +176,19 @@ mod tests {
         );
         assert_eq!(shaped.artists[0].name, "Various Artists");
         assert_eq!(shaped.tracks[0].position, 5);
+    }
+
+    #[test]
+    fn an_untagged_song_takes_the_asked_number_and_no_zero_year() {
+        let mut bare = tag("", None, 0, 0);
+        bare.year = Some(0);
+        let asked = Ask {
+            number: Some((1, 3)),
+            ..ask("Eryn Allen Kane", Some("Aviary: Act 1"))
+        };
+        let shaped = release(&asked, &[&bare], &[]);
+        assert_eq!((shaped.tracks[0].disc, shaped.tracks[0].position), (1, 3));
+        assert_eq!(shaped.date, None);
     }
 
     #[test]
