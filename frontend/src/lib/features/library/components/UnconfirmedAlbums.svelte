@@ -2,9 +2,12 @@
 	One Check albums list: albums whose edition is a best guess, that
 	nothing fits, or that someone marked "Looks wrong". Each row shows the
 	files and, for a guess, what "That's right" confirms. An album nothing
-	fits shows its closest candidate, if any, with "Use this" (fork); with no
-	candidate, Deezer's closest album, with "Use this" and "Not it". Compare opens the
-	album's edition sheet, and Done there comes back here at the next album.
+	fits shows its guesses (fork): MusicBrainz's closest candidate with "Use
+	this", and Deezer's closest album with "Use this" and "Not it". With both,
+	the stronger leads; their scores share one 0-to-1 scale. The Best guess
+	list also holds albums nothing fits whose guess is strong, whichever
+	catalogue it comes from. Compare opens the album's edition sheet, and
+	Done there comes back here at the next album.
 -->
 <script lang="ts" module>
 	export type WaitingView = 'unconfirmed' | 'unmatched' | 'looks_wrong';
@@ -163,11 +166,30 @@
 		}
 	}
 
-	// Fork: Deezer's closest album, for an album with no MusicBrainz candidate.
+	// Fork: Deezer's closest album, for an album nothing on MusicBrainz fits.
 	const fromDeezer = (item: WaitingAlbum) =>
-		item.state === 'unmatched' && !needsMatching(item) && !suggested(item)
-			? (item.provider_guess ?? null)
-			: null;
+		item.state === 'unmatched' && !needsMatching(item) ? (item.provider_guess ?? null) : null;
+
+	type GuessSource = 'musicbrainz' | 'deezer';
+
+	// Fork: an album nothing fits, its guesses, the stronger first. Both
+	// scores run 0 to 1 (MusicBrainz's is 1 - distance, Deezer's its fit),
+	// and a tie leads with MusicBrainz.
+	function guessOrder(item: WaitingAlbum): GuessSource[] {
+		const sources: { source: GuessSource; score: number }[] = [];
+		if (suggested(item)) sources.push({ source: 'musicbrainz', score: item.guess?.score ?? 0 });
+		const deezer = fromDeezer(item);
+		if (deezer) sources.push({ source: 'deezer', score: deezer.score });
+		return sources.sort((a, b) => b.score - a.score).map((entry) => entry.source);
+	}
+
+	function guessLabel(order: GuessSource[], index: number): string {
+		const from = order[index] === 'deezer' ? 'Deezer' : 'MusicBrainz';
+		if (index > 0) return `Also possible · from ${from}`;
+		if (order.length === 1)
+			return order[0] === 'deezer' ? 'Best guess · from Deezer' : 'Best guess';
+		return `Best guess · from ${from}`;
+	}
 
 	async function decideGuess(item: WaitingAlbum, accept: boolean): Promise<void> {
 		const found = item.provider_guess;
@@ -217,8 +239,6 @@
 
 	function stateLabel(item: WaitingAlbum): string {
 		if (needsMatching(item)) return NEEDS_MATCHING;
-		if (suggested(item)) return 'Best guess';
-		if (fromDeezer(item)) return 'Best guess · from Deezer';
 		if (item.state === 'unmatched') return 'Not found';
 		if (item.state === 'unconfirmed') return 'Best guess';
 		if (item.state === 'chosen') return 'Chosen by a person';
@@ -245,6 +265,7 @@
 				{#each items as item (item.album_id)}
 					{@const guess = item.guess}
 					{@const deezer = fromDeezer(item)}
+					{@const order = guessOrder(item)}
 					<li
 						data-album={item.album_id}
 						class="grid gap-3 rounded-box border border-base-content/10 bg-base-100 p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] lg:items-center"
@@ -272,67 +293,95 @@
 							</div>
 						</div>
 
-						<div class="flex min-w-0 items-start gap-3">
-							{#if guess}
-								<AlbumImage
-									customUrl={guess.release_mbid
-										? coverPath('release', guess.release_mbid, 250)
-										: undefined}
-									mbid={guess.release_group_mbid}
-									alt=""
-									size="sm"
-									rounded="md"
-									className="h-14 w-14 shrink-0 border border-base-content/10"
-									retryOnError={false}
-								/>
-							{:else if deezer}
-								<AlbumImage
-									customUrl={deezer.cover_url ?? undefined}
-									alt=""
-									size="sm"
-									rounded="md"
-									className="h-14 w-14 shrink-0 border border-base-content/10"
-									retryOnError={false}
-								/>
-							{/if}
-							<div class="min-w-0">
-								<p
-									class="flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase {item.state ===
-										'unmatched' &&
-									!needsMatching(item) &&
-									!suggested(item) &&
-									!deezer
-										? 'text-error'
-										: 'text-warning'}"
-								>
-									{#if item.state === 'unmatched' && !needsMatching(item) && !suggested(item) && !deezer}
-										<CircleAlert class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-									{:else}
-										<CircleHelp class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-									{/if}
-									{stateLabel(item)}
-								</p>
-								{#if guess}
-									<p class="truncate font-medium">{guess.title}</p>
-									<p class="truncate text-xs text-muted">
-										{[guess.artist_name, fitLine(guess.matched_files, item.file_count)]
-											.filter(Boolean)
-											.join(' · ')}
-									</p>
-								{:else if deezer}
-									<a
-										class="block truncate font-medium hover:underline"
-										href={deezer.url}
-										target="_blank"
-										rel="noopener noreferrer">{deezer.title}</a
-									>
-									<p class="truncate text-xs text-muted">{providerLine(item)}</p>
-								{/if}
-								{#if !deezer}
-									<p class="mt-1 text-sm text-muted">{item.reason.message}</p>
-								{/if}
+						{#if order.length}
+							<div class="min-w-0 space-y-3">
+								{#each order as source, index (source)}
+									<div class="flex min-w-0 items-start gap-3" data-guess={source}>
+										{#if source === 'musicbrainz' && guess}
+											<AlbumImage
+												customUrl={guess.release_mbid
+													? coverPath('release', guess.release_mbid, 250)
+													: undefined}
+												mbid={guess.release_group_mbid}
+												alt=""
+												size="sm"
+												rounded="md"
+												className="h-14 w-14 shrink-0 border border-base-content/10"
+												retryOnError={false}
+											/>
+										{:else if deezer}
+											<AlbumImage
+												customUrl={deezer.cover_url ?? undefined}
+												alt=""
+												size="sm"
+												rounded="md"
+												className="h-14 w-14 shrink-0 border border-base-content/10"
+												retryOnError={false}
+											/>
+										{/if}
+										<div class="min-w-0">
+											<p
+												class="flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase {index ===
+												0
+													? 'text-warning'
+													: 'text-muted'}"
+											>
+												<CircleHelp class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+												{guessLabel(order, index)}
+											</p>
+											{#if source === 'musicbrainz' && guess}
+												<p class="truncate font-medium">{guess.title}</p>
+												<p class="truncate text-xs text-muted">
+													{[guess.artist_name, fitLine(guess.matched_files, item.file_count)]
+														.filter(Boolean)
+														.join(' · ')}
+												</p>
+												{#if order.length === 1}
+													<p class="mt-1 text-sm text-muted">{item.reason.message}</p>
+												{/if}
+												{#if authStore.isTrusted}
+													<div class="mt-2 flex flex-wrap gap-2">
+														<Button
+															variant={index === 0 ? 'primary' : 'ghost'}
+															size="sm"
+															disabled={busy}
+															aria-label={`Use this: ${item.title} is ${guess.title}`}
+															onclick={() => void useThis(item)}>Use this</Button
+														>
+													</div>
+												{/if}
+											{:else if deezer}
+												<a
+													class="block truncate font-medium hover:underline"
+													href={deezer.url}
+													target="_blank"
+													rel="noopener noreferrer">{deezer.title}</a
+												>
+												<p class="truncate text-xs text-muted">{providerLine(item)}</p>
+												{#if authStore.isTrusted}
+													<div class="mt-2 flex flex-wrap gap-2">
+														<Button
+															variant={index === 0 ? 'primary' : 'ghost'}
+															size="sm"
+															disabled={busy}
+															aria-label={`Use this: ${item.title} is ${deezer.title} on Deezer`}
+															onclick={() => void decideGuess(item, true)}>Use this</Button
+														>
+														<Button
+															variant="ghost"
+															size="sm"
+															disabled={busy}
+															aria-label={`Not it: ${item.title} is not ${deezer.title}`}
+															onclick={() => void decideGuess(item, false)}>Not it</Button
+														>
+													</div>
+												{/if}
+											{/if}
+										</div>
+									</div>
+								{/each}
 								{#if item.looks_wrong_count > 0}
-									<p class="mt-1 flex items-center gap-1 text-xs text-muted">
+									<p class="flex items-center gap-1 text-xs text-muted">
 										<Flag class="h-3 w-3 shrink-0" aria-hidden="true" />
 										{item.looks_wrong_count === 1
 											? '1 person says it looks wrong'
@@ -340,7 +389,55 @@
 									</p>
 								{/if}
 							</div>
-						</div>
+						{:else}
+							<div class="flex min-w-0 items-start gap-3">
+								{#if guess}
+									<AlbumImage
+										customUrl={guess.release_mbid
+											? coverPath('release', guess.release_mbid, 250)
+											: undefined}
+										mbid={guess.release_group_mbid}
+										alt=""
+										size="sm"
+										rounded="md"
+										className="h-14 w-14 shrink-0 border border-base-content/10"
+										retryOnError={false}
+									/>
+								{/if}
+								<div class="min-w-0">
+									<p
+										class="flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase {item.state ===
+											'unmatched' && !needsMatching(item)
+											? 'text-error'
+											: 'text-warning'}"
+									>
+										{#if item.state === 'unmatched' && !needsMatching(item)}
+											<CircleAlert class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+										{:else}
+											<CircleHelp class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+										{/if}
+										{stateLabel(item)}
+									</p>
+									{#if guess}
+										<p class="truncate font-medium">{guess.title}</p>
+										<p class="truncate text-xs text-muted">
+											{[guess.artist_name, fitLine(guess.matched_files, item.file_count)]
+												.filter(Boolean)
+												.join(' · ')}
+										</p>
+									{/if}
+									<p class="mt-1 text-sm text-muted">{item.reason.message}</p>
+									{#if item.looks_wrong_count > 0}
+										<p class="mt-1 flex items-center gap-1 text-xs text-muted">
+											<Flag class="h-3 w-3 shrink-0" aria-hidden="true" />
+											{item.looks_wrong_count === 1
+												? '1 person says it looks wrong'
+												: `${item.looks_wrong_count} people say it looks wrong`}
+										</p>
+									{/if}
+								</div>
+							</div>
+						{/if}
 
 						<div class="flex flex-wrap gap-2 lg:justify-end">
 							{#if authStore.isTrusted && item.state === 'unconfirmed'}
@@ -350,31 +447,6 @@
 									disabled={busy}
 									aria-label={`That's right: ${item.title} is ${guess?.title ?? 'this edition'}`}
 									onclick={() => void thatsRight(item)}>That's right</Button
-								>
-							{/if}
-							{#if authStore.isTrusted && suggested(item)}
-								<Button
-									variant="primary"
-									size="sm"
-									disabled={busy}
-									aria-label={`Use this: ${item.title} is ${item.guess?.title ?? 'this edition'}`}
-									onclick={() => void useThis(item)}>Use this</Button
-								>
-							{/if}
-							{#if authStore.isTrusted && deezer}
-								<Button
-									variant="primary"
-									size="sm"
-									disabled={busy}
-									aria-label={`Use this: ${item.title} is ${deezer.title} on Deezer`}
-									onclick={() => void decideGuess(item, true)}>Use this</Button
-								>
-								<Button
-									variant="ghost"
-									size="sm"
-									disabled={busy}
-									aria-label={`Not it: ${item.title} is not ${deezer.title}`}
-									onclick={() => void decideGuess(item, false)}>Not it</Button
 								>
 							{/if}
 							{#if authStore.isTrusted && view === 'looks_wrong'}
