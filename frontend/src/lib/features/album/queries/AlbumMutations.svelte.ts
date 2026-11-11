@@ -49,6 +49,9 @@ export type WantTrackInput = {
 	albumTitle: string;
 	durationSeconds: number | null;
 	isrc: string | null;
+	/** Fork: the song's place on `albumTitle`, from the provider's album. */
+	trackNumber?: number | null;
+	discNumber?: number | null;
 };
 
 export function createWantTrackMutation() {
@@ -59,7 +62,9 @@ export function createWantTrackMutation() {
 				track_title: input.trackTitle,
 				album_title: input.albumTitle,
 				duration_seconds: input.durationSeconds === null ? null : Math.round(input.durationSeconds),
-				isrc: input.isrc
+				isrc: input.isrc,
+				track_number: input.trackNumber ?? null,
+				disc_number: input.discNumber ?? null
 			}),
 		effects: () => [requestsChanged(authStore.user?.id)]
 	}));

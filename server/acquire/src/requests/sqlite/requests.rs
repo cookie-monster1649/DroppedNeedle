@@ -409,6 +409,29 @@ impl RequestStore {
             .map_err(|error| lane_error("requests.want_identities", error))
     }
 
+    /// Fork: where want `want_key` sits on `album_title` (disc, track),
+    /// from the provider album it was asked from.
+    pub async fn set_want_position(
+        &self,
+        want_key: &str,
+        album_title: &str,
+        disc_number: i64,
+        track_number: i64,
+        now: u64,
+    ) -> Result<(), RequestsError> {
+        let key = want_key.to_owned();
+        let album = album_title.to_owned();
+        let now = i64::try_from(now).unwrap_or(i64::MAX);
+        self.db
+            .write("requests.want_position", move |tx| {
+                tx.prepare_cached(sql::UPSERT_WANT_POSITION.text())?
+                    .execute(params![key, album, disc_number, track_number, now])?;
+                Ok(())
+            })
+            .await
+            .map_err(|error| lane_error("requests.want_position", error))
+    }
+
     /// Fork: a want's identities. A provider this build does not know is
     /// skipped (a later build may have kept it).
     pub async fn want_identities(

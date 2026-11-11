@@ -16,6 +16,7 @@
 	import AlbumHero from './AlbumHero.svelte';
 	import AlbumHeroSkeleton from './AlbumHeroSkeleton.svelte';
 	import AlbumSourceBar from './AlbumSourceBar.svelte';
+	import RequestRestButton from './RequestRestButton.svelte';
 	import TagWritePreview from '$lib/features/library/components/edition/TagWritePreview.svelte';
 	import { createWantTrackMutation } from '$lib/features/album/queries/AlbumMutations.svelte';
 	import type { TrackSlot } from '$lib/features/library/components/LocalAlbumTrackList.svelte';
@@ -131,24 +132,65 @@
 
 	type DeezerTrack = NonNullable<typeof deezer>['tracks'][number];
 
-	async function want(track: DeezerTrack): Promise<void> {
+	// One missing Deezer track asked for by name, at its place on the
+	// album so a file with no number of its own is filed in order.
+	async function askFor(track: DeezerTrack): Promise<void> {
 		if (!deezer) return;
+		await wantTrack.mutateAsync({
+			artistName: deezer.artist_name,
+			trackTitle: track.title,
+			albumTitle: deezer.title,
+			durationSeconds: track.duration_seconds ?? null,
+			isrc: track.isrc ?? null,
+			trackNumber: track.position,
+			discNumber: track.disc
+		});
+		wanted = new Set([...wanted, track.provider_track_id]);
+	}
+
+	async function want(track: DeezerTrack): Promise<void> {
 		asking = track.provider_track_id;
 		try {
-			await wantTrack.mutateAsync({
-				artistName: deezer.artist_name,
-				trackTitle: track.title,
-				albumTitle: deezer.title,
-				durationSeconds: track.duration_seconds ?? null,
-				isrc: track.isrc ?? null
-			});
-			wanted = new Set([...wanted, track.provider_track_id]);
+			await askFor(track);
 			toastStore.show({ message: `Asked for ${track.title}.`, type: 'success' });
 		} catch {
 			toastStore.show({ message: `Couldn't ask for ${track.title}.`, type: 'error' });
 		} finally {
 			asking = null;
 		}
+	}
+
+	// Fork: "Request album" on a Deezer album: every track no file holds
+	// and not already asked for, one by one, as each Request would.
+	const deezerMissing = $derived(
+		deezer
+			? deezer.tracks.filter((track) => !track.track_id && !wanted.has(track.provider_track_id))
+			: []
+	);
+	async function requestMissing(): Promise<{ message: string; ok: boolean }> {
+		const asks = [...deezerMissing];
+		let failed = 0;
+		for (const track of asks) {
+			asking = track.provider_track_id;
+			try {
+				await askFor(track);
+			} catch {
+				failed += 1;
+			}
+		}
+		asking = null;
+		const sent = asks.length - failed;
+		if (sent === 0) {
+			return { message: "The album couldn't be requested", ok: false };
+		}
+		const noun = sent === 1 ? 'track' : 'tracks';
+		return {
+			message:
+				failed > 0
+					? `Requesting ${sent} missing ${noun}; ${failed} couldn't be asked for.`
+					: `Requesting ${sent} missing ${noun}.`,
+			ok: true
+		};
 	}
 
 	const deezerHeld = $derived(deezer ? deezer.tracks.filter((track) => track.track_id).length : 0);
@@ -515,9 +557,18 @@
 						onclick={() => play(false)}>Play</Button
 					>
 					{#if deezer && deezerHeld < deezer.tracks.length}
-						<StatusChip tone="warning" size="md" icon={Check}>
-							In Library · {deezerHeld}/{deezer.tracks.length}
-						</StatusChip>
+						{#if authStore.isTrusted && deezerMissing.length > 0}
+							<RequestRestButton
+								kept={deezerHeld}
+								total={deezer.tracks.length}
+								asks={deezerMissing.length}
+								onrequest={requestMissing}
+							/>
+						{:else}
+							<StatusChip tone="warning" size="md" icon={Check}>
+								In Library · {deezerHeld}/{deezer.tracks.length}
+							</StatusChip>
+						{/if}
 					{:else}
 						<StatusChip size="md" icon={Check}>In Library</StatusChip>
 					{/if}

@@ -2,7 +2,8 @@
 	Fork: the "In Library · 1/15" chip of a partly held album, as a button.
 	It asks "Request album?" and, once confirmed, fetches every track of the
 	edition no file holds (the edition fetch, with the files already held
-	left as they are).
+	left as they are). An album with no MusicBrainz edition (a Deezer
+	match) passes `onrequest` instead, which asks for its missing tracks.
 -->
 <script lang="ts">
 	import { Check, Download } from 'lucide-svelte';
@@ -12,21 +13,39 @@
 	import { createAcquireEditionMutation } from '$lib/features/library/queries/EditionQueries.svelte';
 
 	interface Props {
-		/** Release-group MBID. */
-		mbid: string;
+		/** Release-group MBID; unused when `onrequest` is given. */
+		mbid?: string;
+		/** Asks for the missing tracks itself; answers the toast to show. */
+		onrequest?: () => Promise<{ message: string; ok: boolean }>;
 		/** The library copy the edition plan counts. */
 		copyId?: string;
 		kept: number;
 		total: number;
+		/** The tracks the request asks for, when not every unheld one. */
+		asks?: number;
 	}
 
-	let { mbid, copyId, kept, total }: Props = $props();
+	let { mbid, onrequest, copyId, kept, total, asks }: Props = $props();
 
 	const acquire = createAcquireEditionMutation();
 	let open = $state(false);
-	const missing = $derived(Math.max(total - kept, 0));
+	const missing = $derived(asks ?? Math.max(total - kept, 0));
+	let asking = $state(false);
+	const pending = $derived(acquire.isPending || asking);
 
 	async function confirm(): Promise<void> {
+		if (onrequest) {
+			asking = true;
+			try {
+				const answer = await onrequest();
+				open = false;
+				toastStore.show({ message: answer.message, type: answer.ok ? 'success' : 'error' });
+			} finally {
+				asking = false;
+			}
+			return;
+		}
+		if (!mbid) return;
 		try {
 			const answer = await acquire.mutateAsync({ mbid, copyId, replaceVersions: false });
 			open = false;
@@ -63,10 +82,8 @@
 		they are.
 	</p>
 	{#snippet actions()}
-		<Button variant="ghost" onclick={() => (open = false)} disabled={acquire.isPending}
-			>Cancel</Button
-		>
-		<Button variant="primary" icon={Download} loading={acquire.isPending} onclick={confirm}>
+		<Button variant="ghost" onclick={() => (open = false)} disabled={pending}>Cancel</Button>
+		<Button variant="primary" icon={Download} loading={pending} onclick={confirm}>
 			Request album
 		</Button>
 	{/snippet}
