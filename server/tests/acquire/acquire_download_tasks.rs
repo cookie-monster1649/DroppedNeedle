@@ -19,7 +19,7 @@ use droppedneedle_acquire::downloads::journal::Journal;
 use droppedneedle_acquire::downloads::worker::{DownloadWorker, run_startup_recovery};
 use droppedneedle_acquire::downloads::{
     state::{AttemptDisposition, AttemptState, TaskStatus},
-    store::{NewTask, TaskOutcome},
+    store::{NewTask, TaskDetails, TaskOutcome},
 };
 use droppedneedle_acquire::reason::Reason;
 use droppedneedle_acquire::test_support::downloads_router;

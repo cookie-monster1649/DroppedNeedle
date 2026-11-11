@@ -346,3 +346,18 @@ pub fn copy_for_group(
         })
         .optional()
 }
+
+#[cfg(test)]
+mod song_held_tests {
+    use super::credited_names;
+
+    #[test]
+    fn credits_split_into_their_artists() {
+        assert_eq!(credited_names("Lusanda, noxz"), vec!["lusanda", "noxz"]);
+        assert_eq!(
+            credited_names("Sam Wills x Kaisha & David Nuri feat. Bo"),
+            vec!["sam wills", "kaisha", "david nuri", "bo"]
+        );
+        assert_eq!(credited_names("Sandy Cossett"), vec!["sandy cossett"]);
+    }
+}

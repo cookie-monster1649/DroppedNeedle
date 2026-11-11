@@ -117,6 +117,18 @@ pub async fn library_holds(db: &Db, release_group_mbid: &str) -> Result<bool, Db
     .await
 }
 
+/// Fork: whether the library already holds the song `artist` - `title`,
+/// in any edition ([`droppedneedle_library::identity::reads::song_held`]).
+pub async fn library_holds_song(db: &Db, artist: &str, title: &str) -> Result<bool, DbError> {
+    let (artist, title) = (artist.to_owned(), title.to_owned());
+    db.read("acquire.edition.library_holds_song", move |conn| {
+        Ok(droppedneedle_library::identity::reads::song_held(
+            conn, &artist, &title,
+        )?)
+    })
+    .await
+}
+
 /// Artist and title of the library's copy of one release group, for
 /// asks that arrive with only the group id.
 pub async fn local_names(
