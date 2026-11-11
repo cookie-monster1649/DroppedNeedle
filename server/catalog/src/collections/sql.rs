@@ -174,10 +174,15 @@ droppedneedle_kernel::sql! {
     /// Fork: every entry still unlinked: id, playlist, artist, title.
     pub(super) UNLINKED_ENTRIES = "SELECT id, playlist_id, artist_name, track_name \
          FROM catalog_playlist_tracks WHERE library_file_id IS NULL";
-    /// Fork: whether song `?2` (want key) of playlist `?1` is marked not
-    /// to be fetched: a person removed or unlinked its file.
-    pub(super) IS_DECLINED = "SELECT EXISTS (SELECT 1 FROM catalog_playlist_declines \
-         WHERE playlist_id = ?1 AND name_key = ?2)";
+    /// Fork: song `?2` (want key) of playlist `?1`'s mark not to be
+    /// fetched, a person having removed or unlinked its file: one row with
+    /// the file, which may be none, or no row when the song has no mark.
+    pub(super) DECLINED_FILE = "SELECT library_file_id FROM catalog_playlist_declines \
+         WHERE playlist_id = ?1 AND name_key = ?2";
+    /// Fork: lift song `?2` (want key) of playlist `?1`'s mark: its entry
+    /// plays another copy of the song now.
+    pub(super) UNDECLINE = "DELETE FROM catalog_playlist_declines \
+         WHERE playlist_id = ?1 AND name_key = ?2";
     /// Fork: link entry `?1` to track `?2`.
     pub(super) LINK_ENTRY = "UPDATE catalog_playlist_tracks SET library_file_id = ?2 \
          WHERE id = ?1 AND library_file_id IS NULL";
