@@ -8693,3 +8693,114 @@ async fn a_sibling_edition_copy_lands_as_the_pinned_edition() {
         vec![("imported".to_owned(), None)]
     );
 }
+
+/// Fork: a want asked with no length takes Deezer's from an accepted album
+/// match holding the song, so its agreeing file still files itself.
+#[tokio::test]
+async fn a_want_with_no_length_is_checked_against_an_accepted_deezer_match() {
+    use droppedneedle_acquire::downloads::store::TaskDetails;
+    const WANT: &str = "want-0123456789abcdef0123456789abcdef";
+    let db = AcquireDb::scratch().expect("scratch db");
+    db.add_user("u-ada", "Ada", "user").await.expect("user");
+    let dir = db.path().parent().expect("scratch dir").to_path_buf();
+    let config = Arc::new(
+        ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+            .expect("config"),
+    );
+    let platform = TestPlatform::on(db.db(), &dir)
+        .settings(config)
+        .build()
+        .await;
+    let (library, _) = library_at(&platform);
+    let music = dir.join("music");
+    std::fs::create_dir_all(&music).expect("music root");
+    library
+        .scans
+        .add_root(
+            Some("music".to_owned()),
+            music.to_string_lossy().into_owned(),
+            EffectivePolicy::Automatic,
+        )
+        .expect("root adds");
+    let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(Vec::new()));
+    let (acquire, _fixed) = acquire_serving(
+        &platform,
+        &library,
+        Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+    );
+    let mount = dir.join("downloads");
+    let file = land_file(
+        &mount.join("a"),
+        "sour.flac",
+        "flac_full_01.flac",
+        "Sour Times",
+        1,
+    );
+    let seconds = length_ms(&file).expect("length") as f64 / 1000.0;
+    let tracks = serde_json::json!([{
+        "provider_track_id": "1",
+        "title": "Sour Times",
+        "duration_seconds": seconds + 2.0,
+        "disc": 1,
+        "position": 1,
+        "isrc": null
+    }])
+    .to_string();
+    db.write("test.seed_match", move |tx| {
+        tx.execute_batch(
+            "INSERT INTO local_artists (id, display_name, folded_name, kind, created_at, updated_at)
+               VALUES ('ar1', 'Portishead', 'portishead', 'group', 0, 0);
+             INSERT INTO local_albums (id, root_id, grouping_key, title, title_folded,
+               album_artist_id, album_artist_name, grouping_source, created_at, updated_at)
+               VALUES ('al1', 'r1', 'g', 'Dummy', 'dummy', 'ar1', 'Portishead',
+                 'automatic', 0, 0);",
+        )?;
+        tx.execute(
+            "INSERT INTO library_album_provider_matches (local_album_id, provider, \
+             provider_album_id, title, artist_name, tracks_json, score, match_state, \
+             created_at, updated_at) \
+             VALUES ('al1', 'deezer', '42', 'Dummy', 'Portishead', ?1, 0.95, 'confirmed', 0, 0)",
+            [tracks],
+        )?;
+        Ok(())
+    })
+    .await
+    .expect("match");
+    acquire
+        .journal
+        .run("test.seed", move |store| {
+            let task = NewTask {
+                artist_name: "Portishead".to_owned(),
+                album_title: String::new(),
+                ..new_task("t-want", "")
+            };
+            store.insert_track_task(&task, WANT, 1.0)?;
+            store.set_task_details(
+                "t-want",
+                &TaskDetails {
+                    track_title: Some("Sour Times".to_owned()),
+                    ..TaskDetails::default()
+                },
+                1.0,
+            )
+        })
+        .await
+        .expect("task");
+    let task = acquire
+        .journal
+        .read_task("t-want")
+        .await
+        .expect("task reads")
+        .expect("task");
+    let landed = Landed {
+        mounts: vec![mount.into()],
+        files: vec![Reported::path(file)],
+    };
+    let report = acquire.landing.land(&task, None, landed, false).await;
+    assert!(report.whole_copy, "{:?}", report.result);
+    let paired: Vec<String> = acquire.db.db().column(
+        "SELECT COALESCE(recording_mbid, '-') FROM acquire_held_files",
+        [],
+    );
+    assert_eq!(paired, vec![WANT.to_owned()]);
+}
