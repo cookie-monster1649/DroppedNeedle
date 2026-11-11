@@ -700,6 +700,22 @@ impl RequestsService {
             return Ok(track_duplicate(&existing));
         }
 
+        // Fork: a song the library already holds, in any edition, is
+        // answered as in, never searched for again.
+        if crate::edition::library_holds_song(
+            self.library.db(),
+            &fields.artist_name,
+            &fields.track_title,
+        )
+        .await
+        .map_err(|error| RequestsError::internal(&error))?
+        {
+            return Ok(TrackIntakeResponse {
+                status: RequestStatus::Imported,
+                task_id: None,
+            });
+        }
+
         let gate = self.quota.request_gate(principal.user_id(), role, 1)?;
         self.quota
             .check_storage_admission(principal.user_id(), role, DispatchOrigin::User)

@@ -219,6 +219,10 @@ impl DownloadStore<'_> {
     /// it was fetched for, one that landed part, and one whose ask landed
     /// part before (the library then holds that part) keep retrying.
     pub fn retry_already_held(&self, task: &TaskRow) -> Result<bool, StoreError> {
+        // Fork: a track ask whose song the library holds in any edition.
+        if task.download_type == "track" {
+            return Ok(task.status == TaskStatus::Failed && self.song_held(task)?);
+        }
         if task.download_type != "album"
             || task.status != TaskStatus::Failed
             || task.release_group_mbid.trim().is_empty()
@@ -240,6 +244,22 @@ impl DownloadStore<'_> {
         Ok(droppedneedle_library::identity::reads::group_owned(
             self.conn,
             task.release_group_mbid.trim(),
+        )?)
+    }
+
+    /// Fork: whether the library already holds the song a track task
+    /// asks for, in any edition.
+    pub fn song_held(&self, task: &TaskRow) -> Result<bool, StoreError> {
+        if task.download_type != "track" {
+            return Ok(false);
+        }
+        let Some(title) = self.task_details(&task.id)?.track_title else {
+            return Ok(false);
+        };
+        Ok(droppedneedle_library::identity::reads::song_held(
+            self.conn,
+            &task.artist_name,
+            &title,
         )?)
     }
 
@@ -265,7 +285,11 @@ impl DownloadStore<'_> {
             }
             RetryStop::InLibrary => (
                 Reason::AlreadyInLibrary,
-                "retries stopped: the library holds this album".to_owned(),
+                if task.download_type == "track" {
+                    "retries stopped: the library already holds this song".to_owned()
+                } else {
+                    "retries stopped: the library holds this album".to_owned()
+                },
             ),
         };
         let changed = self.conn.execute(
