@@ -90,6 +90,16 @@ droppedneedle_kernel::sql! {
     /// Fork: open download entries asking for a want whose files nothing
     /// paired yet (held before the landing checked wants against the ask),
     /// at most `?1`: entry ids.
+    /// Fork: album downloads held only as weak matches, with how many
+    /// files each holds: entries of a requested release group, no want,
+    /// whose held files are all `weak_match`.
+    pub(super) WEAK_ALBUMS = "SELECT e.id, e.user_id, COUNT(*) FROM acquire_held_entries e \
+             JOIN acquire_held_files f ON f.entry_id = e.id AND f.state = 'held' \
+             WHERE e.state = 'held' AND e.origin = 'download' \
+             AND COALESCE(e.release_group_mbid, '') != '' \
+             AND COALESCE(e.recording_mbid, '') NOT LIKE 'want-%' \
+             GROUP BY e.id HAVING SUM(f.reason != 'weak_match') = 0 \
+             ORDER BY e.id LIMIT ?1";
     pub(super) UNPAIRED_WANTS = "SELECT DISTINCT e.id FROM acquire_held_entries e \
              JOIN acquire_held_files f ON f.entry_id = e.id \
              WHERE e.state = 'held' AND e.origin = 'download' \
