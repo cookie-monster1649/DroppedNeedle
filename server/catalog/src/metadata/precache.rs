@@ -157,6 +157,20 @@ impl Catalog {
         priority: droppedneedle_providers::RequestPriority,
     ) -> ArtistImageCandidates {
         let mut candidates = ArtistImageCandidates::default();
+        // Fork: a stand-in artist's picture is its source's; nothing else
+        // knows the id.
+        if droppedneedle_providers::virtual_ids::is_virtual(mbid) {
+            if let Some(thumb) = self
+                .source_artist_images(mbid)
+                .await
+                .and_then(|images| images.thumb_url)
+            {
+                candidates
+                    .images
+                    .push(ArtistImageCandidate::uncredited(thumb));
+            }
+            return candidates;
+        }
         let mut detail = None;
         if priority.is_user_facing() {
             let cached = self.page_artist_images(mbid, mbid).await;

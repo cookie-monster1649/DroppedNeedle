@@ -62,6 +62,8 @@ pub mod covers_debug;
 pub mod local;
 pub mod remote;
 pub mod resize;
+// Fork: covers for albums on stand-in ids.
+pub mod source_covers;
 pub(crate) mod sql;
 pub mod warm;
 
