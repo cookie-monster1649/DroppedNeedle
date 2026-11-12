@@ -9,6 +9,9 @@ This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`.
 
 **Deezer metadata and other sources**
 - **Deezer as a metadata source (stage a):** Deezer albums and artists get permanent stand-in IDs prefixed `d0ab1e00-50c3-8…`, recorded in a `source_identities` table. Their pages are served from Deezer data, and a single guard keeps these IDs away from MusicBrainz, Cover Art Archive, ListenBrainz, Last.fm and AudioDB.
+- **Deezer albums request as one download (stage b):** an album on stand-in IDs is requested through the normal edition request. One task with the Deezer track list as its plan asks only for the missing tracks. Tracks a settled partial or failed task left behind are asked for one by one, at their place on the album, after 30 minutes.
+- **Deezer artist pages and covers (stage c):** artists on stand-in IDs show the library's albums by them and their Deezer picture, and their Last.fm bio is looked up by name. Albums on stand-in IDs with no art of their own use the Deezer cover.
+- **Deezer editions (stage d):** Deezer's other editions of an album (explicit or clean, deluxe, remastered) are looked up monthly and listed as editions of it, so any of them can be requested.
 - **Deezer tags:** files from Deezer albums get `DEEZER_ALBUMID`, `DEEZER_TRACKID` and `DEEZER_ARTISTID` tags.
 - **Switching to MusicBrainz:** an album moves to MusicBrainz automatically once MusicBrainz has a confident match.
 - **Deezer album pages:** these show the full tracklist, with missing tracks in line, just like a MusicBrainz album.
@@ -68,13 +71,7 @@ This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`.
 - **Before any deploy:** back up `library.db`, and `metadata-cache.db` when sources change, and restart only when no import is running.
 
 ### Known gaps
-- **The metadata-source roadmap is incomplete:**
-  - b: downloads and landing against a source release, giving a one-download Deezer album request;
-  - c: Deezer artist pages, bios and covers;
-  - d: matching and editions;
-  - e: Spotify as a source.
-
-  Until stage b, a Deezer album request is one search per song.
+- **The metadata-source roadmap is incomplete:** stage e (Spotify as a source) is still to do. Identify does not offer Deezer releases as candidates for albums with no confirmed match; those still go through the Deezer suggestion and confirmation flow.
 - **CI Audit and Licenses fail:** this is the bundled-SQLite advisory in `libsqlite3-sys`, which upstream also has.
 
 The fork's plan and notes are in [docs/fork/PLAN.md](docs/fork/PLAN.md).
