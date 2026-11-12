@@ -81,7 +81,12 @@ pub fn artwork(
             Arc::clone(&platform.clock),
         ),
         LocalArtwork::new(platform.db.clone()),
-        Arc::new(inputs.providers.coverart.clone()),
+        // Fork: stand-in ids take their source's cover.
+        Arc::new(art::source_covers::SourceCovers::new(
+            Arc::new(inputs.providers.coverart.clone()),
+            Arc::new(inputs.providers.images.clone()),
+            platform.db.clone(),
+        )),
         platform.settings.live(),
         Arc::new(inputs.providers.images.clone()),
         Arc::new(metadata::precache::CatalogArtistImages(artists)),

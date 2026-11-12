@@ -369,13 +369,25 @@ impl Catalog {
             }
         };
         let (in_library, appears_in_library) = self.artist_relationship(&detail.mbid).await;
-        let images = self
-            .cached_artist_images(&detail.mbid)
-            .await
-            .unwrap_or_default();
+        // Fork: a stand-in artist has no browse or AudioDB images: the
+        // library's discography and the source's picture stand in.
+        let stand_in = droppedneedle_providers::virtual_ids::is_virtual(&detail.mbid);
+        let images = if stand_in {
+            self.source_artist_images(&detail.mbid).await
+        } else {
+            self.cached_artist_images(&detail.mbid).await
+        }
+        .unwrap_or_default();
         // The discography decorates the header; a failed browse leaves the
         // sections empty with the outage noted, never fails the header.
         let (discography, release_group_count) = match list {
+            _ if stand_in => {
+                let discography = self.source_discography(mbid).await?;
+                let count = (discography.albums.len()
+                    + discography.singles.len()
+                    + discography.eps.len()) as u64;
+                (discography, count)
+            }
             Ok(list) => (self.discography(&list).await, list.total),
             Err(error) => {
                 record_mb_down(&error);
@@ -383,6 +395,8 @@ impl Catalog {
                 (Discography::default(), 0)
             }
         };
+        // Fork: a stand-in artist leads the albums its source credits it.
+        let in_library = in_library || (stand_in && release_group_count > 0);
         Ok(ArtistInfo {
             name: detail.name,
             musicbrainz_id: detail.mbid,
@@ -816,6 +830,11 @@ impl Catalog {
         offset: u32,
         limit: u32,
     ) -> Result<ArtistReleases, CatalogError> {
+        // Fork: a stand-in artist's discography is the library's.
+        if droppedneedle_providers::virtual_ids::is_virtual(mbid) {
+            let local = self.source_discography(mbid).await?;
+            return Ok(paged(local, offset, limit, true, CatalogSource::Library));
+        }
         let listed = self
             .release_groups(mbid, RequestPriority::UserInitiated)
             .await
@@ -846,6 +865,28 @@ impl Catalog {
     /// not complete.
     pub async fn owned_releases(&self, raw_mbid: &str) -> Result<OwnedReleases, CatalogError> {
         let mbid = checked_mbid(raw_mbid, "artist")?;
+        // Fork: a stand-in artist owns what the library holds by it.
+        if droppedneedle_providers::virtual_ids::is_virtual(&mbid) {
+            let local = self.source_discography(&mbid).await?;
+            let items = local
+                .albums
+                .iter()
+                .chain(&local.eps)
+                .chain(&local.singles)
+                .map(|item| OwnedRelease {
+                    id: item.id.clone(),
+                    title: item.title.clone(),
+                    primary_type: item.release_type.clone(),
+                    secondary_types: Vec::new(),
+                    year: item.year,
+                })
+                .collect();
+            return Ok(OwnedReleases {
+                items,
+                complete: true,
+                service_status: None,
+            });
+        }
         let (listed, context) =
             scoped(self.release_groups(&mbid, RequestPriority::UserInitiated)).await;
         let Ok(list) = listed else {
@@ -985,7 +1026,14 @@ impl Catalog {
         let enrichment = self
             .cached(&key, LASTFM_DETAILS, priority, move |priority| async move {
                 let Some(info) = client
-                    .artist_info(&creds, &name, Some(&mbid), priority)
+                    // Fork: a stand-in id is never sent out; the name asks.
+                    .artist_info(
+                        &creds,
+                        &name,
+                        Some(mbid.as_str())
+                            .filter(|id| !droppedneedle_providers::virtual_ids::is_virtual(id)),
+                        priority,
+                    )
                     .await
                     .map_err(CatalogError::Unavailable)?
                 else {

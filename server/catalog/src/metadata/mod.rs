@@ -30,6 +30,8 @@ pub mod plugin_sources;
 pub mod ports;
 pub mod precache;
 pub mod search;
+// Fork: artist pages on stand-in ids.
+pub mod source_artist;
 pub mod upstream;
 
 use std::collections::HashSet;
