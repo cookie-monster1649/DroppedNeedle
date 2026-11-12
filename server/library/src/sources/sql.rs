@@ -55,4 +55,47 @@ droppedneedle_kernel::sql! {
     /// Who confirmed album `?1`'s match.
     pub(super) DECIDED_BY = "SELECT decided_by_user_id \
          FROM library_album_provider_matches WHERE local_album_id = ?1";
+
+    /// Albums on stand-in ids with a confirmed match whose source editions
+    /// were not looked up since `?1`, the never-checked first, at most `?2`.
+    pub(super) EDITIONS_DUE = "SELECT m.local_album_id \
+         FROM library_album_provider_matches m \
+         JOIN local_album_external_identities e \
+           ON e.local_album_id = m.local_album_id AND e.provider = 'musicbrainz' \
+         LEFT JOIN source_edition_checks c ON c.local_album_id = m.local_album_id \
+         WHERE m.match_state = 'confirmed' \
+           AND lower(e.release_group_mbid) LIKE 'd0ab1e00-50c3-8%' \
+           AND (c.checked_at IS NULL OR c.checked_at < ?1) \
+         ORDER BY c.checked_at IS NOT NULL, c.checked_at, m.local_album_id LIMIT ?2";
+
+    /// Note album `?1`'s edition check at `?2`.
+    pub(super) NOTE_EDITION_CHECK = "INSERT INTO source_edition_checks \
+         (local_album_id, checked_at) VALUES (?1, ?2) \
+         ON CONFLICT (local_album_id) DO UPDATE SET checked_at = excluded.checked_at";
+
+    /// Drop provider `?1`'s editions of its album `?2`.
+    pub(super) DROP_EDITIONS = "DELETE FROM source_editions \
+         WHERE provider = ?1 AND parent_album_id = ?2";
+
+    /// Keep one edition.
+    pub(super) KEEP_EDITION = "INSERT INTO source_editions \
+         (provider, provider_album_id, parent_album_id, title, release_date, upc, label, \
+          record_type, cover_url, tracks_json, fetched_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+         ON CONFLICT (provider, provider_album_id) DO UPDATE SET \
+           parent_album_id = excluded.parent_album_id, title = excluded.title, \
+           release_date = excluded.release_date, upc = excluded.upc, label = excluded.label, \
+           record_type = excluded.record_type, cover_url = excluded.cover_url, \
+           tracks_json = excluded.tracks_json, fetched_at = excluded.fetched_at";
+
+    /// Provider `?1`'s edition `?2`: its album, title, date, UPC, label,
+    /// record type, cover, tracks.
+    pub(super) EDITION = "SELECT parent_album_id, title, release_date, upc, label, \
+           record_type, cover_url, tracks_json \
+         FROM source_editions WHERE provider = ?1 AND provider_album_id = ?2";
+
+    /// Provider `?1`'s editions of its album `?2`, oldest first.
+    pub(super) EDITIONS_OF = "SELECT provider_album_id \
+         FROM source_editions WHERE provider = ?1 AND parent_album_id = ?2 \
+         ORDER BY release_date IS NULL, release_date, provider_album_id";
 }

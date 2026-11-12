@@ -90,12 +90,32 @@ impl MetadataSource for DeezerSource {
         let Some(album) = identity.provider_album_id.as_deref() else {
             return Ok(None);
         };
-        let Some(found) = stored_match(conn, album)? else {
-            return Ok(None);
+        let (found, ids) = match stored_match(conn, album)? {
+            Some(found) => {
+                let ids = AlbumIds::read(conn, &found)?;
+                (found, ids)
+            }
+            // An edition of a matched album: its own release under the
+            // album's group.
+            None => match stored_edition(conn, album)? {
+                Some((edition, parent)) => {
+                    let mut ids = AlbumIds::read(conn, &parent)?;
+                    ids.release = virtual_ids::mint(DEEZER, Kind::Release, album);
+                    (edition, ids)
+                }
+                None => return Ok(None),
+            },
         };
-        let ids = AlbumIds::read(conn, &found)?;
         Ok(match (entity, identity.kind) {
-            ("release-group", Kind::ReleaseGroup) => Some(release_group(&found, &ids)),
+            ("release-group", Kind::ReleaseGroup) => {
+                let mut group = release_group(&found, &ids);
+                if let Some(releases) = group["releases"].as_array_mut() {
+                    for (edition, edition_ids) in editions_of(conn, &found, &ids)? {
+                        releases.push(release_ref(&edition, &edition_ids));
+                    }
+                }
+                Some(group)
+            }
             ("release", Kind::Release) => Some(release(&found, &ids)),
             ("recording", Kind::Recording) => found
                 .tracks
@@ -179,7 +199,13 @@ fn genres(found: &ProviderMatch) -> Value {
 /// The release group document.
 pub fn release_group(found: &ProviderMatch, ids: &AlbumIds) -> Value {
     let mut group = group_ref(found, ids);
-    group["releases"] = json!([{
+    group["releases"] = json!([release_ref(found, ids)]);
+    group
+}
+
+/// One release as a release group lists it.
+fn release_ref(found: &ProviderMatch, ids: &AlbumIds) -> Value {
+    json!({
         "id": ids.release,
         "title": found.title,
         "status": "Official",
@@ -187,8 +213,81 @@ pub fn release_group(found: &ProviderMatch, ids: &AlbumIds) -> Value {
         "barcode": found.upc,
         "artist-credit": credit(found, ids),
         "media": media_summary(&found.tracks),
-    }]);
-    group
+    })
+}
+
+/// Deezer edition `album` of a matched album, as a match of its own, with
+/// the match it is an edition of.
+fn stored_edition(
+    conn: &Connection,
+    album: &str,
+) -> rusqlite::Result<Option<(ProviderMatch, ProviderMatch)>> {
+    type Row = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    );
+    let row: Option<Row> = conn
+        .prepare_cached(sql::EDITION.text())?
+        .query_row(params![DEEZER, album], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+            ))
+        })
+        .optional()?;
+    let Some((parent_id, title, release_date, upc, label, record_type, cover_url, tracks)) = row
+    else {
+        return Ok(None);
+    };
+    let Some(parent) = stored_match(conn, &parent_id)? else {
+        return Ok(None);
+    };
+    let edition = ProviderMatch {
+        provider_album_id: album.to_owned(),
+        title,
+        release_date,
+        upc,
+        label,
+        record_type,
+        cover_url,
+        link_url: Some(deezer_url("album", album)),
+        tracks: serde_json::from_str(&tracks).unwrap_or_default(),
+        ..parent.clone()
+    };
+    Ok(Some((edition, parent)))
+}
+
+/// The Deezer editions kept for matched album `found`, with their ids.
+fn editions_of(
+    conn: &Connection,
+    found: &ProviderMatch,
+    ids: &AlbumIds,
+) -> rusqlite::Result<Vec<(ProviderMatch, AlbumIds)>> {
+    let listed: Vec<String> = conn
+        .prepare_cached(sql::EDITIONS_OF.text())?
+        .query_map(params![DEEZER, found.provider_album_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut out = Vec::new();
+    for album in listed {
+        if let Some((edition, _)) = stored_edition(conn, &album)? {
+            let mut edition_ids = ids.clone();
+            edition_ids.release = virtual_ids::mint(DEEZER, Kind::Release, &album);
+            out.push((edition, edition_ids));
+        }
+    }
+    Ok(out)
 }
 
 /// Discs in order, each with its tracks in order.
