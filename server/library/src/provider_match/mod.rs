@@ -569,7 +569,12 @@ impl ProviderMatches {
                 if accept {
                     link(tx, &found, user_id, now)?;
                 }
-                Ok(ProviderMatch { state, ..found })
+                let decided = ProviderMatch { state, ..found };
+                // Fork: the album takes the source's stand-in identity.
+                if accept {
+                    crate::sources::adopt::adopt(tx, &decided, Some(user_id), now)?;
+                }
+                Ok(decided)
             })
     }
 }

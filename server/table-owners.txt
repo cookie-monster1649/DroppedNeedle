@@ -277,3 +277,5 @@ local_track_genres
 local_track_lyrics
 local_tracks
 local_tracks_fts
+source_identities
+source_promotion_checks
