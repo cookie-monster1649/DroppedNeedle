@@ -81,7 +81,7 @@ pub struct SArtistID3 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<String>,
     /// MusicBrainz artist id.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "no_real_mbid")]
     pub musicBrainzId: Option<String>,
     /// Sort name.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,7 +164,7 @@ pub struct SAlbumID3 {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub isCompilation: Option<bool>,
     /// MusicBrainz release-group id.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "no_real_mbid")]
     pub musicBrainzId: Option<String>,
     /// Last-played timestamp ISO.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -358,7 +358,7 @@ pub struct SChild {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channelCount: Option<i64>,
     /// MusicBrainz recording id.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "no_real_mbid")]
     pub musicBrainzId: Option<String>,
     /// Last-played timestamp ISO.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -650,7 +650,7 @@ pub struct SArtistInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub biography: Option<String>,
     /// MusicBrainz id.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "no_real_mbid")]
     pub musicBrainzId: Option<String>,
     /// Last.fm URL.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -675,7 +675,7 @@ pub struct SAlbumInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
     /// MusicBrainz id.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "no_real_mbid")]
     pub musicBrainzId: Option<String>,
     /// Last.fm URL.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -868,4 +868,11 @@ pub struct SDirectory {
     pub played: Option<String>,
     /// Entries.
     pub child: Vec<SChild>,
+}
+
+/// Fork: an absent id, or a stand-in id (which names nothing at
+/// MusicBrainz), is left out.
+#[allow(clippy::ref_option)]
+fn no_real_mbid(id: &Option<String>) -> bool {
+    droppedneedle_providers::virtual_ids::real_only(id.as_deref()).is_none()
 }

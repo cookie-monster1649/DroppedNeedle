@@ -168,6 +168,11 @@ pub const NO_PARENT_ID: &str = "00000000000000000000000000000000";
 /// Where `ExternalUrls` point, Jellyfin's default MusicBrainz server.
 const MUSICBRAINZ_WEB: &str = "https://musicbrainz.org";
 
+/// Fork: `id` unless it is a stand-in id, owned.
+fn real(id: Option<&str>) -> Option<String> {
+    droppedneedle_providers::virtual_ids::real_only(id).map(str::to_owned)
+}
+
 /// First 32 hex characters of the SHA-256 of `text`.
 fn hex_id(text: &[u8]) -> String {
     format!("{:x}", Sha256::digest(text))[..32].to_owned()
@@ -178,7 +183,9 @@ fn hex_id(text: &[u8]) -> String {
 fn musicbrainz_urls(links: &[(&str, Option<&str>)]) -> Vec<ExternalUrl> {
     let mut urls: Vec<ExternalUrl> = Vec::new();
     for (entity, id) in links {
-        let Some(id) = id.map(str::trim).filter(|id| is_valid_mbid(id)) else {
+        let Some(id) = id.map(str::trim).filter(|id| {
+            is_valid_mbid(id) && !droppedneedle_providers::virtual_ids::is_virtual(id)
+        }) else {
             continue;
         };
         let url = format!("{MUSICBRAINZ_WEB}/{entity}/{id}");
@@ -347,7 +354,8 @@ impl<'a> Builder<'a> {
             ("MusicBrainzReleaseGroup", &t.release_group_mbid),
         ]
         .into_iter()
-        .filter_map(|(key, id)| Some((key.to_owned(), id.clone()?)))
+        // Fork: a stand-in id names nothing at MusicBrainz.
+        .filter_map(|(key, id)| Some((key.to_owned(), real(id.as_deref())?)))
         .collect();
         if !provider_ids.is_empty() {
             dto.provider_ids = Some(provider_ids);
@@ -395,10 +403,10 @@ impl<'a> Builder<'a> {
             dto.image_tags.insert("Primary".to_owned(), tag);
         }
         let mut provider_ids = BTreeMap::new();
-        if let Some(mbid) = a.release_mbid.as_deref() {
+        if let Some(mbid) = real(a.release_mbid.as_deref()) {
             provider_ids.insert("MusicBrainzAlbum".to_owned(), mbid.to_owned());
         }
-        if let Some(mbid) = a.release_group_mbid.as_deref() {
+        if let Some(mbid) = real(a.release_group_mbid.as_deref()) {
             provider_ids.insert("MusicBrainzReleaseGroup".to_owned(), mbid.to_owned());
         }
         dto.provider_ids = Some(provider_ids);
@@ -428,7 +436,7 @@ impl<'a> Builder<'a> {
             dto.image_tags.insert("Primary".to_owned(), tag);
         }
         let mut provider_ids = BTreeMap::new();
-        if let Some(mbid) = ar.artist_mbid.as_deref() {
+        if let Some(mbid) = real(ar.artist_mbid.as_deref()) {
             provider_ids.insert("MusicBrainzArtist".to_owned(), mbid.to_owned());
         }
         dto.provider_ids = Some(provider_ids);

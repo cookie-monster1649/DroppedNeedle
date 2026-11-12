@@ -38,6 +38,7 @@ mod providers_events;
 mod providers_gate;
 mod providers_models;
 mod providers_musicbrainz;
+mod providers_stand_ins;
 mod route_gate;
 mod route_walk;
 mod settings_readers;

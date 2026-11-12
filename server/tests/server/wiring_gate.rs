@@ -67,6 +67,10 @@ const RULES: &[Rule] = &[
             PROBE,
             GENRES,
             (
+                "providers/src/virtual_ids.rs",
+                "Fork: the stand-in id source, filled once when the library is built; the providers are assembled before the library whose data answers it, and an empty slot reads every stand-in id as missing, never as a request",
+            ),
+            (
                 "kernel/src/runtime_config/store.rs",
                 "a settings entry's decrypted value, cached for that one revision; a write replaces the entry whole",
             ),
@@ -110,7 +114,16 @@ const RULES: &[Rule] = &[
         patterns: &[
             r"(?s)\bfn\s+(?:set|attach)\w*\s*(?:<[^>]*>)?\s*\(\s*&self\s*,\s*\w+\s*:\s*(?:Option<\s*)?(?:(?:\w+::)*Arc<|Box<\s*dyn\b|&\s*(?:'\w+\s+)?dyn\b|impl\b)",
         ],
-        allowed: &[],
+        allowed: &[
+            (
+                "providers/src/virtual_ids.rs",
+                "Fork: fills the stand-in id slot, once, when the library is built (see the OnceLock entry)",
+            ),
+            (
+                "providers/src/musicbrainz/client.rs",
+                "Fork: hands the library's stand-in id source to the client's slot, once, when the library is built",
+            ),
+        ],
     },
     Rule {
         what: "a slot's filled-twice warning",
