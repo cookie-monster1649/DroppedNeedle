@@ -24,6 +24,8 @@ pub mod models;
 pub mod quota;
 pub mod service;
 pub mod settle;
+// Fork: a source album's leftovers asked for one by one.
+pub mod source_leftovers;
 pub(crate) mod sql;
 pub mod sqlite;
 pub mod state;

@@ -31074,3 +31074,150 @@ async fn a_lasting_warning_still_counts_as_organized() {
     assert_eq!(managed.queue_row(&album), None, "nothing to retry");
     assert!(!managed.folder_plans(&album, "organized").await);
 }
+
+/// Fork (stage b): a Deezer album on its stand-in identity is requested
+/// like any album: one download for the stand-in release, asking only for
+/// the Deezer tracks the library lacks, with the Deezer tracklist as the
+/// plan; a second request while it runs is already in progress.
+#[tokio::test]
+async fn a_deezer_album_on_stand_in_ids_is_requested_as_one_download() {
+    use droppedneedle_providers::virtual_ids;
+
+    let rig = Rig::start("lib-deezer-request").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-r/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-r/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    let (status, tracks) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracks}");
+    let held = &tracks["items"][0];
+    let tracks_json = json!([
+        {"provider_track_id": "2001", "title": held["title"],
+         "duration_seconds": held["duration_seconds"], "disc": 1, "position": 1, "isrc": null},
+        {"provider_track_id": "2002", "title": "Second Song", "duration_seconds": 201.0,
+         "disc": 1, "position": 2, "isrc": "GBAAA0000002"},
+        {"provider_track_id": "2003", "title": "Third Song", "duration_seconds": 187.0,
+         "disc": 1, "position": 3, "isrc": null}
+    ]);
+    app.seed_with(
+        "INSERT INTO library_album_provider_matches (local_album_id, provider, \
+         provider_album_id, title, artist_name, provider_artist_id, release_date, label, \
+         record_type, tracks_json, score, match_state, created_at, updated_at) \
+         VALUES (?1, 'deezer', '88', 'Deezer Album', 'Deezer Artist', '19', '2021-03-04', \
+         'A Label', 'album', ?2, 1.0, 'confirmed', 1, 1)",
+        rusqlite::params![album, tracks_json.to_string()],
+    )
+    .await;
+    let db = droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+        .expect("database opens");
+    assert_eq!(
+        droppedneedle_library::sources::adopt::backfill_some(&db, 10, 1_800_000_000_000)
+            .expect("backfill"),
+        1
+    );
+    let group = virtual_ids::mint("deezer", virtual_ids::Kind::ReleaseGroup, "88");
+    let release = virtual_ids::mint("deezer", virtual_ids::Kind::Release, "88");
+
+    // The rig's identification is scripted; production reads the stand-in
+    // release through the MusicBrainz client's library sources, which this
+    // reproduces from the same stored document.
+    let sources = droppedneedle_library::sources::LibrarySources::new(db.clone());
+    let document = db
+        .read_blocking("test.stand_in_release", |conn| {
+            droppedneedle_library::sources::LibrarySources::document_in(
+                sources.sources(),
+                conn,
+                "release",
+                &release,
+            )
+            .map_err(droppedneedle_library::identify::stores::StoreError::from)
+        })
+        .expect("document reads")
+        .expect("the stand-in release has a document");
+    let wire: droppedneedle_providers::musicbrainz::MbRelease =
+        serde_json::from_value(document).expect("a MusicBrainz-shaped release");
+    let synthesized = droppedneedle_library::identify::sources::release_from_wire(wire, Vec::new())
+        .expect("the release reads");
+    rig.identify.recall_from(move |_| RecallResult {
+        releases: vec![synthesized.clone()],
+        ..RecallResult::default()
+    });
+    let acquire = format!("/api/v3/albums/{group}/edition/acquire?album_id={album}");
+    let (status, body) = app.call("POST", &acquire, &headers, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["status"], json!("started"), "{body}");
+    assert_eq!(body["requested"], json!(2), "{body}");
+    assert_eq!(body["release_mbid"], json!(release), "{body}");
+
+    let (count, task_group, plan): (i64, String, String) = app
+        .db()
+        .query_row(
+            "SELECT COUNT(*), MAX(release_group_mbid), MAX(plan_json) FROM download_tasks",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("the download task");
+    assert_eq!(count, 1, "one download for the album");
+    assert_eq!(task_group, group);
+    let plan: serde_json::Value = serde_json::from_str(&plan).expect("plan json");
+    let text = plan.to_string();
+    assert!(
+        text.contains(&release),
+        "the plan names the stand-in release: {plan}"
+    );
+    assert_eq!(
+        plan["album_wanted"],
+        json!([{"disc": 1, "track": 2}, {"disc": 1, "track": 3}]),
+        "only the missing positions are asked for: {plan}"
+    );
+
+    let (status, again) = app.call("POST", &acquire, &headers, None).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["status"], json!("already_in_progress"), "{again}");
+
+    // The download settles partial and nothing retries it: once the grace
+    // has passed, each position still missing is asked for by name.
+    app.seed("UPDATE download_tasks SET status = 'partial', updated_at = 1000")
+        .await;
+    let now = 1000 + droppedneedle_acquire::requests::source_leftovers::SETTLE_GRACE_SECS;
+    let requests = &app.state().acquire.requests;
+    assert_eq!(
+        droppedneedle_acquire::requests::source_leftovers::sweep_once(requests, now - 1).await,
+        0,
+        "inside the grace an automatic retry may still come"
+    );
+    assert_eq!(
+        droppedneedle_acquire::requests::source_leftovers::sweep_once(requests, now).await,
+        2
+    );
+    let asked: Vec<String> = app
+        .db()
+        .prepare("SELECT musicbrainz_id_lower FROM request_history WHERE request_kind = 'track' ORDER BY 1")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("rows");
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    assert_eq!(
+        droppedneedle_acquire::requests::source_leftovers::sweep_once(requests, now).await,
+        0,
+        "a track already asked for is not asked again"
+    );
+}
