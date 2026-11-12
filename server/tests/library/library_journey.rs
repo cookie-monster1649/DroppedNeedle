@@ -31137,7 +31137,13 @@ async fn a_deezer_album_on_stand_in_ids_is_requested_as_one_download() {
     // The rig's identification is scripted; production reads the stand-in
     // release through the MusicBrainz client's library sources, which this
     // reproduces from the same stored document.
-    let sources = droppedneedle_library::sources::LibrarySources::new(db.clone());
+    let sources = droppedneedle_library::sources::LibrarySources::new(
+        db.clone(),
+        droppedneedle_providers::Providers::closed()
+            .previews
+            .clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
     let document = db
         .read_blocking("test.stand_in_release", |conn| {
             droppedneedle_library::sources::LibrarySources::document_in(
@@ -31535,7 +31541,13 @@ async fn a_deezer_edition_is_listed_beside_the_matched_album() {
     );
     assert_eq!(editions["owned_release_mbid"], json!(release), "{editions}");
 
-    let sources = droppedneedle_library::sources::LibrarySources::new(db.clone());
+    let sources = droppedneedle_library::sources::LibrarySources::new(
+        db.clone(),
+        droppedneedle_providers::Providers::closed()
+            .previews
+            .clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
     let document = db
         .read_blocking("test.edition_release", |conn| {
             droppedneedle_library::sources::LibrarySources::document_in(
@@ -31555,4 +31567,332 @@ async fn a_deezer_edition_is_listed_beside_the_matched_album() {
         json!("Deluxe Bonus"),
         "{document}"
     );
+}
+
+/// Fork: the artist page of a Deezer artist on a stand-in id lists the
+/// artist's whole Deezer discography, held or not; an album not held opens
+/// on its own stand-in ids with its Deezer track list, and can be asked
+/// for like any album.
+#[tokio::test]
+async fn a_deezer_artist_page_lists_the_whole_deezer_catalogue() {
+    use droppedneedle_library::sources::catalogue;
+    use droppedneedle_providers::preview::{DeezerAlbum, DeezerAlbumTrack, DeezerArtistAlbum};
+    use droppedneedle_providers::virtual_ids;
+
+    let rig = Rig::start("lib-deezer-catalogue").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-c/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-c/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    let (status, tracks) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracks}");
+    let held = &tracks["items"][0];
+    let tracks_json = json!([
+        {"provider_track_id": "3001", "title": held["title"],
+         "duration_seconds": held["duration_seconds"], "disc": 1, "position": 1, "isrc": null}
+    ]);
+    app.seed_with(
+        "INSERT INTO library_album_provider_matches (local_album_id, provider, \
+         provider_album_id, title, artist_name, provider_artist_id, release_date, \
+         record_type, tracks_json, score, match_state, created_at, updated_at) \
+         VALUES (?1, 'deezer', '77', 'Held Record', 'Deezer Singer', '29', '2020-01-02', \
+         'album', ?2, 1.0, 'confirmed', 1, 1)",
+        rusqlite::params![album, tracks_json.to_string()],
+    )
+    .await;
+    let db = droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+        .expect("database opens");
+    assert_eq!(
+        droppedneedle_library::sources::adopt::backfill_some(&db, 10, 1_800_000_000_000)
+            .expect("backfill"),
+        1
+    );
+    let artist = virtual_ids::mint("deezer", virtual_ids::Kind::Artist, "29");
+    let held_group = virtual_ids::mint("deezer", virtual_ids::Kind::ReleaseGroup, "77");
+    let group = |id: &str| virtual_ids::mint("deezer", virtual_ids::Kind::ReleaseGroup, id);
+
+    // Deezer's listing of the artist (the rig's Deezer is closed, so the
+    // page shows what an earlier listing kept).
+    let listed = |id: i64, title: &str, date: &str, kind: &str| DeezerArtistAlbum {
+        id,
+        title: title.to_owned(),
+        release_date: Some(date.to_owned()),
+        record_type: Some(kind.to_owned()),
+        cover_url: Some(format!(
+            "https://cdn-images.dzcdn.net/images/cover/{id}/1000x1000.jpg"
+        )),
+    };
+    let albums = vec![
+        listed(77, "Held Record", "2020-01-02", "album"),
+        listed(501, "New Record", "2023-05-06", "album"),
+        listed(502, "A Single", "2022-01-01", "single"),
+        listed(503, "An EP", "2021-01-01", "ep"),
+    ];
+    db.write_blocking(
+        droppedneedle_kernel::db::Lane::Foreground,
+        "test.keep_listing",
+        move |tx| {
+            catalogue::keep_listing(tx, "29", "", &albums, 1_800_000_000_000)
+                .map_err(droppedneedle_kernel::db::DbError::from)
+        },
+    )
+    .expect("listing kept");
+
+    let (status, page) = app
+        .call("GET", &format!("/api/v3/artists/{artist}"), &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let section = |name: &str| -> Vec<(String, bool)> {
+        page[name]
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .map(|item| {
+                (
+                    item["id"].as_str().unwrap_or_default().to_owned(),
+                    item["in_library"].as_bool().unwrap_or(false),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        section("albums"),
+        vec![(group("501"), false), (held_group.clone(), true)],
+        "{page}"
+    );
+    assert_eq!(section("singles"), vec![(group("502"), false)], "{page}");
+    assert_eq!(section("eps"), vec![(group("503"), false)], "{page}");
+
+    let (status, owned) = app
+        .call(
+            "GET",
+            &format!("/api/v3/artists/{artist}/owned-releases"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{owned}");
+    assert_eq!(owned["items"].as_array().map(Vec::len), Some(1), "{owned}");
+    assert_eq!(owned["items"][0]["id"], json!(held_group), "{owned}");
+
+    // The album not held, once its Deezer track list is read, opens on
+    // its own group with the track list.
+    let detail = DeezerAlbum {
+        id: 501,
+        title: "New Record".into(),
+        artist_name: "Deezer Singer".into(),
+        artist_id: Some(29),
+        artist_picture: None,
+        upc: Some("0501".into()),
+        label: Some("A Label".into()),
+        release_date: Some("2023-05-06".into()),
+        record_type: Some("album".into()),
+        cover_url: None,
+        link: None,
+        genres: vec!["Pop".into()],
+        tracks: vec![
+            DeezerAlbumTrack {
+                id: 5011,
+                title: "First New Song".into(),
+                duration: Some(200),
+                isrc: Some("GBAAA0005011".into()),
+                position: 1,
+                disc: 1,
+            },
+            DeezerAlbumTrack {
+                id: 5012,
+                title: "Second New Song".into(),
+                duration: Some(180),
+                isrc: None,
+                position: 2,
+                disc: 1,
+            },
+        ],
+    };
+    db.write_blocking(
+        droppedneedle_kernel::db::Lane::Foreground,
+        "test.keep_album",
+        move |tx| {
+            catalogue::keep_album(tx, &detail, 1_800_000_000_000)
+                .map_err(droppedneedle_kernel::db::DbError::from)
+        },
+    )
+    .expect("album kept");
+    let new_group = group("501");
+    let (status, basic) = app
+        .call(
+            "GET",
+            &format!("/api/v3/albums/{new_group}/basic"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{basic}");
+    assert!(basic.to_string().contains("New Record"), "{basic}");
+    let (status, listing) = app
+        .call(
+            "GET",
+            &format!("/api/v3/albums/{new_group}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{listing}");
+    let text = listing.to_string();
+    assert!(
+        text.contains("First New Song") && text.contains("Second New Song"),
+        "{listing}"
+    );
+
+    // Its cover is the listed Deezer cover; the album held is unchanged.
+    let cover: Option<String> = app
+        .db()
+        .query_row(
+            "SELECT c.cover_url FROM source_identities s JOIN source_catalogue c \
+             ON c.provider_album_id = s.provider_album_id WHERE s.uuid = ?1",
+            [&new_group],
+            |row| row.get(0),
+        )
+        .expect("cover row");
+    assert_eq!(
+        cover.as_deref(),
+        Some("https://cdn-images.dzcdn.net/images/cover/501/1000x1000.jpg")
+    );
+
+    // And it is asked for like any album: one request on its stand-in group.
+    let (status, body) = app
+        .call(
+            "POST",
+            "/api/v3/requests/albums",
+            &headers,
+            Some(json!({
+                "musicbrainz_id": new_group,
+                "artist": "Deezer Singer",
+                "album": "New Record",
+            })),
+        )
+        .await;
+    assert!(status.is_success(), "{status} {body}");
+    assert_eq!(body["success"], json!(true), "{body}");
+}
+
+/// Fork: a catalogue album's track list is read from Deezer the first time
+/// one of its ids is looked up, then kept; Deezer is not asked again.
+#[tokio::test]
+async fn a_catalogue_album_reads_its_track_list_once() {
+    use droppedneedle_library::sources::{LibrarySources, catalogue};
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::preview::DeezerArtistAlbum;
+    use droppedneedle_providers::test_support::ScriptedWire;
+    use droppedneedle_providers::virtual_ids::{self, VirtualSource as _};
+
+    let rig = Rig::start("lib-deezer-catalogue-fill").await;
+    let app = &rig.app;
+    let db = droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+        .expect("database opens");
+    let albums = vec![DeezerArtistAlbum {
+        id: 601,
+        title: "Listed".into(),
+        release_date: Some("2024-02-03".into()),
+        record_type: Some("ep".into()),
+        cover_url: None,
+    }];
+    db.write_blocking(
+        droppedneedle_kernel::db::Lane::Foreground,
+        "test.keep_listing",
+        move |tx| {
+            catalogue::keep_listing(tx, "39", "Some Singer", &albums, 1)
+                .map_err(droppedneedle_kernel::db::DbError::from)
+        },
+    )
+    .expect("listing kept");
+
+    let wire = Arc::new(ScriptedWire::new());
+    let json_type = [("content-type", "application/json")];
+    wire.answer(
+        "http://127.0.0.1:9/deezer/artist/39/albums",
+        200,
+        &json_type,
+        json!({"data": [{"id": 601, "title": "Listed", "record_type": "ep",
+            "release_date": "2024-02-03", "cover_xl": "https://x/601.jpg"}],
+            "next": "http://127.0.0.1:9/deezer/artist/39/albums?index=1"})
+        .to_string(),
+    );
+    wire.answer(
+        "http://127.0.0.1:9/deezer/artist/39/albums",
+        200,
+        &json_type,
+        json!({"data": [{"id": 602, "title": "Older", "record_type": "single",
+            "release_date": "0000-00-00"}]})
+        .to_string(),
+    );
+    wire.answer(
+        "http://127.0.0.1:9/deezer/album/601",
+        200,
+        &json_type,
+        json!({
+            "id": 601, "title": "Listed", "release_date": "2024-02-03", "record_type": "ep",
+            "artist": {"id": 39, "name": "Some Singer"},
+            "tracks": {"data": [
+                {"id": 6011, "title": "Only Song", "duration": 222, "isrc": "GBAAA0006011"}
+            ]}
+        })
+        .to_string(),
+    );
+    let previews = Providers::unpaced(wire.clone()).previews.clone();
+    let listing = previews
+        .deezer_artist_albums(39, droppedneedle_providers::RequestPriority::UserInitiated)
+        .await
+        .expect("listing reads");
+    assert_eq!(
+        listing.iter().map(|album| album.id).collect::<Vec<_>>(),
+        vec![601, 602]
+    );
+    assert_eq!(listing[0].cover_url.as_deref(), Some("https://x/601.jpg"));
+    assert_eq!(listing[1].release_date, None);
+
+    let sources = LibrarySources::new(
+        db.clone(),
+        previews,
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+    let release = virtual_ids::mint("deezer", virtual_ids::Kind::Release, "601");
+    let document = sources
+        .lookup("release", &release)
+        .await
+        .expect("the release reads");
+    let wired: droppedneedle_providers::musicbrainz::MbRelease =
+        serde_json::from_value(document).expect("a MusicBrainz-shaped release");
+    assert_eq!(wired.media[0].tracks.len(), 1);
+    assert_eq!(wired.media[0].tracks[0].title.as_deref(), Some("Only Song"));
+    let group = virtual_ids::mint("deezer", virtual_ids::Kind::ReleaseGroup, "601");
+    let group_doc = sources
+        .lookup("release-group", &group)
+        .await
+        .expect("group");
+    assert_eq!(group_doc["primary-type"], json!("EP"));
+    assert_eq!(group_doc["releases"][0]["id"], json!(release));
+    let album_reads = || {
+        wire.sent()
+            .iter()
+            .filter(|sent| sent.url.path().ends_with("/album/601"))
+            .count()
+    };
+    assert_eq!(album_reads(), 1, "the kept track list is not read again");
 }

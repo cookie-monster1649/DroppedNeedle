@@ -396,7 +396,14 @@ impl Catalog {
             }
         };
         // Fork: a stand-in artist leads the albums its source credits it.
-        let in_library = in_library || (stand_in && release_group_count > 0);
+        let in_library = in_library
+            || (stand_in
+                && discography
+                    .albums
+                    .iter()
+                    .chain(&discography.eps)
+                    .chain(&discography.singles)
+                    .any(|item| item.in_library));
         Ok(ArtistInfo {
             name: detail.name,
             musicbrainz_id: detail.mbid,
@@ -873,6 +880,8 @@ impl Catalog {
                 .iter()
                 .chain(&local.eps)
                 .chain(&local.singles)
+                // Fork: the catalogue lists albums not held, too.
+                .filter(|item| item.in_library)
                 .map(|item| OwnedRelease {
                     id: item.id.clone(),
                     title: item.title.clone(),
