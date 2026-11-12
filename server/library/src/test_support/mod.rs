@@ -50,6 +50,7 @@ pub fn statement_files() -> Vec<StatementFile> {
         crate::catalog_actions::sql::registered(),
         crate::edition::sql::registered(),
         crate::provider_match::sql::registered(),
+        crate::sources::sql::registered(),
         crate::artist_match::sql::registered(),
         crate::reidentify::sql::registered(),
         crate::reviews::sql::registered(),

@@ -266,7 +266,10 @@ pub fn named_release_tags(
         let values: Vec<String> = values
             .into_iter()
             .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
+            // Fork: a stand-in id is never written as a MusicBrainz id.
+            .filter(|value| {
+                !value.is_empty() && !droppedneedle_providers::virtual_ids::is_virtual(value)
+            })
             .collect();
         if !values.is_empty() {
             tags.insert(field.name().to_owned(), values);
@@ -357,6 +360,23 @@ pub fn named_release_tags(
     );
     put(TagField::MusicBrainzArtistId, ids(track_artists));
     put(TagField::MusicBrainzAlbumArtistId, ids(&release.artists));
+    // Fork: a track from Deezer carries its Deezer ids instead.
+    for (field, kind) in [
+        (TagField::DeezerTrackId, "track"),
+        (TagField::DeezerAlbumId, "album"),
+        (TagField::DeezerArtistId, "artist"),
+    ] {
+        put(
+            field,
+            track
+                .links
+                .iter()
+                .filter(|link| link.provider == "deezer" && link.entity_type == kind)
+                .map(|link| link.external_id.clone())
+                .take(1)
+                .collect(),
+        );
+    }
     (tags, unresolved)
 }
 

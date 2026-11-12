@@ -89,6 +89,12 @@ pub struct AlbumView {
 /// cover is known missing.
 impl From<(AlbumRecord, bool, bool)> for AlbumView {
     fn from((album, favorite, art_missing): (AlbumRecord, bool, bool)) -> Self {
+        // Fork: an album on a source's stand-in ids reads as that
+        // source's, not as linked to MusicBrainz.
+        let stand_in = album
+            .release_group_mbid
+            .as_deref()
+            .is_some_and(droppedneedle_providers::virtual_ids::is_virtual);
         Self {
             id: album.id,
             title: album.title,

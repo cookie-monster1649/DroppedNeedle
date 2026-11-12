@@ -2527,6 +2527,24 @@ fn state_columns() -> Vec<StateColumn> {
             droppedneedle_library::provider_match::MatchProvider::as_str,
         ),
         state(
+            "source_identities",
+            "provider",
+            &droppedneedle_library::provider_match::MatchProvider::ALL,
+            droppedneedle_library::provider_match::MatchProvider::as_str,
+        ),
+        state(
+            "source_identities",
+            "kind",
+            &droppedneedle_providers::virtual_ids::Kind::ALL,
+            |kind| kind.as_str(),
+        ),
+        state(
+            "source_promotion_checks",
+            "outcome",
+            &droppedneedle_library::sources::CheckOutcome::ALL,
+            droppedneedle_library::sources::CheckOutcome::as_str,
+        ),
+        state(
             "library_artist_suggestions",
             "suggestion_state",
             &droppedneedle_library::artist_match::SuggestionState::ALL,
@@ -4245,6 +4263,11 @@ mod extension_chains {
                 "catalog",
                 "catalog/0009_want_positions.sql",
                 "1456e328241855b583dca1965c79fd9b358249ae3eaf8261457c068a8ca114e5",
+            ),
+            (
+                "catalog",
+                "catalog/0010_source_identities.sql",
+                "e9c51224441e16b4be5cdedd121cdc37cb44178e991b862f67526af92fb5611c",
             ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
