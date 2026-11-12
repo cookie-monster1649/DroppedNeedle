@@ -34,7 +34,10 @@ use crate::web_address::{self, WebAddress};
 mod catalog;
 mod models;
 
-pub use self::catalog::{DeezerAlbum, DeezerAlbumHit, DeezerAlbumTrack, DeezerArtistDetail};
+pub use self::catalog::{
+    ARTIST_ALBUMS_CAP, DeezerAlbum, DeezerAlbumHit, DeezerAlbumTrack, DeezerArtistAlbum,
+    DeezerArtistDetail,
+};
 
 use self::models::{AlbumSearch, AlbumTracks, DeezerArtist, DeezerFault, Track, TrackSearch};
 

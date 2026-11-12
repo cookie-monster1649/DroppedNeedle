@@ -16,11 +16,15 @@
 //! - [`adopt`] gives a confirmed album its stand-in identity as a
 //!   person's choice; [`backfill`](adopt::backfill_some) does it for
 //!   albums confirmed before.
+//! - [`catalogue`] keeps a source artist's whole discography, so albums
+//!   the library does not hold have pages and can be requested; their
+//!   track lists are read from the source on first lookup.
 //! - [`promote`] looks each such album up at MusicBrainz now and then, and
 //!   hands it back to automatic identification when MusicBrainz has a
 //!   confident match.
 
 pub mod adopt;
+pub mod catalogue;
 pub mod deezer;
 pub mod editions;
 pub mod promote;
@@ -30,7 +34,10 @@ use std::sync::Arc;
 
 use rusqlite::{Connection, OptionalExtension as _, params};
 
-use droppedneedle_kernel::db::Db;
+use droppedneedle_kernel::clock::Clock;
+use droppedneedle_kernel::db::{Db, Lane};
+use droppedneedle_providers::RequestPriority;
+use droppedneedle_providers::preview::PreviewClient;
 use droppedneedle_providers::virtual_ids::{self, BoxFuture, Kind, VirtualSource};
 
 use crate::jobs::models::OperationError;
@@ -146,14 +153,71 @@ pub fn identity_of(conn: &Connection, uuid: &str) -> rusqlite::Result<Option<Sou
 pub struct LibrarySources {
     db: Db,
     sources: Vec<Arc<dyn MetadataSource>>,
+    /// Reads the track lists of catalogue albums on first lookup.
+    deezer: PreviewClient,
+    clock: Arc<dyn Clock>,
 }
 
 impl LibrarySources {
-    /// The sources the library has: Deezer.
-    pub fn new(db: Db) -> Self {
+    /// The sources the library has: Deezer, whose catalogue albums'
+    /// track lists are read through `deezer` when first looked up.
+    pub fn new(db: Db, deezer: PreviewClient, clock: Arc<dyn Clock>) -> Self {
         Self {
             db,
             sources: vec![Arc::new(deezer::DeezerSource)],
+            deezer,
+            clock,
+        }
+    }
+
+    /// Read and keep the track list of the catalogue album stand-in id
+    /// `id` names, when it is missing or old. A Deezer failure keeps what
+    /// is kept.
+    async fn fill_catalogue(&self, id: &str) {
+        let now = self.clock.now_ms();
+        let key = id.to_owned();
+        let due = self
+            .db
+            .read("sources.catalogue_due", move |conn| {
+                let Some(identity) = identity_of(conn, &key)? else {
+                    return Ok::<_, OperationError>(None);
+                };
+                Ok(catalogue::album_to_read(conn, &identity, now)?)
+            })
+            .await;
+        let album_id = match due {
+            Ok(Some(album_id)) => album_id,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!(%error, "catalogue album could not be read");
+                return;
+            }
+        };
+        match self
+            .deezer
+            .deezer_album(album_id, RequestPriority::UserInitiated)
+            .await
+        {
+            Ok(Some(album)) if !album.tracks.is_empty() => {
+                let kept = self
+                    .db
+                    .write(
+                        Lane::Foreground,
+                        "sources.keep_catalogue_album",
+                        move |tx| {
+                            catalogue::keep_album(tx, &album, now)?;
+                            Ok::<_, OperationError>(())
+                        },
+                    )
+                    .await;
+                if let Err(error) = kept {
+                    tracing::warn!(%error, album_id, "catalogue album could not be kept");
+                }
+            }
+            Ok(_) => tracing::info!(album_id, "Deezer has no track list for catalogue album"),
+            Err(error) => {
+                tracing::info!(%error, album_id, "Deezer catalogue album unavailable");
+            }
         }
     }
 
@@ -196,6 +260,8 @@ impl VirtualSource for LibrarySources {
         let sources = self.sources.clone();
         let (entity, id) = (entity.to_owned(), id.to_owned());
         Box::pin(async move {
+            // Fork: a catalogue album's track list is read on first lookup.
+            self.fill_catalogue(&id).await;
             let read = self
                 .db
                 .read("sources.lookup", move |conn| {

@@ -167,6 +167,34 @@ struct WireArtistDetail {
     nb_fan: Option<i64>,
 }
 
+/// Fork: one album of an artist's Deezer discography (`/artist/{id}/albums`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeezerArtistAlbum {
+    pub id: i64,
+    #[serde(default)]
+    pub title: String,
+    /// `YYYY-MM-DD`.
+    #[serde(default)]
+    pub release_date: Option<String>,
+    /// `album`, `ep`, `single` or `compile`.
+    #[serde(default)]
+    pub record_type: Option<String>,
+    #[serde(default, alias = "cover_xl")]
+    pub cover_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArtistAlbumsPage {
+    #[serde(default = "Vec::new")]
+    data: Vec<DeezerArtistAlbum>,
+    #[serde(default)]
+    next: Option<String>,
+}
+
+/// Albums read from one artist's discography at most.
+pub const ARTIST_ALBUMS_CAP: usize = 300;
+const ARTIST_ALBUMS_PAGE: usize = 100;
+
 fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
@@ -360,5 +388,50 @@ impl PreviewClient {
                 nb_fan: artist.nb_fan,
             })
             .collect())
+    }
+
+    /// Fork: the albums, EPs and singles of Deezer artist `artist_id`, as
+    /// Deezer lists them, at most [`ARTIST_ALBUMS_CAP`]. Empty when Deezer
+    /// has no such artist.
+    ///
+    /// # Errors
+    ///
+    /// The typed failure of a call or of its answer.
+    pub async fn deezer_artist_albums(
+        &self,
+        artist_id: i64,
+        priority: RequestPriority,
+    ) -> Result<Vec<DeezerArtistAlbum>, ProviderError> {
+        let id = artist_id.to_string();
+        let limit = ARTIST_ALBUMS_PAGE.to_string();
+        let mut out: Vec<DeezerArtistAlbum> = Vec::new();
+        while out.len() < ARTIST_ALBUMS_CAP {
+            let index = out.len().to_string();
+            let Some(reply) = self
+                .deezer_get(
+                    &["artist", id.as_str(), "albums"],
+                    &[("index", index.as_str()), ("limit", limit.as_str())],
+                    priority,
+                )
+                .await?
+            else {
+                break;
+            };
+            let page: ArtistAlbumsPage = decode(&reply)?;
+            let count = page.data.len();
+            for mut album in page.data {
+                album.release_date = nonempty(album.release_date).filter(|d| d != "0000-00-00");
+                album.record_type = nonempty(album.record_type);
+                album.cover_url = nonempty(album.cover_url);
+                if !out.iter().any(|kept| kept.id == album.id) {
+                    out.push(album);
+                }
+            }
+            if count == 0 || page.next.is_none() {
+                break;
+            }
+        }
+        out.truncate(ARTIST_ALBUMS_CAP);
+        Ok(out)
     }
 }
