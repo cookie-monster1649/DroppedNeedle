@@ -74,7 +74,7 @@ fn fresh_migrate_marks_version_and_seeds() {
     assert_eq!(scalar(&connection, "PRAGMA user_version"), latest_version());
     // 177 upstream tables, plus the extension ledger and the catalogue
     // extension's tables (fork).
-    assert_eq!(table_names(&connection).len(), 189);
+    assert_eq!(table_names(&connection).len(), 190);
     assert_eq!(
         scalar(
             &connection,
@@ -3861,6 +3861,11 @@ mod extension_chains {
                 "catalog",
                 "catalog/0011_source_editions.sql",
                 "939178c9c3222a78e757ae31787edde85a22dfa6ac9d441821c653cd3f87401d",
+            ),
+            (
+                "catalog",
+                "catalog/0012_source_catalogue.sql",
+                "e88c569950b6fecb7f728e659c2009af5d30dcb19d956eb9dcbf413451324db3",
             ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {

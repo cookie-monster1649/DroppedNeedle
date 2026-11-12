@@ -103,7 +103,15 @@ impl MetadataSource for DeezerSource {
                     ids.release = virtual_ids::mint(DEEZER, Kind::Release, album);
                     (edition, ids)
                 }
-                None => return Ok(None),
+                // Fork: an album of a source artist's discography the
+                // library does not hold: its own group and release.
+                None => match super::catalogue::stored(conn, album)? {
+                    Some(listed) => {
+                        let ids = AlbumIds::of(&listed);
+                        (listed, ids)
+                    }
+                    None => return Ok(None),
+                },
             },
         };
         Ok(match (entity, identity.kind) {

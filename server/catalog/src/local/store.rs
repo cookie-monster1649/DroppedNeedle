@@ -140,6 +140,11 @@ impl LocalCatalog {
         Ok(counted)
     }
 
+    /// Fork: the database, for the source catalogue's writes.
+    pub(crate) fn db(&self) -> &Db {
+        &self.db
+    }
+
     /// One pooled read named `name`. A busy database answers
     /// [`StoreError::Busy`], any other failure [`StoreError::Internal`].
     pub(crate) async fn read<R, F>(&self, name: &'static str, op: F) -> Result<R, StoreError>

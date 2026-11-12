@@ -678,6 +678,8 @@ impl LibraryServices {
             .musicbrainz
             .attach_virtual_source(Arc::new(crate::sources::LibrarySources::new(
                 setup.db.clone(),
+                setup.deezer.clone(),
+                setup.clock.clone(),
             )));
         let operations = operations(setup);
         Self {
