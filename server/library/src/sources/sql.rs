@@ -98,4 +98,69 @@ droppedneedle_kernel::sql! {
     pub(super) EDITIONS_OF = "SELECT provider_album_id \
          FROM source_editions WHERE provider = ?1 AND parent_album_id = ?2 \
          ORDER BY release_date IS NULL, release_date, provider_album_id";
+
+    /// Keep provider `?1`'s album `?2` as artist `?3` (`?4`) lists it; a
+    /// kept track list stays.
+    pub(super) KEEP_LISTED = "INSERT INTO source_catalogue \
+         (provider, provider_album_id, provider_artist_id, artist_name, title, release_date, \
+          record_type, cover_url, listed_at) \
+         VALUES (?1, ?2, ?3, COALESCE((SELECT m.artist_name FROM library_album_provider_matches m \
+           WHERE m.provider = ?1 AND m.provider_artist_id = ?3 AND m.artist_name <> '' \
+           ORDER BY m.match_state = 'confirmed' DESC LIMIT 1), ?4), ?5, ?6, ?7, ?8, ?9) \
+         ON CONFLICT (provider, provider_album_id) DO UPDATE SET \
+           title = excluded.title, release_date = excluded.release_date, \
+           record_type = excluded.record_type, \
+           cover_url = COALESCE(excluded.cover_url, source_catalogue.cover_url), \
+           listed_at = excluded.listed_at";
+
+    /// Keep provider `?1`'s album `?2` with its details and track list; an
+    /// album already listed keeps the artist it was listed under.
+    pub(super) KEEP_CATALOGUE_ALBUM = "INSERT INTO source_catalogue \
+         (provider, provider_album_id, provider_artist_id, artist_name, title, release_date, \
+          record_type, cover_url, upc, label, genres_json, tracks_json, listed_at, fetched_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13) \
+         ON CONFLICT (provider, provider_album_id) DO UPDATE SET \
+           artist_name = excluded.artist_name, title = excluded.title, \
+           release_date = COALESCE(excluded.release_date, source_catalogue.release_date), \
+           record_type = COALESCE(excluded.record_type, source_catalogue.record_type), \
+           cover_url = COALESCE(excluded.cover_url, source_catalogue.cover_url), \
+           upc = excluded.upc, label = excluded.label, genres_json = excluded.genres_json, \
+           tracks_json = excluded.tracks_json, fetched_at = excluded.fetched_at";
+
+    /// Provider `?1`'s catalogue album `?2` when its track list is missing
+    /// or older than `?3`, and no match or edition describes it.
+    pub(super) CATALOGUE_DUE = "SELECT 1 FROM source_catalogue c \
+         WHERE c.provider = ?1 AND c.provider_album_id = ?2 \
+           AND (c.tracks_json IS NULL OR c.fetched_at IS NULL OR c.fetched_at < ?3) \
+           AND NOT EXISTS (SELECT 1 FROM library_album_provider_matches m \
+             WHERE m.provider = ?1 AND m.provider_album_id = ?2) \
+           AND NOT EXISTS (SELECT 1 FROM source_editions e \
+             WHERE e.provider = ?1 AND e.provider_album_id = ?2)";
+
+    /// Provider `?1`'s catalogue album `?2`: artist id and name, title,
+    /// date, record type, cover, UPC, label, genres, tracks.
+    pub(super) CATALOGUE_ALBUM = "SELECT provider_artist_id, artist_name, title, release_date, \
+           record_type, cover_url, upc, label, genres_json, tracks_json \
+         FROM source_catalogue WHERE provider = ?1 AND provider_album_id = ?2";
+
+    /// Provider `?1`'s catalogue albums of artist `?2` that are not an
+    /// edition of another album, newest first: album, title, date, type.
+    pub(super) CATALOGUE_OF_ARTIST = "SELECT c.provider_album_id, c.title, c.release_date, \
+           c.record_type \
+         FROM source_catalogue c \
+         WHERE c.provider = ?1 AND c.provider_artist_id = ?2 \
+           AND NOT EXISTS (SELECT 1 FROM source_editions e \
+             WHERE e.provider = c.provider AND e.provider_album_id = c.provider_album_id) \
+         ORDER BY c.release_date IS NULL, c.release_date DESC, c.title";
+
+    /// Whether a live album holds provider `?1`'s album `?2`: by release
+    /// group `?3`, or by a confirmed match.
+    pub(super) CATALOGUE_HELD = "SELECT EXISTS (SELECT 1 FROM local_album_external_identities i \
+             JOIN local_albums b ON b.id = i.local_album_id \
+           WHERE i.provider = 'musicbrainz' AND lower(i.release_group_mbid) = ?3 \
+             AND b.retired_into_album_id IS NULL AND b.has_indexed_track = 1) \
+         OR EXISTS (SELECT 1 FROM library_album_provider_matches m \
+             JOIN local_albums b ON b.id = m.local_album_id \
+           WHERE m.provider = ?1 AND m.provider_album_id = ?2 AND m.match_state = 'confirmed' \
+             AND b.retired_into_album_id IS NULL AND b.has_indexed_track = 1)";
 }
