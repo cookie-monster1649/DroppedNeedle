@@ -31396,3 +31396,163 @@ async fn a_deezer_artist_on_a_stand_in_id_has_a_page() {
         "a stand-in id with no match has no cover"
     );
 }
+
+/// Stage d: a Deezer edition of an album on stand-in ids is listed beside
+/// the matched one, and its release reads with its own track list.
+#[tokio::test]
+async fn a_deezer_edition_is_listed_beside_the_matched_album() {
+    use droppedneedle_providers::preview::{DeezerAlbum, DeezerAlbumTrack};
+    use droppedneedle_providers::virtual_ids;
+
+    let rig = Rig::start("lib-deezer-editions").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-e/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-e/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    let (status, tracks) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracks}");
+    let held = &tracks["items"][0];
+    let tracks_json = json!([
+        {"provider_track_id": "4001", "title": held["title"],
+         "duration_seconds": held["duration_seconds"], "disc": 1, "position": 1, "isrc": null}
+    ]);
+    app.seed_with(
+        "INSERT INTO library_album_provider_matches (local_album_id, provider, \
+         provider_album_id, title, artist_name, provider_artist_id, release_date, \
+         record_type, tracks_json, score, match_state, created_at, updated_at) \
+         VALUES (?1, 'deezer', '66', 'Edition Record', 'Edition Artist', '39', \
+         '2019-05-06', 'album', ?2, 1.0, 'confirmed', 1, 1)",
+        rusqlite::params![album, tracks_json.to_string()],
+    )
+    .await;
+    let db = droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+        .expect("database opens");
+    assert_eq!(
+        droppedneedle_library::sources::adopt::backfill_some(&db, 10, 1_800_000_000_000)
+            .expect("backfill"),
+        1
+    );
+    let group = virtual_ids::mint("deezer", virtual_ids::Kind::ReleaseGroup, "66");
+    let release = virtual_ids::mint("deezer", virtual_ids::Kind::Release, "66");
+    let deluxe = virtual_ids::mint("deezer", virtual_ids::Kind::Release, "67");
+
+    let edition = DeezerAlbum {
+        id: 67,
+        title: "Edition Record (Deluxe)".to_owned(),
+        artist_name: "Edition Artist".to_owned(),
+        artist_id: Some(39),
+        artist_picture: None,
+        upc: Some("0123456789012".to_owned()),
+        label: None,
+        release_date: Some("2020-01-01".to_owned()),
+        record_type: Some("album".to_owned()),
+        cover_url: None,
+        link: None,
+        genres: Vec::new(),
+        tracks: vec![
+            DeezerAlbumTrack {
+                id: 5001,
+                title: "Deluxe One".to_owned(),
+                duration: Some(200),
+                isrc: None,
+                position: 1,
+                disc: 1,
+            },
+            DeezerAlbumTrack {
+                id: 5002,
+                title: "Deluxe Bonus".to_owned(),
+                duration: Some(180),
+                isrc: None,
+                position: 2,
+                disc: 1,
+            },
+        ],
+    };
+    let matched = db
+        .read_blocking("test.match", |conn| {
+            droppedneedle_library::provider_match::match_of(conn, &album)
+                .map_err(droppedneedle_library::identify::stores::StoreError::from)
+        })
+        .expect("match reads")
+        .expect("the match");
+    assert!(droppedneedle_library::sources::editions::is_edition_of(
+        &matched,
+        67,
+        &edition.title,
+        Some(39)
+    ));
+    assert!(!droppedneedle_library::sources::editions::is_edition_of(
+        &matched,
+        68,
+        "Another Record",
+        Some(39)
+    ));
+    db.write_blocking(
+        droppedneedle_kernel::db::Lane::Foreground,
+        "test.keep_editions",
+        |tx| {
+            droppedneedle_library::sources::editions::keep_in(tx, &matched, &[edition], 1)
+                .map_err(droppedneedle_library::identify::stores::StoreError::from)
+        },
+    )
+    .expect("editions kept");
+
+    let (status, editions) = app
+        .call(
+            "GET",
+            &format!("/api/v3/albums/{group}/editions"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{editions}");
+    let listed: Vec<&str> = editions["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|item| item["release_mbid"].as_str())
+        .collect();
+    assert_eq!(
+        listed,
+        vec![release.as_str(), deluxe.as_str()],
+        "{editions}"
+    );
+    assert_eq!(editions["owned_release_mbid"], json!(release), "{editions}");
+
+    let sources = droppedneedle_library::sources::LibrarySources::new(db.clone());
+    let document = db
+        .read_blocking("test.edition_release", |conn| {
+            droppedneedle_library::sources::LibrarySources::document_in(
+                sources.sources(),
+                conn,
+                "release",
+                &deluxe,
+            )
+            .map_err(droppedneedle_library::identify::stores::StoreError::from)
+        })
+        .expect("document reads")
+        .expect("the edition's release has a document");
+    assert_eq!(document["release-group"]["id"], json!(group), "{document}");
+    assert_eq!(document["media"][0]["track-count"], json!(2), "{document}");
+    assert_eq!(
+        document["media"][0]["tracks"][1]["title"],
+        json!("Deluxe Bonus"),
+        "{document}"
+    );
+}

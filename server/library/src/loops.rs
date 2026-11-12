@@ -90,6 +90,8 @@ const PROVIDER_MATCH_BATCH: u32 = 50;
 const SOURCE_ADOPT_BATCH: u32 = 10;
 /// Fork: albums on stand-in ids looked up at MusicBrainz per tick.
 const SOURCE_PROMOTE_BATCH: u32 = 2;
+/// Fork: albums on stand-in ids whose Deezer editions are looked up per tick.
+const SOURCE_EDITIONS_BATCH: u32 = 2;
 const PROVIDER_MATCH_FAILED: &str = "PROVIDER_MATCH_FAILED";
 
 /// Fork: the merge of albums that are plainly one album (same folder, same
@@ -802,6 +804,7 @@ pub(crate) fn start_loops(
     // Fork: confirmed albums take their stand-in identity, and albums on
     // one move to MusicBrainz once it has a confident match.
     let (source_db, source_clock) = (setup.db.clone(), setup.clock.clone());
+    let editions = matches.editions();
     let promotion = crate::sources::promote::Promotion::new(
         setup.db.clone(),
         setup.identify_store.clone(),
@@ -827,6 +830,14 @@ pub(crate) fn start_loops(
             )? {
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "source promotion check failed"),
+            }
+            match drive(
+                &match_handle,
+                "source editions",
+                editions.check_some(SOURCE_EDITIONS_BATCH),
+            )? {
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "source edition check failed"),
             }
             match drive(
                 &match_handle,

@@ -22,6 +22,7 @@
 
 pub mod adopt;
 pub mod deezer;
+pub mod editions;
 pub mod promote;
 pub(crate) mod sql;
 

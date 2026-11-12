@@ -416,6 +416,16 @@ impl ProviderMatches {
         Self { db, deezer, clock }
     }
 
+    /// The Deezer editions of albums on stand-in ids, read through the
+    /// same client.
+    pub fn editions(&self) -> crate::sources::editions::SourceEditions {
+        crate::sources::editions::SourceEditions::new(
+            self.db.clone(),
+            self.deezer.clone(),
+            self.clock.clone(),
+        )
+    }
+
     /// Look for a match for up to `batch` albums. Answers how many got a
     /// suggestion.
     ///
