@@ -86,6 +86,10 @@ const DEEZER_LINK_BATCH: u32 = 10;
 pub const PROVIDER_MATCH_JOB: &str = "library-provider-matches";
 const PROVIDER_MATCH_EVERY: Duration = Duration::from_secs(60);
 const PROVIDER_MATCH_BATCH: u32 = 50;
+/// Fork: confirmed albums given their stand-in identity per tick.
+const SOURCE_ADOPT_BATCH: u32 = 10;
+/// Fork: albums on stand-in ids looked up at MusicBrainz per tick.
+const SOURCE_PROMOTE_BATCH: u32 = 2;
 const PROVIDER_MATCH_FAILED: &str = "PROVIDER_MATCH_FAILED";
 
 /// Fork: the merge of albums that are plainly one album (same folder, same
@@ -795,19 +799,43 @@ pub(crate) fn start_loops(
         },
     )?;
     let (matches, match_handle) = (services.provider_matches.clone(), Handle::current());
+    // Fork: confirmed albums take their stand-in identity, and albums on
+    // one move to MusicBrainz once it has a confident match.
+    let (source_db, source_clock) = (setup.db.clone(), setup.clock.clone());
+    let promotion = crate::sources::promote::Promotion::new(
+        setup.db.clone(),
+        setup.identify_store.clone(),
+        setup.identify.clone(),
+    );
     supervisor.periodic_blocking(
         PROVIDER_MATCH_JOB,
         Schedule::new(PROVIDER_MATCH_EVERY)
             .with_initial_delay(Duration::from_secs(45))
             .with_jitter(Duration::from_secs(10))
             .with_backoff(Duration::from_secs(300), Duration::from_secs(3600)),
-        move |_ctx| match drive(
-            &match_handle,
-            "provider matches",
-            matches.suggest_some(PROVIDER_MATCH_BATCH),
-        )? {
-            Ok(_) => Ok(Next::Continue),
-            Err(error) => Err(TickError::new(PROVIDER_MATCH_FAILED, error)),
+        move |_ctx| {
+            let now = source_clock.now_ms();
+            if let Err(error) =
+                crate::sources::adopt::backfill_some(&source_db, SOURCE_ADOPT_BATCH, now)
+            {
+                tracing::warn!(%error, "stand-in identities could not be backfilled");
+            }
+            match drive(
+                &match_handle,
+                "source promotion",
+                promotion.check_some(SOURCE_PROMOTE_BATCH, now),
+            )? {
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "source promotion check failed"),
+            }
+            match drive(
+                &match_handle,
+                "provider matches",
+                matches.suggest_some(PROVIDER_MATCH_BATCH),
+            )? {
+                Ok(_) => Ok(Next::Continue),
+                Err(error) => Err(TickError::new(PROVIDER_MATCH_FAILED, error)),
+            }
         },
     )?;
     let (artists, artist_handle) = (services.artist_suggestions.clone(), Handle::current());

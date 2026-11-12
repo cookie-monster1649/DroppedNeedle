@@ -966,7 +966,8 @@ pub fn release_from_wire(wire: MbRelease, old_ids: Vec<String>) -> Result<Releas
                     .filter(|isrc| !isrc.is_empty())
                     .collect(),
                 genres: wire_genres(&recording.genres),
-                links: Vec::new(),
+                // Fork: a stand-in track keeps its source's ids.
+                links: crate::sources::deezer::track_links(&track.id, recording),
             });
         }
     }

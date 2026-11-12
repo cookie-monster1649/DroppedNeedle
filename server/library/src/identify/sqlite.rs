@@ -1153,6 +1153,22 @@ impl SqliteIdentifyStore {
     }
 }
 
+/// Fork: keep `release`'s document inside the caller's transaction, at
+/// `now` (seconds): a source's stand-in edition is stored when an album
+/// takes it, as identification stores a fetched one.
+///
+/// # Errors
+///
+/// A store fault, or a document that does not encode.
+pub(crate) fn keep_release_in(
+    tx: &Transaction<'_>,
+    release: &Release,
+    now: f64,
+) -> Result<(), StoreError> {
+    let stored = stored_release(tx, &release.id.trim().to_ascii_lowercase(), 0.0)?;
+    store_release(tx, release, stored, now)
+}
+
 /// Write `release`'s document under its own id and every merged id that
 /// redirects to it, then drop expired documents nothing names. `stored`
 /// is the document on file for its id, whose merged ids are kept: a
