@@ -29,6 +29,8 @@ pub fn statement_files() -> Vec<StatementFile> {
         crate::imports::sql::registered(),
         crate::landing::sql::registered(),
         crate::requests::sql::registered(),
+        // Fork: the source-album leftover sweep.
+        crate::requests::source_leftovers::sql::registered(),
         crate::search_jobs::sql::registered(),
         crate::test_support::sql::registered(),
     ]
