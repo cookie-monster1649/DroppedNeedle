@@ -68,9 +68,11 @@ pub mod rates;
 pub mod singleflight;
 pub mod skiddle;
 pub mod spotify;
+// Fork: stand-in ids for non-MusicBrainz metadata sources.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod ticketmaster;
+pub mod virtual_ids;
 pub mod web_address;
 pub mod wikidata;
 pub mod youtube;

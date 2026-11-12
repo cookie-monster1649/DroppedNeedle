@@ -133,6 +133,8 @@ pub struct MusicBrainzClient {
     mirror: Executor,
     official_root: String,
     brainzmash_root: String,
+    // Fork: answers lookups of stand-in ids (see `virtual_ids`).
+    virtual_source: crate::virtual_ids::VirtualSlot,
 }
 
 impl MusicBrainzClient {
@@ -152,7 +154,17 @@ impl MusicBrainzClient {
             mirror,
             official_root: official_root.to_owned(),
             brainzmash_root: brainzmash_root.to_owned(),
+            virtual_source: crate::virtual_ids::VirtualSlot::default(),
         }
+    }
+
+    /// Fork: attach the source that answers lookups of stand-in ids. Every
+    /// clone of this client shares it.
+    pub fn attach_virtual_source(
+        &self,
+        source: std::sync::Arc<dyn crate::virtual_ids::VirtualSource>,
+    ) {
+        self.virtual_source.attach(source);
     }
 
     /// The source `settings` select.
@@ -206,6 +218,15 @@ pub struct MusicBrainzView {
 }
 
 impl MusicBrainzView {
+    /// Fork: attach the source that answers lookups of stand-in ids, for
+    /// every view and clone of the client.
+    pub fn attach_virtual_source(
+        &self,
+        source: std::sync::Arc<dyn crate::virtual_ids::VirtualSource>,
+    ) {
+        self.client.attach_virtual_source(source);
+    }
+
     /// The source the next request goes to.
     pub fn source(&self) -> MbSource {
         match &self.source {
@@ -641,6 +662,27 @@ impl MusicBrainzView {
     where
         E: DeserializeOwned,
     {
+        // Fork: a stand-in id is answered from its source, never sent.
+        if crate::virtual_ids::is_virtual(mbid) {
+            let Some(source) = self.client.virtual_source.get() else {
+                return Ok(None);
+            };
+            let id = mbid.trim().to_ascii_lowercase();
+            return Ok(match source.lookup(entity, &id).await {
+                Some(document) => serde_json::from_value(document)
+                    .map(|entity| {
+                        Some(Lookup {
+                            entity,
+                            redirects: Vec::new(),
+                        })
+                    })
+                    .unwrap_or_else(|error| {
+                        tracing::warn!(%error, entity, id, "stand-in document did not fit");
+                        None
+                    }),
+                None => None,
+            });
+        }
         let mut params = Vec::new();
         let inc = sorted_includes(includes);
         if !inc.is_empty() {
@@ -678,6 +720,16 @@ impl MusicBrainzView {
         mut params: Vec<(String, String)>,
         criticality: Criticality,
     ) -> Result<WireOutcome, ProviderError> {
+        // Fork: a browse or search naming a stand-in id finds nothing.
+        if segments
+            .iter()
+            .any(|part| crate::virtual_ids::mentions_virtual(part))
+            || params
+                .iter()
+                .any(|(_, value)| crate::virtual_ids::mentions_virtual(value))
+        {
+            return Ok(WireOutcome::Missing);
+        }
         let source = self.source();
         let client = &self.client;
         let (executor, base_text) = match &source {
