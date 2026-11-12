@@ -93,6 +93,8 @@ pub const ACQUIRE_LOOPS: &[&str] = &[
     crate::probes::PROBE_JOB,
     crate::readiness::SOURCE_WATCH_JOB,
     crate::imports::spotify_sync::SYNC_JOB,
+    // Fork: a source album's leftovers.
+    crate::requests::source_leftovers::LEFTOVER_JOB,
 ];
 
 /// The sections the acquisition clients are built from.
@@ -765,6 +767,11 @@ impl AcquireSetup {
         crate::held::spawn_held_prune(supervisor, self.held.clone())?;
         crate::import_folder::spawn_import_folder(supervisor, self.import_folder.clone())?;
         crate::imports::spotify_sync::spawn_spotify_sync(supervisor, self.spotify_sync.clone())?;
+        // Fork: a source album's leftovers asked for one by one.
+        crate::requests::source_leftovers::spawn_source_leftovers(
+            supervisor,
+            self.requests.clone(),
+        )?;
         crate::probes::spawn_probe_loop(
             supervisor,
             self.probe_cache.clone(),

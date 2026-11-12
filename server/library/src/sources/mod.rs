@@ -156,6 +156,11 @@ impl LibrarySources {
         }
     }
 
+    /// The sources, for [`Self::document_in`].
+    pub fn sources(&self) -> &[Arc<dyn MetadataSource>] {
+        &self.sources
+    }
+
     /// The document for `entity` stand-in id `id`, read on a blocking
     /// connection.
     ///
