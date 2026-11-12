@@ -32,10 +32,14 @@ use crate::concerts::sweep::ConcertsSweep;
 pub fn statement_files() -> Vec<StatementFile> {
     vec![
         crate::artwork::sql::registered(),
+        // Fork: the source cover fallback.
+        crate::artwork::source_covers::sql::registered(),
         crate::collections::sql::registered(),
         crate::concerts::sql::registered(),
         crate::discover::sql::registered(),
         crate::local::sql::registered(),
+        // Fork: artist pages on stand-in ids.
+        crate::metadata::source_artist::sql::registered(),
         crate::search::sql::registered(),
         crate::youtube::sql::registered(),
     ]
@@ -65,7 +69,12 @@ pub fn artwork(platform: &Platform, providers: &Providers) -> ArtworkService {
             Arc::clone(&platform.clock),
         ),
         LocalArtwork::new(platform.db.clone()),
-        Arc::new(providers.coverart.clone()),
+        // Fork: stand-in ids take their source's cover.
+        Arc::new(crate::artwork::source_covers::SourceCovers::new(
+            Arc::new(providers.coverart.clone()),
+            Arc::new(providers.images.clone()),
+            platform.db.clone(),
+        )),
         platform.settings.live(),
         Arc::new(providers.images.clone()),
         Arc::new(NoArtistImages),

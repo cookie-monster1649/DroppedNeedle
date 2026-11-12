@@ -30161,3 +30161,178 @@ async fn a_deezer_album_on_stand_in_ids_is_requested_as_one_download() {
         "a track already asked for is not asked again"
     );
 }
+
+/// Stage c: the artist page of a Deezer artist on a stand-in id shows the
+/// library's albums by it and the Deezer picture, and never sends the
+/// stand-in id out.
+#[tokio::test]
+async fn a_deezer_artist_on_a_stand_in_id_has_a_page() {
+    use droppedneedle_providers::virtual_ids;
+
+    let rig = Rig::start("lib-deezer-artist").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-s/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-s/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    let (status, tracks) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracks}");
+    let held = &tracks["items"][0];
+    let tracks_json = json!([
+        {"provider_track_id": "3001", "title": held["title"],
+         "duration_seconds": held["duration_seconds"], "disc": 1, "position": 1, "isrc": null}
+    ]);
+    let picture = "https://cdn-images.dzcdn.net/images/artist/abc/1000x1000-000000-80-0-0.jpg";
+    app.seed_with(
+        "INSERT INTO library_album_provider_matches (local_album_id, provider, \
+         provider_album_id, title, artist_name, provider_artist_id, artist_picture_url, \
+         release_date, record_type, cover_url, tracks_json, score, match_state, \
+         created_at, updated_at) \
+         VALUES (?1, 'deezer', '77', 'Deezer Record', 'Deezer Singer', '29', ?2, \
+         '2020-01-02', 'album', \
+         'https://cdn-images.dzcdn.net/images/cover/def/1000x1000-000000-80-0-0.jpg', \
+         ?3, 1.0, 'confirmed', 1, 1)",
+        rusqlite::params![album, picture, tracks_json.to_string()],
+    )
+    .await;
+    let db = droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+        .expect("database opens");
+    assert_eq!(
+        droppedneedle_library::sources::adopt::backfill_some(&db, 10, 1_800_000_000_000)
+            .expect("backfill"),
+        1
+    );
+    let artist = virtual_ids::mint("deezer", virtual_ids::Kind::Artist, "29");
+    let group = virtual_ids::mint("deezer", virtual_ids::Kind::ReleaseGroup, "77");
+
+    let (status, page) = app
+        .call("GET", &format!("/api/v3/artists/{artist}"), &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["name"], json!("Deezer Singer"), "{page}");
+    assert_eq!(page["images"]["thumb_url"], json!(picture), "{page}");
+    let listed: Vec<&str> = page["albums"]
+        .as_array()
+        .expect("albums")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(listed, vec![group.as_str()], "{page}");
+
+    let (status, releases) = app
+        .call(
+            "GET",
+            &format!("/api/v3/artists/{artist}/releases"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{releases}");
+    assert_eq!(releases["albums"][0]["id"], json!(group), "{releases}");
+
+    let (status, owned) = app
+        .call(
+            "GET",
+            &format!("/api/v3/artists/{artist}/owned-releases"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{owned}");
+    assert_eq!(owned["items"][0]["id"], json!(group), "{owned}");
+    assert_eq!(owned["complete"], json!(true), "{owned}");
+
+    let (status, _) = app
+        .call(
+            "GET",
+            &format!("/api/v3/artists/{artist}/lastfm?artist_name=Deezer%20Singer"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    // An album on stand-in ids with no art of its own takes the Deezer
+    // cover from its match; the archive is never asked for a stand-in id.
+    use droppedneedle_catalog::artwork::remote::{ImageFetch, RemoteCovers, RemoteImages};
+    use droppedneedle_providers::coverart::{ArtworkBytes, DownloadSize, EntityKind};
+    use droppedneedle_providers::{ProviderError, RequestPriority};
+    struct NoArchive;
+    impl RemoteCovers for NoArchive {
+        fn front<'a>(
+            &'a self,
+            _: EntityKind,
+            mbid: &'a str,
+            _: DownloadSize,
+            _: RequestPriority,
+        ) -> futures_util::future::BoxFuture<'a, Result<Option<ArtworkBytes>, ProviderError>>
+        {
+            Box::pin(async move { panic!("the archive was asked for {mbid}") })
+        }
+    }
+    struct Fetched(std::sync::Mutex<Vec<String>>);
+    impl RemoteImages for Fetched {
+        fn fetch<'a>(
+            &'a self,
+            url: &'a str,
+            _: RequestPriority,
+        ) -> futures_util::future::BoxFuture<'a, ImageFetch> {
+            self.0.lock().unwrap().push(url.to_owned());
+            Box::pin(async {
+                ImageFetch::Found(ArtworkBytes {
+                    bytes: vec![1, 2, 3],
+                    content_type: "image/jpeg".to_owned(),
+                })
+            })
+        }
+    }
+    let images = std::sync::Arc::new(Fetched(std::sync::Mutex::new(Vec::new())));
+    let covers = droppedneedle_catalog::artwork::source_covers::SourceCovers::new(
+        std::sync::Arc::new(NoArchive),
+        images.clone(),
+        db.clone(),
+    );
+    let cover = covers
+        .front(
+            EntityKind::ReleaseGroup,
+            &group,
+            DownloadSize::Size500,
+            RequestPriority::UserInitiated,
+        )
+        .await
+        .expect("the cover answers")
+        .expect("a cover");
+    assert_eq!(cover.bytes, vec![1, 2, 3]);
+    assert_eq!(
+        *images.0.lock().unwrap(),
+        vec!["https://cdn-images.dzcdn.net/images/cover/def/1000x1000-000000-80-0-0.jpg"]
+    );
+    let unknown = virtual_ids::mint("deezer", virtual_ids::Kind::ReleaseGroup, "999");
+    assert!(
+        covers
+            .front(
+                EntityKind::ReleaseGroup,
+                &unknown,
+                DownloadSize::Size500,
+                RequestPriority::UserInitiated,
+            )
+            .await
+            .expect("answers")
+            .is_none(),
+        "a stand-in id with no match has no cover"
+    );
+}
