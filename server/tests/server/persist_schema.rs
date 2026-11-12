@@ -4269,6 +4269,11 @@ mod extension_chains {
                 "catalog/0010_source_identities.sql",
                 "e9c51224441e16b4be5cdedd121cdc37cb44178e991b862f67526af92fb5611c",
             ),
+            (
+                "catalog",
+                "catalog/0011_source_editions.sql",
+                "939178c9c3222a78e757ae31787edde85a22dfa6ac9d441821c653cd3f87401d",
+            ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {

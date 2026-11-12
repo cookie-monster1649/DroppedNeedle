@@ -49,6 +49,7 @@ pub static CATALOG: ExtensionChain = ExtensionChain {
         extension!(8, "catalog/0008_artist_deezer_links.sql"),
         extension!(9, "catalog/0009_want_positions.sql"),
         extension!(10, "catalog/0010_source_identities.sql"),
+        extension!(11, "catalog/0011_source_editions.sql"),
     ],
 };
 
