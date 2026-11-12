@@ -121,6 +121,23 @@ pub struct Request {
     redirects: Redirects,
 }
 
+impl Request {
+    /// Fork: true when the URL or body holds a stand-in id.
+    fn carries_virtual_id(&self) -> bool {
+        crate::virtual_ids::mentions_virtual(self.url.as_str())
+            || match &self.body {
+                Body::Empty => false,
+                Body::Form(fields) => fields.iter().any(|(key, value)| {
+                    crate::virtual_ids::mentions_virtual(key)
+                        || crate::virtual_ids::mentions_virtual(value)
+                }),
+                Body::Json(bytes) => {
+                    crate::virtual_ids::mentions_virtual(&String::from_utf8_lossy(bytes))
+                }
+            }
+    }
+}
+
 impl std::fmt::Debug for Request {
     // The path or query can hold a key, so only the method and host show.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -639,6 +656,14 @@ impl Executor {
         request: Request,
         priority: RequestPriority,
     ) -> Result<Reply, ProviderError> {
+        // Fork: a stand-in id (see `virtual_ids`) names nothing at any
+        // service, so a request carrying one is never sent.
+        if request.carries_virtual_id() {
+            tracing::debug!(provider = self.spec.source, "stand-in id kept off the wire");
+            return Err(ProviderError::NotFound {
+                provider: self.spec.source,
+            });
+        }
         // An image fetch is not bounded here: its callers bound the
         // person's wait themselves and keep fetching, so it is turned down
         // only during a long cooldown.
