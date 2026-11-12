@@ -65,9 +65,28 @@ impl AdditionalInfo {
         let info = Self {
             duration_ms: (duration_ms > 0).then_some(duration_ms),
             recording_mbid: recording_mbid
+                // Fork: a stand-in id names no MusicBrainz recording.
+                .filter(|mbid| !droppedneedle_providers::virtual_ids::is_virtual(mbid))
                 .and_then(|mbid| uuid::Uuid::parse_str(mbid.trim()).ok())
                 .map(|mbid| mbid.hyphenated().to_string()),
         };
         (info.duration_ms.is_some() || info.recording_mbid.is_some()).then_some(info)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AdditionalInfo;
+
+    /// Fork: a stand-in recording id is never scrobbled; the play still is.
+    #[test]
+    fn a_stand_in_recording_is_left_out_of_a_scrobble() {
+        let stand_in = "d0ab1e00-50c3-8abc-9def-0123456789ab";
+        let info = AdditionalInfo::of(1000, Some(stand_in)).expect("the length stays");
+        assert_eq!(info.recording_mbid, None);
+        assert_eq!(info.duration_ms, Some(1000));
+        let real = "32f2a529-448a-3868-963d-7b42b003b9cd";
+        let info = AdditionalInfo::of(0, Some(real)).expect("a real id stays");
+        assert_eq!(info.recording_mbid.as_deref(), Some(real));
     }
 }

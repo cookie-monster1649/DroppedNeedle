@@ -288,6 +288,10 @@ impl CaaClient {
 /// A lowercase MBID, or the refusal to send a malformed one.
 fn normalize(mbid: &str) -> Result<String, ProviderError> {
     let normalized = mbid.trim().to_ascii_lowercase();
+    // Fork: the archive holds no art for a stand-in id.
+    if crate::virtual_ids::is_virtual(&normalized) {
+        return Err(ProviderError::NotFound { provider: SOURCE });
+    }
     if is_valid_mbid(&normalized) {
         Ok(normalized)
     } else {
