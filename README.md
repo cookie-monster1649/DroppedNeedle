@@ -1,18 +1,83 @@
 > [!WARNING]
-> **This is an AI vibe-coded fork** of [DroppedNeedle](https://github.com/DroppedNeedle/DroppedNeedle), built with AI coding tools rather than written by hand, and not affiliated with or supported by the upstream project. A full list of modifications can be seen in the [commit history](https://github.com/cookie-monster1649/DroppedNeedle/commits/nuc/v3.0.0-beta.4/). The main ones:
->
-> - **Spotify metadata:** songs from Spotify import with Spotify's title, artist, album, ISRC and Spotify link, even when MusicBrainz doesn't know them. A download that agrees with Spotify's details imports by itself, and held files can be matched to a Spotify song by hand.
-> - **Playlist syncing:** playlists imported from Spotify are labelled as such, can follow Spotify, and new songs added there are requested automatically.
-> - **Playlist status:** each song shows whether it's in your library, missing, fetching, waiting for a decision or failed, with a request button per row.
-> - **Fewer false rejections:** a requested song imports from whichever release it comes from (a soundtrack, a compilation, another edition), and a junk album-artist tag no longer holds it back. An album accepts any edition of itself, with missing tracks counted against the edition that arrived.
-> - **Editions on the downloads page:** a copy that holds the whole of another edition says so, showing the requested and the available edition, and "Use this edition" switches the request to it.
-> - **Better identification:** partial albums match MusicBrainz by their exact name or by ISRC.
-> - **Album tools:** "Merge albums" folds every copy of a release into one, keeping the best-quality file of each song. "In Library · 1/15" is a button that requests the missing tracks.
-> - **Faster queue:** several Soulseek searches run at once, and the queue counts what is waiting correctly.
-> - **Previews:** a 30-second sample button on song downloads and on held files, to check a song by ear.
-> - **And more:** track requests without a MusicBrainz ID, playlist songs linking to library copies as they land, and rejection reasons in the logs.
->
-> The fork's plan and notes are in [docs/fork/PLAN.md](docs/fork/PLAN.md). Report problems with this fork here, not upstream.
+> **This is an AI vibe-coded fork** of [DroppedNeedle](https://github.com/DroppedNeedle/DroppedNeedle). It was built with AI coding tools rather than written by hand, and it is not affiliated with or supported by the upstream project. Report problems with this fork here, not upstream. Every change is in the [commit history](https://github.com/cookie-monster1649/DroppedNeedle/commits/nuc/v3.0.0-beta.4/).
+
+## About this fork
+
+This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`. It's built as the image `ghcr.io/cookie-monster1649/droppedneedle:nuc-v3.0.0-beta.4` and runs on a single home-server deployment. Its main aim: music MusicBrainz doesn't know (Deezer and Spotify releases) should be handled as well as music it does.
+
+### What it changes
+
+**Deezer metadata and other sources**
+- **Deezer as a metadata source (stage a):** Deezer albums and artists get permanent stand-in IDs prefixed `d0ab1e00-50c3-8…`, recorded in a `source_identities` table. Their pages are served from Deezer data, and a single guard keeps these IDs away from MusicBrainz, Cover Art Archive, ListenBrainz, Last.fm and AudioDB.
+- **Deezer tags:** files from Deezer albums get `DEEZER_ALBUMID`, `DEEZER_TRACKID` and `DEEZER_ARTISTID` tags.
+- **Switching to MusicBrainz:** an album moves to MusicBrainz automatically once MusicBrainz has a confident match.
+- **Deezer album pages:** these show the full tracklist, with missing tracks in line, just like a MusicBrainz album.
+- **Writing names to files:** accepting a Deezer match writes its titles and artists into the files.
+- **Matched, not local-only:** albums with an accepted Deezer match count as matched rather than local-only.
+
+**Check albums, matching and editions**
+- **Best guess:** albums MusicBrainz lacks get Deezer suggestions, and strong guesses from any catalogue appear under Best guess.
+- **New tabs:** an Artists tab lists artists MusicBrainz lacks, and a Duplicates tab lists albums held twice.
+- **Closest candidate:** an album with no good match shows its nearest candidate, so you can use that.
+- **Default edition:** requests default to the edition with the track count most editions share, not a bonus edition.
+- **Matching by hand:** a hand match keeps the edition that was requested. Partial albums match by exact name or ISRC.
+- **Fewer albums stuck in To Decide:** when the same tracks arrive more than once, only the best copy of each is kept. Weak held albums then re-match by themselves.
+- **Merging:** "Merge albums" folds copies of a release together, keeping the best file of each song. Same-folder albums merge by themselves.
+
+**Spotify and playlists**
+- **Spotify metadata:** songs import with Spotify's title, artist, album, ISRC and link, even when MusicBrainz doesn't know them.
+- **Syncing:** imported playlists can follow Spotify, and new songs added there are requested automatically.
+- **Import screen:** a loading state while the tracklist is fetched, then accurate per-track statuses.
+- **Linking to your library:** playlist entries link to the library's copy by ID, by request, or by name. Name-linking ignores apostrophe style (’ vs ').
+- **Removed songs:** a song removed from a playlist is remembered for that file only. It isn't fetched again, but can be requested anew.
+- **Per-row status:** each row shows in library, missing, fetching, waiting for a decision or failed, with its own request button.
+
+**Requests and downloads**
+- **Requests by name:** you can request a track by name, with no MusicBrainz ID. A download that agrees with the request imports by itself.
+- **Already in the library:** a request for a song the library already holds is marked done, not searched. Held imports never file a second copy of a song.
+- **Track numbers:** song requests carry a track and disc number (from Spotify or Deezer), used when a file has none.
+- **Deezer album requests:** "Request album?" on a Deezer album asks for every missing track.
+- **Plugin sources:** YouTube and SoundCloud plugin searches get the album and the track length. Length is checked against Deezer, and a hold with no release doesn't blocklist the source.
+- **Usenet:** a finished job is found even when the mount points at a category folder.
+- **Downloads page:** a found copy can be used as the other edition it holds. Several Soulseek searches run at once. A 30-second sample button sits on downloads and held files.
+
+**Artists**
+- **Linking to MusicBrainz:** an artist with no MusicBrainz ID is linked through its Deezer artist's MusicBrainz URL relation.
+- **Shared IDs:** if another artist already holds that MusicBrainz ID, a merge is suggested in the Artists tab.
+
+**Other**
+- **Login:** `OIDC_NEW_USER_ROLE` sets the role for new SSO accounts.
+- **Player:** a track that ends unheard is reloaded transcoded. A playlist row's play button starts the queue at that row.
+
+### Keeping upstream merges easy
+- Changed upstream code is marked with `Fork:` comments, kept small, and placed at hook points.
+- New behaviour lives in additive tables (fork extension migrations) and isolated modules, for example the source layer.
+- Stand-in IDs reuse the existing MusicBrainz ID columns, so upstream's routes, caches and plans work unchanged.
+- To merge upstream:
+  1. `git fetch upstream && git merge upstream/v3`
+  2. Resolve the `Fork:` hunks.
+  3. Run the Rust and frontend suites. Source gates (`tests/server/source_gates.rs`) list fork spawn sites.
+
+### Build and deploy
+- **Normal path:** pushing the branch runs CI, and the `nuc-image` workflow publishes the image. The deployment then runs `docker compose pull && docker compose up -d`.
+- **Fallback when GitHub Actions is unavailable** (for example, budget-blocked):
+  1. Run the test suites locally.
+  2. `docker build` the image on the host under the same tag, keeping a rollback tag of the previous image.
+  3. Run `up -d` without pulling.
+  4. Prune the build cache.
+- **Before any deploy:** back up `library.db`, and `metadata-cache.db` when sources change, and restart only when no import is running.
+
+### Known gaps
+- **The metadata-source roadmap is incomplete:**
+  - b: downloads and landing against a source release, giving a one-download Deezer album request;
+  - c: Deezer artist pages, bios and covers;
+  - d: matching and editions;
+  - e: Spotify as a source.
+
+  Until stage b, a Deezer album request is one search per song.
+- **CI Audit and Licenses fail:** this is the bundled-SQLite advisory in `libsqlite3-sys`, which upstream also has.
+
+The fork's plan and notes are in [docs/fork/PLAN.md](docs/fork/PLAN.md).
 
 <div align="center">
 
