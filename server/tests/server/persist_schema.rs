@@ -74,7 +74,7 @@ fn fresh_migrate_marks_version_and_seeds() {
     assert_eq!(scalar(&connection, "PRAGMA user_version"), latest_version());
     // 177 upstream tables, plus the extension ledger and the catalogue
     // extension's tables (fork).
-    assert_eq!(table_names(&connection).len(), 185);
+    assert_eq!(table_names(&connection).len(), 187);
     assert_eq!(
         scalar(
             &connection,
@@ -1498,6 +1498,7 @@ const FOREIGN_KEYS: &[(&str, &str, &str, &str)] = &[
     ("catalog_playlist_declines", "playlist_id", "catalog_playlists", "CASCADE"),
     ("library_album_provider_matches", "local_album_id", "local_albums", "CASCADE"),
     ("library_artist_suggestions", "local_artist_id", "local_artists", "CASCADE"),
+    ("source_promotion_checks", "local_album_id", "local_albums", "CASCADE"),
     ("catalog_playlist_entry_identities", "entry_id", "catalog_playlist_tracks", "CASCADE"),
     ("acquire_spotify_playlist_syncs", "playlist_id", "catalog_playlists", "CASCADE"),
     ("catalog_playlist_tracks", "playlist_id", "catalog_playlists", "CASCADE"),
@@ -2119,6 +2120,24 @@ fn state_columns() -> Vec<StateColumn> {
             "provider",
             &droppedneedle_library::provider_match::MatchProvider::ALL,
             droppedneedle_library::provider_match::MatchProvider::as_str,
+        ),
+        state(
+            "source_identities",
+            "provider",
+            &droppedneedle_library::provider_match::MatchProvider::ALL,
+            droppedneedle_library::provider_match::MatchProvider::as_str,
+        ),
+        state(
+            "source_identities",
+            "kind",
+            &droppedneedle_providers::virtual_ids::Kind::ALL,
+            |kind| kind.as_str(),
+        ),
+        state(
+            "source_promotion_checks",
+            "outcome",
+            &droppedneedle_library::sources::CheckOutcome::ALL,
+            droppedneedle_library::sources::CheckOutcome::as_str,
         ),
         state(
             "library_artist_suggestions",
@@ -3831,6 +3850,11 @@ mod extension_chains {
                 "catalog",
                 "catalog/0009_want_positions.sql",
                 "1456e328241855b583dca1965c79fd9b358249ae3eaf8261457c068a8ca114e5",
+            ),
+            (
+                "catalog",
+                "catalog/0010_source_identities.sql",
+                "e9c51224441e16b4be5cdedd121cdc37cb44178e991b862f67526af92fb5611c",
             ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {

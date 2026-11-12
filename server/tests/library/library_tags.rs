@@ -2076,6 +2076,10 @@ fn picard_edits() -> Vec<TagEdit> {
         one(TagField::DjMixer, "Dee Jay"),
         one(TagField::Writer, "Wanda Writer"),
         one(TagField::Director, "Dora Director"),
+        // Fork: the Deezer ids of an album from Deezer.
+        one(TagField::DeezerAlbumId, "359557537"),
+        one(TagField::DeezerTrackId, "2001234567"),
+        one(TagField::DeezerArtistId, "4050205"),
     ]
     .into_iter()
     .chain(credit_edits())

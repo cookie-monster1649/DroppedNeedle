@@ -101,6 +101,10 @@ pub enum TagField {
     DjMixer,
     Writer,
     Director,
+    // Fork: the Deezer ids of an album confirmed from Deezer.
+    DeezerAlbumId,
+    DeezerTrackId,
+    DeezerArtistId,
 }
 
 /// How a new value for a field must look. Values replayed from a file
@@ -187,7 +191,7 @@ pub const MP4_MEAN: &str = "com.apple.iTunes";
 pub const MUSICBRAINZ_UFID_OWNER: &str = "http://musicbrainz.org";
 
 impl TagField {
-    pub const ALL: [TagField; 61] = [
+    pub const ALL: [TagField; 64] = [
         TagField::Title,
         TagField::TitleSort,
         TagField::Artist,
@@ -249,6 +253,9 @@ impl TagField {
         TagField::DjMixer,
         TagField::Writer,
         TagField::Director,
+        TagField::DeezerAlbumId,
+        TagField::DeezerTrackId,
+        TagField::DeezerArtistId,
     ];
 
     /// The managed-field name publish requests and documents use.
@@ -315,6 +322,9 @@ impl TagField {
             TagField::DjMixer => "dj_mixer",
             TagField::Writer => "writer",
             TagField::Director => "director",
+            TagField::DeezerAlbumId => "deezer_album_id",
+            TagField::DeezerTrackId => "deezer_track_id",
+            TagField::DeezerArtistId => "deezer_artist_id",
         }
     }
 
@@ -361,6 +371,8 @@ impl TagField {
             | TagField::MusicBrainzReleaseGroupId
             | TagField::AcoustIdId
             | TagField::AcoustIdFingerprint
+            | TagField::DeezerAlbumId
+            | TagField::DeezerTrackId
             | TagField::Comment => FieldKind::Single,
             TagField::ReplayGainTrackGain | TagField::ReplayGainAlbumGain => FieldKind::Gain,
             TagField::ReplayGainTrackPeak | TagField::ReplayGainAlbumPeak => FieldKind::Peak,
@@ -434,6 +446,9 @@ impl TagField {
             TagField::DjMixer => &["DJMIXER"],
             TagField::Writer => &["WRITER"],
             TagField::Director => &["DIRECTOR"],
+            TagField::DeezerAlbumId => &["DEEZER_ALBUMID"],
+            TagField::DeezerTrackId => &["DEEZER_TRACKID"],
+            TagField::DeezerArtistId => &["DEEZER_ARTISTID"],
         }
     }
 
@@ -517,6 +532,9 @@ impl TagField {
             TagField::DjMixer => Id3Target::People("TIPL", Role::Named("DJ-mix")),
             TagField::Writer => Id3Target::User("Writer"),
             TagField::Director => Id3Target::User("DIRECTOR"),
+            TagField::DeezerAlbumId => Id3Target::User("DEEZER_ALBUMID"),
+            TagField::DeezerTrackId => Id3Target::User("DEEZER_TRACKID"),
+            TagField::DeezerArtistId => Id3Target::User("DEEZER_ARTISTID"),
             TagField::Comment => Id3Target::Comment,
             TagField::Copyright => Id3Target::Text("TCOP"),
             TagField::EncodedBy => Id3Target::Text("TENC"),
@@ -594,6 +612,9 @@ impl TagField {
             TagField::DjMixer => Mp4Target::Freeform("DJMIXER"),
             TagField::Writer => Mp4Target::Freeform("writer"),
             TagField::Director => Mp4Target::Text(*b"\xa9dir"),
+            TagField::DeezerAlbumId => Mp4Target::Freeform("DEEZER_ALBUMID"),
+            TagField::DeezerTrackId => Mp4Target::Freeform("DEEZER_TRACKID"),
+            TagField::DeezerArtistId => Mp4Target::Freeform("DEEZER_ARTISTID"),
             TagField::Performer | TagField::Arranger => return None,
         })
     }

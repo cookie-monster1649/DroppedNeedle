@@ -673,6 +673,12 @@ pub struct LibraryServices {
 impl LibraryServices {
     /// Build every service once over `setup`.
     pub fn build(setup: &LibrarySetup) -> Self {
+        // Fork: lookups of stand-in ids read the library's source data.
+        setup
+            .musicbrainz
+            .attach_virtual_source(Arc::new(crate::sources::LibrarySources::new(
+                setup.db.clone(),
+            )));
         let operations = operations(setup);
         Self {
             repairs: Repairs::new(

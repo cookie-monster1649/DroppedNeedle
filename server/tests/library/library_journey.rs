@@ -7920,6 +7920,58 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
         .expect("links");
     assert_eq!(links, 1, "the file is linked to its Deezer track");
 
+    // Fork: the album took Deezer stand-in ids as its identity, and the
+    // album page (the catalogue's MusicBrainz endpoints) reads them from
+    // the match, with nothing asked of MusicBrainz.
+    let group = detail["release_group_mbid"]
+        .as_str()
+        .expect("an identity")
+        .to_owned();
+    assert!(
+        droppedneedle_providers::virtual_ids::is_virtual(&group),
+        "{detail}"
+    );
+    assert!(
+        droppedneedle_providers::virtual_ids::is_virtual(
+            detail["release_mbid"].as_str().unwrap_or("")
+        ),
+        "{detail}"
+    );
+    let (status, basic) = app
+        .call(
+            "GET",
+            &format!("/api/v3/albums/{group}/basic"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{basic}");
+    assert_eq!(basic["title"], detail["title"], "{basic}");
+    let (status, listed) = app
+        .call(
+            "GET",
+            &format!("/api/v3/albums/{group}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let titles = listed.to_string();
+    assert!(titles.contains("A Song Not Held"), "{listed}");
+    let kept: i64 = app
+        .db()
+        .query_row(
+            "SELECT COUNT(*) FROM source_identities WHERE provider = 'deezer' \
+             AND provider_album_id = '42'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("source identities");
+    assert!(
+        kept >= 4,
+        "group, release, artist, label and tracks are kept: {kept}"
+    );
+
     let (status, body) = app
         .call(
             "PUT",
@@ -8065,13 +8117,30 @@ async fn an_accepted_deezer_match_writes_its_names_into_the_files() {
     assert_eq!(code, StatusCode::OK, "{body}");
 
     let tags = format!("/api/v3/library/albums/{album}/edition/tags");
-    // Only the match the album holds now, at revision 0.
+    // Fork: accepting gave the album its Deezer stand-in identity, so the
+    // write names that identity's revision.
+    let revision: i64 = app
+        .db()
+        .query_row(
+            "SELECT row_revision FROM local_album_external_identities WHERE local_album_id = ?1",
+            [&album],
+            |row| row.get(0),
+        )
+        .expect("the album took its Deezer identity");
+    // Fork: the edition is the Deezer album's stand-in release now; the
+    // old `deezer:` write is for albums without an identity only.
+    let release = droppedneedle_providers::virtual_ids::mint(
+        "deezer",
+        droppedneedle_providers::virtual_ids::Kind::Release,
+        "42",
+    );
+    // Only the match the album holds now, at its revision.
     let (code, body) = app
         .call(
             "POST",
             &tags,
             &headers,
-            Some(json!({"release_mbid": "deezer:41", "expected_identity_revision": 0})),
+            Some(json!({"release_mbid": "deezer:41", "expected_identity_revision": revision})),
         )
         .await;
     assert_eq!(code, StatusCode::CONFLICT, "{body}");
@@ -8080,7 +8149,7 @@ async fn an_accepted_deezer_match_writes_its_names_into_the_files() {
             "POST",
             &tags,
             &headers,
-            Some(json!({"release_mbid": "deezer:42", "expected_identity_revision": 0})),
+            Some(json!({"release_mbid": release, "expected_identity_revision": revision})),
         )
         .await;
     assert_eq!(code, StatusCode::OK, "{queued}");
@@ -8121,22 +8190,19 @@ async fn an_accepted_deezer_match_writes_its_names_into_the_files() {
         );
     }
 
-    // The write asks for a scan, which reads the new names back onto the
-    // same album.
+    // Fork: the Deezer ids go into DEEZER_* tags.
+    assert_eq!(one(TagField::DeezerAlbumId).as_deref(), Some("42"));
+    assert_eq!(one(TagField::DeezerTrackId).as_deref(), Some("1001"));
+    assert_eq!(one(TagField::DeezerArtistId).as_deref(), Some("7"));
+
+    // Fork: an edition write on the album's stand-in identity keeps the
+    // album, its identity and its match.
     let album_uri = format!("/api/v3/library/albums/{album}");
-    let detail = app
-        .until("the scan reads the new names", || {
-            let (album_uri, headers) = (album_uri.clone(), headers);
-            async move {
-                let (status, detail) = app.call("GET", &album_uri, &headers, None).await;
-                (status == StatusCode::OK && detail["title"] == json!("Deezer Title"))
-                    .then_some(detail)
-            }
-        })
-        .await;
+    let (status, detail) = app.call("GET", &album_uri, &headers, None).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
     let after = track_album(app, &headers, &track).await;
     assert_eq!(after, album, "the album keeps its id");
-    assert_eq!(detail["artist_name"], json!("Deezer Artist"), "{detail}");
+    assert_eq!(detail["identity_state"], json!("deezer"), "{detail}");
     assert_eq!(
         detail["provider_match"]["provider_album_id"],
         json!("42"),
@@ -8148,6 +8214,101 @@ async fn an_accepted_deezer_match_writes_its_names_into_the_files() {
     let undone = read_fields(track_file(&file)).expect("fields read");
     assert_eq!(undone.get(&TagField::Album), before.get(&TagField::Album));
     assert_eq!(undone.get(&TagField::Title), before.get(&TagField::Title));
+}
+
+/// Fork: albums confirmed from Deezer before stand-in ids existed take
+/// them from the backfill, once: a second pass changes nothing, the file
+/// sits on its Deezer track, and the album page reads the stand-in group.
+#[tokio::test]
+async fn confirmed_deezer_albums_take_their_stand_in_identity_once() {
+    use droppedneedle_providers::virtual_ids;
+
+    let rig = Rig::start("lib-deezer-backfill").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-d/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-d/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    let (status, tracks) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracks}");
+    let held = &tracks["items"][0];
+    let tracks_json = json!([
+        {"provider_track_id": "1001", "title": held["title"],
+         "duration_seconds": held["duration_seconds"], "disc": 1, "position": 1, "isrc": null},
+        {"provider_track_id": "1002", "title": "Not Held", "duration_seconds": 90.0,
+         "disc": 1, "position": 2, "isrc": null}
+    ]);
+    app.seed_with(
+        "INSERT INTO library_album_provider_matches (local_album_id, provider, \
+         provider_album_id, title, artist_name, provider_artist_id, release_date, label, \
+         record_type, tracks_json, score, match_state, created_at, updated_at) \
+         VALUES (?1, 'deezer', '77', 'From Deezer', 'Deezer Artist', '9', '2020-01-02', \
+         'A Label', 'ep', ?2, 1.0, 'confirmed', 1, 1)",
+        rusqlite::params![album, tracks_json.to_string()],
+    )
+    .await;
+
+    let db = droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+        .expect("database opens");
+    let now = 1_800_000_000_000;
+    assert_eq!(
+        droppedneedle_library::sources::adopt::backfill_some(&db, 10, now).expect("backfill"),
+        1
+    );
+    assert_eq!(
+        droppedneedle_library::sources::adopt::backfill_some(&db, 10, now).expect("backfill"),
+        0,
+        "a second pass changes nothing"
+    );
+    let group = virtual_ids::mint("deezer", virtual_ids::Kind::ReleaseGroup, "77");
+    let (status, detail) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["release_group_mbid"], json!(group), "{detail}");
+    assert_eq!(detail["identity_state"], json!("deezer"), "{detail}");
+    let (status, basic) = app
+        .call(
+            "GET",
+            &format!("/api/v3/albums/{group}/basic"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{basic}");
+    assert_eq!(basic["title"], json!("From Deezer"), "{basic}");
+    let recording: String = app
+        .db()
+        .query_row(
+            "SELECT recording_mbid FROM local_track_external_identities WHERE local_track_id = ?1",
+            [&track],
+            |row| row.get(0),
+        )
+        .expect("the file is on its Deezer track");
+    assert_eq!(
+        recording,
+        virtual_ids::mint("deezer", virtual_ids::Kind::Recording, "1001")
+    );
 }
 
 /// Fork: an artist with no MusicBrainz link gets the MusicBrainz artist of

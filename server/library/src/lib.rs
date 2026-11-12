@@ -64,6 +64,8 @@ pub mod scans;
 pub mod service;
 pub mod settings;
 pub mod settings_models;
+// Fork: metadata sources other than MusicBrainz (stand-in ids).
+pub mod sources;
 pub mod tags;
 pub mod wiring;
 

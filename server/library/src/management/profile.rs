@@ -610,6 +610,17 @@ pub fn plan_tags(
                 desired.insert(field.name().to_owned(), values);
             }
         }
+        // Fork: a track from Deezer gets its Deezer ids whatever the
+        // managed fields list; they only ever come from the source.
+        for field in [
+            TagField::DeezerTrackId,
+            TagField::DeezerAlbumId,
+            TagField::DeezerArtistId,
+        ] {
+            if let Some(values) = canonical.get(field.name()) {
+                desired.insert(field.name().to_owned(), values.clone());
+            }
+        }
         if credits_missing && extras.credits == super::enrich::Credits::Ready {
             // Fetched within the week, yet not for this track's recording
             // (or a work came without its credits): asking again gives
