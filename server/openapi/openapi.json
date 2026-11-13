@@ -58053,6 +58053,17 @@
         "type": "object",
         "description": "The folder each user's playlists are mirrored into as hardlinks to the\nlibrary files. An empty path turns it off.",
         "properties": {
+          "nextcloud_users": {
+            "type": "object",
+            "description": "Optional explicit Nextcloud user per DroppedNeedle username, written\ninto the folders' `.users.json` for the host helper; it wins over\nmatching by email or SSO identity.",
+            "default": {},
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "path": {
             "type": "string",
             "description": "An absolute folder path as the server sees it, on the same mount as\nthe library, or empty for off.",

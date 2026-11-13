@@ -19902,6 +19902,15 @@ export interface components {
          */
         PlaylistFolders: {
             /**
+             * @description Optional explicit Nextcloud user per DroppedNeedle username, written
+             *     into the folders' `.users.json` for the host helper; it wins over
+             *     matching by email or SSO identity.
+             * @default {}
+             */
+            nextcloud_users: {
+                [key: string]: string;
+            };
+            /**
              * @description An absolute folder path as the server sees it, on the same mount as
              *     the library, or empty for off.
              * @default
