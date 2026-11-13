@@ -160,6 +160,13 @@ section_routes! {
         put put_import_folder: "Save the import folder. Music copied there is imported, then\nremoved from it."
             => "Saved import folder";
     }
+    // Fork: live playlist folders.
+    plain PlaylistFolders at "/api/v3/settings/library/playlist-folders", read admin, write admin {
+        get get_playlist_folders: "Read the live playlist folders setting."
+            => "Playlist folders";
+        put put_playlist_folders: "Save the live playlist folders root. Each user's playlists are\nkept there as folders of hardlinks to the library files."
+            => "Saved playlist folders";
+    }
     plain LyricsSettings at "/api/v3/settings/lyrics", read admin, write admin {
         get get_lyrics_settings: "Read the online lyrics lookup switch."
             => "Lyrics lookup switch";
