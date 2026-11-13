@@ -346,6 +346,48 @@ droppedneedle_kernel::sql! {
                ON e.local_track_id = t.id AND e.provider = 'musicbrainz' \
              WHERE t.local_album_id = ?1 AND +t.availability = 'indexed' \
                AND e.release_track_mbid IS NOT NULL";
+    /// Fork: ghost albums, live rows on a MusicBrainz release with no
+    /// indexed track and every track missing, beside a live album of the
+    /// same release on the same root that has files. Answers the album to
+    /// fold into (the oldest with files) and the ghost.
+    pub(super) GHOST_RELEASE_ALBUMS = "WITH rel AS ( \
+               SELECT a.id, a.root_id, a.created_at, a.has_indexed_track AS live, \
+                      lower(i.release_mbid) AS rel \
+               FROM local_albums a \
+               JOIN local_album_external_identities i \
+                 ON i.local_album_id = a.id AND i.provider = 'musicbrainz' \
+               WHERE a.retired_into_album_id IS NULL \
+                 AND i.release_mbid IS NOT NULL AND trim(i.release_mbid) <> '') \
+             SELECT keep.id, ghost.id FROM rel ghost \
+             JOIN rel keep ON keep.rel = ghost.rel AND keep.root_id = ghost.root_id \
+               AND keep.live = 1 AND keep.id <> ghost.id \
+             WHERE ghost.live = 0 \
+               AND EXISTS (SELECT 1 FROM local_tracks t WHERE t.local_album_id = ghost.id) \
+               AND NOT EXISTS (SELECT 1 FROM local_tracks t WHERE t.local_album_id = ghost.id \
+                 AND t.availability <> 'missing') \
+               AND NOT EXISTS (SELECT 1 FROM rel older WHERE older.rel = keep.rel \
+                 AND older.root_id = keep.root_id AND older.live = 1 \
+                 AND (older.created_at < keep.created_at \
+                      OR (older.created_at = keep.created_at AND older.id < keep.id))) \
+             ORDER BY keep.id, ghost.id";
+    /// Fork: the file paths of an album's tracks, to confirm a ghost's
+    /// files are gone.
+    pub(super) ALBUM_FILE_PATHS = "SELECT file_path FROM local_tracks WHERE local_album_id = ?1";
+    /// Fork: pairs of indexed tracks of albums `?1` and `?2` matched to one
+    /// release track, with each file's format, bit rate, bit depth and
+    /// sample rate.
+    pub(super) RELEASE_TRACK_CLASHES = "SELECT k.id, k.file_format, k.bit_rate, k.bit_depth, \
+               k.sample_rate, f.id, f.file_format, f.bit_rate, f.bit_depth, f.sample_rate \
+             FROM local_tracks k \
+             JOIN local_track_external_identities ke \
+               ON ke.local_track_id = k.id AND ke.provider = 'musicbrainz' \
+             JOIN local_track_external_identities fe ON fe.provider = 'musicbrainz' \
+               AND lower(fe.release_track_mbid) = lower(ke.release_track_mbid) \
+             JOIN local_tracks f ON f.id = fe.local_track_id \
+             WHERE k.local_album_id = ?1 AND f.local_album_id = ?2 \
+               AND +k.availability = 'indexed' AND +f.availability = 'indexed' \
+               AND ke.release_track_mbid IS NOT NULL \
+             ORDER BY k.id, f.id";
     /// Fork: the account an automatic merge is recorded under, the first
     /// administrator.
     pub(super) FIRST_ADMIN = "SELECT id FROM auth_users WHERE role = 'admin' \

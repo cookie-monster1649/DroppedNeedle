@@ -11227,3 +11227,152 @@ async fn same_release_albums_merge_unless_they_clash() {
         "nothing more to merge"
     );
 }
+
+/// Fork: the release identities the same-release tests give every album
+/// and track: one release, release track `rt-2` for files under `b/`,
+/// `rt-1` for the rest.
+const ONE_RELEASE: &str = "INSERT OR IGNORE INTO auth_users (id, display_name, role, created_at) \
+     VALUES ('admin', 'Admin', 'admin', 1); \
+     INSERT INTO local_album_external_identities (local_album_id, release_group_mbid, \
+       release_mbid, decision_source, selected_at) \
+     SELECT DISTINCT local_album_id, 'rg', 'REL-1', 'automatic', 1 FROM local_tracks; \
+     INSERT INTO local_track_external_identities (local_track_id, recording_mbid, \
+       release_mbid, release_track_mbid, decision_source, selected_at) \
+     SELECT id, 'rec-' || relative_path, 'rel-1', \
+       CASE WHEN relative_path LIKE 'b/%' THEN 'rt-2' ELSE 'rt-1' END, 'automatic', 1 \
+     FROM local_tracks;";
+
+/// Fork: an old copy whose files are all gone from disk folds into the
+/// live album of its release even though its missing row names the same
+/// release track, so no "Copies in your library" picker is left.
+#[tokio::test]
+async fn a_ghost_copy_on_a_release_folds_into_the_live_album() {
+    let scratch = ScratchDir::new("scan-release-ghost");
+    let music = scratch.join("music");
+    plant(&music, "a/01.flac", "flac_full_02.flac");
+    plant(&music, "old/01.flac", "flac_full_02.flac");
+    let library = bundle(&scratch).await;
+    scan(&library).await;
+    library.scan_store.db().run_sql(ONE_RELEASE).expect("identities");
+    let ghost_album = query(
+        &library,
+        "SELECT COUNT(DISTINCT local_album_id) FROM local_tracks",
+    );
+    assert_eq!(ghost_album, 2, "two folders, two albums");
+    std::fs::remove_dir_all(music.join("old")).expect("old folder gone");
+    scan(&library).await;
+    assert_eq!(
+        query(
+            &library,
+            "SELECT COUNT(*) FROM local_albums WHERE retired_into_album_id IS NULL \
+             AND has_indexed_track = 0"
+        ),
+        1,
+        "the old folder's album is a ghost"
+    );
+    let corrections = crate::common::library::services(&library).corrections;
+    assert_eq!(
+        corrections.merge_same_release_albums().expect("merge pass"),
+        1,
+        "the ghost folds in"
+    );
+    assert_eq!(
+        query(
+            &library,
+            "SELECT COUNT(*) FROM local_albums WHERE retired_into_album_id IS NULL"
+        ),
+        1,
+        "one live album left"
+    );
+    assert_eq!(
+        query(
+            &library,
+            "SELECT COUNT(*) FROM local_tracks WHERE availability = 'indexed'"
+        ),
+        1,
+        "the live file is untouched"
+    );
+    assert_eq!(
+        corrections.merge_same_release_albums().expect("second pass"),
+        0
+    );
+}
+
+/// Fork: a ghost whose file is back on disk is left for the scan.
+#[tokio::test]
+async fn a_ghost_with_a_file_still_on_disk_is_left_alone() {
+    let scratch = ScratchDir::new("scan-release-ghost-present");
+    let music = scratch.join("music");
+    plant(&music, "a/01.flac", "flac_full_02.flac");
+    plant(&music, "old/01.flac", "flac_full_02.flac");
+    let library = bundle(&scratch).await;
+    scan(&library).await;
+    library.scan_store.db().run_sql(ONE_RELEASE).expect("identities");
+    // The row says missing, but the file is there.
+    library
+        .scan_store
+        .db()
+        .run_sql(
+            "UPDATE local_tracks SET availability = 'missing', missing_at = 1 \
+             WHERE relative_path = 'old/01.flac'; \
+             UPDATE local_albums SET has_indexed_track = 0 WHERE id = \
+             (SELECT local_album_id FROM local_tracks WHERE relative_path = 'old/01.flac');",
+        )
+        .expect("ghost row");
+    let corrections = crate::common::library::services(&library).corrections;
+    assert_eq!(
+        corrections.fold_ghost_release_albums().expect("ghost pass"),
+        0
+    );
+}
+
+/// Fork: two live copies holding a file for one release track: the better
+/// file stays, the other goes to the recycle bin, and the albums merge.
+#[tokio::test]
+async fn a_release_clash_keeps_the_better_file_and_merges() {
+    let scratch = ScratchDir::new("scan-release-clash");
+    let music = scratch.join("music");
+    plant(&music, "a/01.mp3", "mp3_full_01.mp3");
+    plant(&music, "c/01.flac", "flac_full_02.flac");
+    let library = bundle(&scratch).await;
+    scan(&library).await;
+    library.scan_store.db().run_sql(ONE_RELEASE).expect("identities");
+    let services = crate::common::library::services(&library);
+    let corrections = services.corrections;
+    assert_eq!(
+        corrections.merge_same_release_albums().expect("merge pass"),
+        0,
+        "they clash"
+    );
+    assert_eq!(
+        corrections
+            .settle_release_clashes(&services.mutations)
+            .expect("settle"),
+        1,
+        "one copy set aside"
+    );
+    assert_eq!(
+        query(
+            &library,
+            "SELECT COUNT(*) FROM local_tracks WHERE availability = 'indexed' \
+             AND relative_path = 'c/01.flac'"
+        ),
+        1,
+        "the FLAC stays"
+    );
+    assert_eq!(
+        query(
+            &library,
+            "SELECT COUNT(*) FROM local_tracks WHERE availability = 'indexed' \
+             AND relative_path = 'a/01.mp3'"
+        ),
+        0,
+        "the MP3 is set aside"
+    );
+    assert!(!music.join("a/01.mp3").exists(), "its file left the folder");
+    assert_eq!(
+        corrections.merge_same_release_albums().expect("merge pass"),
+        1,
+        "then they merge"
+    );
+}
