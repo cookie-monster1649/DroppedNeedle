@@ -152,12 +152,13 @@ pub fn refuses_links(error: &io::Error) -> bool {
     )
 }
 
-/// A name safe on every share: no `/ \ : * ? " < > |` or control
+/// A name safe on every share: NFC (Nextcloud refuses decomposed names), no `/ \ : * ? " < > |` or control
 /// characters, no leading dots, no trailing dots or spaces, trimmed and
 /// capped at `max` bytes. Empty becomes `fallback`.
 pub fn sanitise(raw: &str, fallback: &str, max: usize) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
     let cleaned: String = raw
-        .chars()
+        .nfc()
         .map(|c| {
             if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
                 '_'
