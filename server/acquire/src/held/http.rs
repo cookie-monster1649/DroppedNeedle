@@ -610,7 +610,8 @@ pub async fn audio_handler(
 /// The held-list routes. Match is for curators; the rest for the entry's
 /// owner and admins, checked by the service.
 pub fn routes() -> Routes<Arc<HeldService>> {
-    Routes::new()
+    // Fork: manual import onto a still-hunting song (`manual_http`).
+    super::manual_http::add_routes(Routes::new())
         .user(routes!(list_handler))
         .user(routes!(recheck_all_handler))
         .user(routes!(import_handler))
