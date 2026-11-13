@@ -15360,6 +15360,11 @@ export interface components {
              */
             next_retry_at?: number | null;
             origin: components["schemas"]["EntryOrigin"];
+            /**
+             * @description Fork: each reason the entry's files are held for, once, said for
+             *     all of them (the artists they claim, the quality they are).
+             */
+            reasons: components["schemas"]["HeldReasonSummary"][];
             /** @description The song, for a track download. */
             recording_mbid?: string | null;
             release_group_mbid?: string | null;
@@ -15433,6 +15438,16 @@ export interface components {
         HeldMatchRequest: {
             file_ids?: number[] | null;
             release_group_mbid: string;
+        };
+        /** @description One reason an entry holds files for, said once for all of them. */
+        HeldReasonSummary: {
+            /** @description What the person can do about it. */
+            action: string;
+            /** @description How many of the entry's files it holds. */
+            count: number;
+            reason: components["schemas"]["Reason"];
+            /** @description What is wrong, for all of them. */
+            text: string;
         };
         /** @description Bulk re-check: these entries, in order, or every entry. */
         HeldRecheckAllRequest: {
