@@ -108,9 +108,12 @@ droppedneedle_kernel::sql! {
            WHERE m.provider = ?1 AND m.provider_artist_id = ?3 AND m.artist_name <> '' \
            ORDER BY m.match_state = 'confirmed' DESC LIMIT 1), ?4), ?5, ?6, ?7, ?8, ?9) \
          ON CONFLICT (provider, provider_album_id) DO UPDATE SET \
-           title = excluded.title, release_date = excluded.release_date, \
-           record_type = excluded.record_type, \
+           title = excluded.title, \
+           release_date = COALESCE(excluded.release_date, source_catalogue.release_date), \
+           record_type = COALESCE(excluded.record_type, source_catalogue.record_type), \
            cover_url = COALESCE(excluded.cover_url, source_catalogue.cover_url), \
+           artist_name = CASE WHEN source_catalogue.artist_name = '' \
+             THEN excluded.artist_name ELSE source_catalogue.artist_name END, \
            listed_at = excluded.listed_at";
 
     /// Keep provider `?1`'s album `?2` with its details and track list; an
@@ -163,4 +166,22 @@ droppedneedle_kernel::sql! {
              JOIN local_albums b ON b.id = m.local_album_id \
            WHERE m.provider = ?1 AND m.provider_album_id = ?2 AND m.match_state = 'confirmed' \
              AND b.retired_into_album_id IS NULL AND b.has_indexed_track = 1)";
+
+    /// Keep provider `?1`'s artist `?2` named `?3` with picture `?4`.
+    pub(super) KEEP_SOURCE_ARTIST = "INSERT INTO source_artists \
+         (provider, provider_artist_id, name, picture_url, kept_at) VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT (provider, provider_artist_id) DO UPDATE SET name = excluded.name, \
+           picture_url = COALESCE(excluded.picture_url, source_artists.picture_url), \
+           kept_at = excluded.kept_at";
+
+    /// The name of provider `?1`'s artist `?2`: as search found it, else as
+    /// a confirmed match or the catalogue credits it.
+    pub(super) SOURCE_ARTIST_NAME = "SELECT name FROM ( \
+           SELECT name, 0 AS rank FROM source_artists \
+            WHERE provider = ?1 AND provider_artist_id = ?2 \
+           UNION ALL SELECT artist_name, 1 FROM library_album_provider_matches \
+            WHERE provider = ?1 AND provider_artist_id = ?2 AND artist_name <> '' \
+           UNION ALL SELECT artist_name, 2 FROM source_catalogue \
+            WHERE provider = ?1 AND provider_artist_id = ?2 AND artist_name <> '') \
+         ORDER BY rank LIMIT 1";
 }

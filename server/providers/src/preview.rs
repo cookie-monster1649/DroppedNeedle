@@ -36,7 +36,7 @@ mod models;
 
 pub use self::catalog::{
     ARTIST_ALBUMS_CAP, DeezerAlbum, DeezerAlbumHit, DeezerAlbumTrack, DeezerArtistAlbum,
-    DeezerArtistDetail,
+    DeezerArtistDetail, DeezerSearchHit, NamedRef,
 };
 
 use self::models::{AlbumSearch, AlbumTracks, DeezerArtist, DeezerFault, Track, TrackSearch};

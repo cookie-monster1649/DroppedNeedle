@@ -15,6 +15,8 @@
 	import { albumHref } from '$lib/utils/entityRoutes';
 	import SearchLibraryChip from './SearchLibraryChip.svelte';
 	import SearchListens from './SearchListens.svelte';
+	// Fork: a small badge on results from Deezer.
+	import { sourceBadge } from '../source/sourceBadge';
 	import {
 		albumInLibrary,
 		albumRequested,
@@ -68,6 +70,11 @@
 		{#if album.year}{album.year}{:else}Unknown{/if}
 		{#if album.artist}
 			<span class="mr-1" aria-hidden="true">·</span>{album.artist}
+		{/if}
+		{#if sourceBadge(album.musicbrainz_id)}
+			<span class="badge badge-xs badge-ghost ml-1 align-middle"
+				>{sourceBadge(album.musicbrainz_id)}</span
+			>
 		{/if}
 	{/snippet}
 	{#snippet footer()}

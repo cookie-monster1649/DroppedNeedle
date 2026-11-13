@@ -31895,4 +31895,54 @@ async fn a_catalogue_album_reads_its_track_list_once() {
             .count()
     };
     assert_eq!(album_reads(), 1, "the kept track list is not read again");
+
+    // Search: Deezer's free-text album and artist hits read with their
+    // artist and picture.
+    wire.answer(
+        "http://127.0.0.1:9/deezer/search/album",
+        200,
+        &json_type,
+        json!({"data": [{"id": 701, "title": "Found", "record_type": "album",
+            "cover_xl": "https://x/701.jpg", "artist": {"id": 39, "name": "Some Singer"}}]})
+        .to_string(),
+    );
+    wire.answer(
+        "http://127.0.0.1:9/deezer/search/artist",
+        200,
+        &json_type,
+        json!({"data": [{"id": 39, "name": "Some Singer", "picture_xl": "https://x/39.jpg"}]})
+            .to_string(),
+    );
+    let previews = Providers::unpaced(wire.clone()).previews.clone();
+    let priority = droppedneedle_providers::RequestPriority::UserInitiated;
+    let albums = previews
+        .deezer_search_text("album", "found", 15, priority)
+        .await
+        .expect("album search");
+    assert_eq!(albums[0].id, 701);
+    assert_eq!(albums[0].image_url.as_deref(), Some("https://x/701.jpg"));
+    assert_eq!(albums[0].artist.as_ref().and_then(|a| a.id), Some(39));
+    let artists = previews
+        .deezer_search_text("artist", "some singer", 15, priority)
+        .await
+        .expect("artist search");
+    assert_eq!(artists[0].title, "Some Singer");
+    assert_eq!(artists[0].image_url.as_deref(), Some("https://x/39.jpg"));
+
+    // A searched artist with no album match still has a name on its page.
+    let artist = db
+        .write_blocking(
+            droppedneedle_kernel::db::Lane::Foreground,
+            "test.keep_artist",
+            |tx| {
+                catalogue::keep_artist(tx, "40", "Searched Singer", Some("https://x/40.jpg"), 1)
+                    .map_err(droppedneedle_kernel::db::DbError::from)
+            },
+        )
+        .expect("artist kept");
+    let doc = sources
+        .lookup("artist", &artist)
+        .await
+        .expect("artist reads");
+    assert_eq!(doc["name"], json!("Searched Singer"));
 }
