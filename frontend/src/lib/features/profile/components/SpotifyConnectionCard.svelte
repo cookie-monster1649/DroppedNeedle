@@ -8,6 +8,8 @@
 	} from '$lib/features/profile/queries/ConnectionsMutations.svelte';
 	import { authStore } from '$lib/stores/authStore.svelte';
 	import { withBasePath } from '$lib/utils/basePath';
+	// Fork: the Spotify library (followed artists, saved albums).
+	import SpotifyLibrarySection from '$lib/features/spotify/components/SpotifyLibrarySection.svelte';
 
 	const connectionsQuery = getConnectionsQuery();
 	const spotify = $derived(
@@ -94,6 +96,13 @@
 
 {#if error}
 	<p class="mt-2 text-sm text-error">{error}</p>
+{/if}
+
+{#if spotify}
+	<SpotifyLibrarySection
+		onreconnect={() => void connect()}
+		reconnecting={connectMutation.isPending}
+	/>
 {/if}
 
 <style>

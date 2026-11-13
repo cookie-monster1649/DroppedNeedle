@@ -89,6 +89,10 @@ pub struct MockRecorder {
     inner: Arc<Mutex<RecordedCalls>>,
     limit_playlists: Arc<std::sync::atomic::AtomicBool>,
     grown: Arc<std::sync::atomic::AtomicBool>,
+    unliked: Arc<std::sync::atomic::AtomicBool>,
+    saved_more: Arc<std::sync::atomic::AtomicBool>,
+    unsaved: Arc<std::sync::atomic::AtomicBool>,
+    unfollowed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MockRecorder {
@@ -100,6 +104,35 @@ impl MockRecorder {
 
     fn is_grown(&self) -> bool {
         self.grown.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Fork: "Midnight Drive" is unliked from now on (Liked Songs keeps
+    /// only "Glass Tides").
+    pub fn unlike_song(&self) {
+        self.unliked
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Fork: "Glass Tides" is saved from now on (a third saved album).
+    pub fn save_album(&self) {
+        self.saved_more
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Fork: "Neon Meridian" is un-saved from now on.
+    pub fn unsave_album(&self) {
+        self.unsaved
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Fork: follow or unfollow "Aurora Current" at Spotify.
+    pub fn set_followed(&self, followed: bool) {
+        self.unfollowed
+            .store(!followed, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn flag(flag: &std::sync::atomic::AtomicBool) -> bool {
+        flag.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Answer `/me/playlists` with a 429 asking for seven seconds from now on.
@@ -274,6 +307,14 @@ pub async fn serve_spotify()
         .route("/playlists/{id}", get(spotify_playlist))
         .route("/playlists/{id}/items", get(spotify_items))
         .route("/playlists/{id}/tracks", get(spotify_tracks_tombstone))
+        .route("/me/tracks", get(spotify_liked))
+        .route("/me/albums", get(spotify_saved_albums))
+        .route("/me/following", get(spotify_following))
+        .route("/tracks/{id}", get(spotify_track))
+        .route("/albums/{id}", get(spotify_album))
+        .route("/artists/{id}", get(spotify_artist))
+        .route("/artists/{id}/albums", get(spotify_artist_albums))
+        .route("/oembed", get(spotify_oembed))
         .with_state(state);
     let accounts = axum::Router::new()
         .route("/api/token", axum::routing::post(spotify_token))
@@ -465,6 +506,210 @@ async fn spotify_items(
     Json(body).into_response()
 }
 
+/// Fork: a Spotify id the library mock answers for "Midnight Drive",
+/// "Neon Meridian" and "Aurora Current" (22 base-62 characters, so links
+/// to them parse).
+pub const SPOTIFY_LINK_TRACK: &str = "0MidnightDrive00000001";
+/// See [`SPOTIFY_LINK_TRACK`].
+pub const SPOTIFY_LINK_ALBUM: &str = "0NeonMeridian000000001";
+/// See [`SPOTIFY_LINK_TRACK`].
+pub const SPOTIFY_LINK_ARTIST: &str = "0AuroraCurrent00000001";
+/// A Spotify album id nothing here matches ("Nothing Known").
+pub const SPOTIFY_LINK_UNKNOWN: &str = "0NothingKnown000000001";
+
+fn midnight_drive() -> Value {
+    json!({
+        "id": "sp-track-1", "type": "track", "name": "Midnight Drive",
+        "artists": [{"name": "Aurora Current"}],
+        "album": {"id": "sp-album-1", "name": "Neon Meridian", "images": []},
+        "external_ids": {"isrc": "USRC17607839"},
+        "track_number": 1, "disc_number": 1, "duration_ms": 183000,
+    })
+}
+
+fn glass_tides_song() -> Value {
+    json!({
+        "id": "sp-track-2", "type": "track", "name": "Glass Tides",
+        "artists": [{"name": "Boreal Static"}],
+        "album": {"id": "sp-album-2", "name": "Glass Tides", "images": []},
+        "external_ids": {"isrc": "USRC17607840"},
+        "track_number": 2, "disc_number": 1, "duration_ms": 201000,
+    })
+}
+
+fn album_body(id: &str, title: &str, artist: &str, tracks: i64) -> Value {
+    json!({
+        "id": id, "name": title, "artists": [{"id": null, "name": artist}],
+        "total_tracks": tracks, "release_date": "2024-05-03", "album_type": "album",
+        "images": [], "external_ids": {},
+    })
+}
+
+fn page_of(all: Vec<Value>, params: &HashMap<String, String>) -> Value {
+    let offset: usize = params
+        .get("offset")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let limit: usize = params
+        .get("limit")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(50);
+    let total = all.len();
+    let items: Vec<Value> = all.into_iter().skip(offset).take(limit).collect();
+    json!({"items": items, "total": total, "next": null})
+}
+
+fn record_path(state: &SpotifyState, path: String) {
+    state
+        .recorder
+        .record(|calls| calls.spotify_paths.push(path));
+}
+
+/// Fork: Liked Songs, newest first.
+async fn spotify_liked(
+    State(state): State<SpotifyState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    record_path(&state, "/me/tracks".to_owned());
+    if !spotify_authed(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut all = vec![json!({"added_at": "2026-11-02T00:00:00Z", "track": glass_tides_song()})];
+    if !MockRecorder::flag(&state.recorder.unliked) {
+        all.push(json!({"added_at": "2026-11-01T00:00:00Z", "track": midnight_drive()}));
+    }
+    Json(page_of(all, &params)).into_response()
+}
+
+/// Fork: saved albums: "Neon Meridian" (matches at MusicBrainz by name)
+/// and "Nothing Known" (matches nowhere); "Glass Tides" once saved.
+async fn spotify_saved_albums(
+    State(state): State<SpotifyState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    record_path(&state, "/me/albums".to_owned());
+    if !spotify_authed(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut all = Vec::new();
+    if MockRecorder::flag(&state.recorder.saved_more) {
+        all.push(json!({"added_at": "2026-11-03T00:00:00Z",
+            "album": album_body("sp-album-2", "Glass Tides", "Boreal Static", 1)}));
+    }
+    if !MockRecorder::flag(&state.recorder.unsaved) {
+        all.push(json!({"added_at": "2026-11-02T00:00:00Z",
+            "album": album_body("sp-album-1", "Neon Meridian", "Aurora Current", 1)}));
+    }
+    all.push(json!({"added_at": "2026-11-01T00:00:00Z",
+        "album": album_body("sp-album-9", "Nothing Known", "Nobody Known", 3)}));
+    Json(page_of(all, &params)).into_response()
+}
+
+/// Fork: followed artists: "Aurora Current" unless unfollowed.
+async fn spotify_following(State(state): State<SpotifyState>, headers: HeaderMap) -> Response {
+    record_path(&state, "/me/following".to_owned());
+    if !spotify_authed(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let mut items = Vec::new();
+    if !MockRecorder::flag(&state.recorder.unfollowed) {
+        items.push(json!({"id": SPOTIFY_LINK_ARTIST, "name": "Aurora Current", "images": []}));
+    }
+    let total = items.len();
+    Json(
+        json!({"artists": {"items": items, "next": null, "cursors": {"after": null},
+        "total": total}}),
+    )
+    .into_response()
+}
+
+async fn spotify_track(
+    State(state): State<SpotifyState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    record_path(&state, format!("/tracks/{id}"));
+    if !spotify_authed(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if id != SPOTIFY_LINK_TRACK {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    Json(midnight_drive()).into_response()
+}
+
+async fn spotify_album(
+    State(state): State<SpotifyState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    record_path(&state, format!("/albums/{id}"));
+    if !spotify_authed(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    match id.as_str() {
+        SPOTIFY_LINK_ALBUM => {
+            Json(album_body(&id, "Neon Meridian", "Aurora Current", 1)).into_response()
+        }
+        SPOTIFY_LINK_UNKNOWN => {
+            Json(album_body(&id, "Nothing Known", "Nobody Known", 3)).into_response()
+        }
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn spotify_artist(
+    State(state): State<SpotifyState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    record_path(&state, format!("/artists/{id}"));
+    if !spotify_authed(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if id != SPOTIFY_LINK_ARTIST {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    Json(json!({"id": id, "name": "Aurora Current", "images": []})).into_response()
+}
+
+async fn spotify_artist_albums(
+    State(state): State<SpotifyState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    record_path(&state, format!("/artists/{id}/albums"));
+    if !spotify_authed(&headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    Json(
+        json!({"items": [album_body("sp-album-1", "Neon Meridian", "Aurora Current", 1)],
+        "next": null}),
+    )
+    .into_response()
+}
+
+/// Fork: the public oEmbed answer: a name, nothing more.
+async fn spotify_oembed(
+    State(state): State<SpotifyState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    record_path(&state, "/oembed".to_owned());
+    let url = params.get("url").cloned().unwrap_or_default();
+    let title = if url.contains(SPOTIFY_LINK_ALBUM) {
+        "Neon Meridian"
+    } else if url.contains(SPOTIFY_LINK_TRACK) {
+        "Midnight Drive"
+    } else if url.contains(SPOTIFY_LINK_ARTIST) {
+        "Aurora Current"
+    } else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    Json(json!({"title": title, "type": "rich"})).into_response()
+}
+
 /// The deprecated `/tracks` path: 403, as live Spotify answers dev-mode
 /// apps after the March 2026 migration. Pins the `/items` choice.
 async fn spotify_tracks_tombstone(State(state): State<SpotifyState>) -> Response {
@@ -503,6 +748,7 @@ async fn spotify_token(
                 "access_token": SPOTIFY_TOKEN,
                 "refresh_token": SPOTIFY_REFRESH,
                 "expires_in": 3600,
+                "scope": "playlist-read-private user-library-read user-follow-read",
             }))
             .into_response()
         }

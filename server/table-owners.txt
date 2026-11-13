@@ -127,7 +127,10 @@ acquire_followed_artists
 acquire_held_entries
 acquire_held_files
 acquire_new_release_feed
+acquire_spotify_followed_artists
+acquire_spotify_library
 acquire_spotify_playlist_syncs
+acquire_spotify_saved_albums
 acquire_want_identities
 acquire_want_positions
 artist_known_releases

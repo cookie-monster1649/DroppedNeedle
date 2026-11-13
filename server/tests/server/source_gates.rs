@@ -831,6 +831,8 @@ const UPLOAD_CLEANUP: &str = "removes unused uploads when the request's guard dr
 const DROP_IMPORT_STEP: &str = "blocking file work, awaited by the drop import that runs it";
 const DROP_IMPORT: &str = "a drop import a request starts; it logs its own end";
 const MIX_REFRESH: &str = "a personal-mix refresh a request starts; it logs its own end";
+const SPOTIFY_LIBRARY: &str =
+    "a fork Spotify library sync a user starts; one per user and part, it records its own end";
 const SEARCH: &str = "an acquire search a request starts; it logs its own end";
 const LIBRARY_CHECK: &str = "the library folder check, bounded by a timeout; one that hangs is left to end and none starts beside it";
 const WORKER_CHILD: &str = "a landing or review the download worker waits for";
@@ -880,6 +882,7 @@ const SPAWN_SITES: &[(&str, usize, &str)] = &[
     ("acquire/src/probes.rs", 2, AWAITED),
     ("acquire/src/requests/batches/mod.rs", 1, AWAITED),
     ("acquire/src/requests/mix.rs", 1, MIX_REFRESH),
+    ("acquire/src/imports/spotify_library.rs", 1, SPOTIFY_LIBRARY),
     ("acquire/src/requests/service/edition.rs", 1, AWAITED),
     ("acquire/src/search_jobs/mod.rs", 1, SEARCH),
     ("acquire/src/slskd/repository.rs", 3, AWAITED),

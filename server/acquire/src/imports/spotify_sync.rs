@@ -281,6 +281,7 @@ pub struct SpotifySync {
     playlists: Arc<CollectionsPlaylistBridge>,
     syncs: SpotifySyncs,
     requests: Arc<dyn SyncRequests>,
+    library: Arc<super::spotify_library::SpotifyLibrary>,
 }
 
 impl SpotifySync {
@@ -290,12 +291,14 @@ impl SpotifySync {
         playlists: Arc<CollectionsPlaylistBridge>,
         syncs: SpotifySyncs,
         requests: Arc<dyn SyncRequests>,
+        library: Arc<super::spotify_library::SpotifyLibrary>,
     ) -> Self {
         Self {
             service,
             playlists,
             syncs,
             requests,
+            library,
         }
     }
 
@@ -343,6 +346,8 @@ impl SpotifySync {
                 }
             }
         }
+        // Fork: followed artists and saved albums.
+        self.library.run_once().await;
         imported
     }
 

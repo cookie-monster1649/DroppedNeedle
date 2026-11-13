@@ -145,6 +145,15 @@ pub struct SpotifyPlaylistItem {
 pub struct SpotifyPlaylistListResponse {
     /// Playlists owned by the caller's Spotify account.
     pub playlists: Vec<SpotifyPlaylistItem>,
+    /// Fork: the caller's Liked Songs as a playlist (id `liked`), when the
+    /// link may read them.
+    #[serde(default)]
+    pub liked_songs: Option<SpotifyPlaylistItem>,
+    /// Fork: the link predates the library scopes: connect Spotify again to
+    /// read Liked Songs, saved albums and followed artists. Imported
+    /// playlists stay.
+    #[serde(default)]
+    pub needs_reconnect: bool,
 }
 
 /// Import start.
@@ -254,4 +263,104 @@ pub struct SabnzbdStatusResponse {
     pub categories: Vec<String>,
     /// Completed dir (the mount hint), when the probe reached it.
     pub complete_dir: Option<String>,
+}
+
+/// Fork: the caller's Spotify library sync (Profile, Spotify card).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpotifyLibraryState {
+    /// The link lacks the library scopes: reconnect Spotify first.
+    pub needs_reconnect: bool,
+    /// Followed artists at Spotify are followed here (never auto-download).
+    pub follow_sync: bool,
+    /// Saved albums are read again every 15 minutes; new ones are flagged
+    /// for review, never requested by themselves.
+    pub album_sync: bool,
+    /// Artists the caller follows at Spotify, when Spotify answered.
+    pub followed_artists: Option<i64>,
+    /// Albums the caller saved at Spotify, when Spotify answered.
+    pub saved_albums: Option<i64>,
+    /// Saved albums flagged new since the last review.
+    pub new_albums: i64,
+    /// Epoch milliseconds of the last followed-artist check.
+    pub artists_checked_at: Option<i64>,
+    /// Epoch milliseconds of the last saved-album check.
+    pub albums_checked_at: Option<i64>,
+    /// A followed-artist sync is running.
+    pub artists_syncing: bool,
+    /// A saved-album scan is running.
+    pub albums_scanning: bool,
+    /// Why the last check failed.
+    pub last_error: Option<String>,
+}
+
+/// Fork: turn the Spotify library syncs on or off.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpotifyLibraryUpdate {
+    /// Follow the artists followed at Spotify.
+    pub follow_sync: bool,
+    /// Keep the saved albums in step.
+    pub album_sync: bool,
+}
+
+/// Fork: one album saved at Spotify, as the review shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpotifySavedAlbum {
+    /// Spotify album id.
+    pub spotify_album_id: String,
+    pub title: String,
+    pub artist_name: String,
+    pub year: Option<i64>,
+    pub cover_url: Option<String>,
+    /// The album here (MusicBrainz release group or Deezer stand-in);
+    /// `None` when nothing matched: not found.
+    pub release_group: Option<String>,
+    /// How it matched: barcode, link, deezer_barcode, name, deezer_name.
+    pub matched_by: Option<String>,
+    /// Saved since the last review; never requested by itself.
+    pub is_new: bool,
+    /// The library holds a copy.
+    pub held: bool,
+    /// A request for it is open or done.
+    pub requested: bool,
+}
+
+/// Fork: the saved-album review.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpotifySavedAlbumList {
+    pub albums: Vec<SpotifySavedAlbum>,
+    /// A scan is running; read again shortly.
+    pub scanning: bool,
+    /// Epoch milliseconds of the last finished scan.
+    pub checked_at: Option<i64>,
+}
+
+/// Fork: what a pasted Spotify link resolved to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct SpotifyResolution {
+    /// `track`, `album` or `artist`.
+    pub kind: String,
+    /// A confident match was found.
+    pub found: bool,
+    /// The name Spotify gives it.
+    pub name: String,
+    /// The credited artist, when known.
+    pub artist: Option<String>,
+    /// The album to open (a track's album too).
+    pub album_id: Option<String>,
+    /// The artist to open.
+    pub artist_id: Option<String>,
+    /// A track's recording on that album, to highlight.
+    pub recording_id: Option<String>,
+    /// `musicbrainz` or `deezer`.
+    pub source: Option<String>,
+    /// What proved it: isrc, link, barcode, name.
+    pub via: Option<String>,
+}
+
+/// Fork: the link to resolve.
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SpotifyResolveQuery {
+    /// An open.spotify.com link or spotify: URI.
+    pub url: String,
 }

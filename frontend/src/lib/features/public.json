@@ -177,6 +177,12 @@
 		"queries/plex.svelte.ts",
 		"queries/plugins/PluginSourceQueries.svelte.ts"
 	],
+	"spotify": [
+		"components/LikedSongsCard.svelte",
+		"components/SpotifyLibrarySection.svelte",
+		"queries/library.svelte.ts",
+		"state/spotifyLink.ts"
+	],
 	"upgrade": [],
 	"youtube": ["components/AlbumYouTubeBar.svelte", "queries/types.ts", "queries/youtube.svelte.ts"]
 }

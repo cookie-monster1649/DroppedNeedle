@@ -195,6 +195,13 @@ const RECORDINGS: &[Recording] = &[
         param: None,
         body: include_str!("../../tests/fixtures/musicbrainz/spotify_release_glass.json"),
     },
+    // Fork: "Midnight Drive" found by its ISRC, for a pasted song link.
+    Recording {
+        path: "/recording",
+        inc: &[],
+        param: Some(("query", Some("isrc:USRC17607839"))),
+        body: include_str!("../../tests/fixtures/musicbrainz/spotify_isrc_midnight.json"),
+    },
 ];
 
 /// The recording for a request, if one was made for it.

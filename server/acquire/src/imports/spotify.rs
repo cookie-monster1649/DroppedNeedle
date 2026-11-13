@@ -11,7 +11,8 @@ use super::error::ImportsError;
 use super::models::{SpotifyAuthUrlResponse, SpotifyPlaylistItem, SpotifyPlaylistListResponse};
 use super::spotify_albums::{AlbumResolver, ProvenAlbum, SpotifyAlbum};
 use super::spotify_client::{
-    SpotifyClient, SpotifyError, TokenRefresher, best_image_url, playlist_track_count,
+    LIKED_SONGS, LIKED_SONGS_NAME, SpotifyClient, SpotifyError, TokenRefresher, best_image_url,
+    playlist_track_count,
 };
 use super::spotify_oauth::SpotifyConnection;
 use super::spotify_store::{CollectionsPlaylistBridge, SqliteSpotifyLinks};
@@ -173,6 +174,23 @@ impl SpotifyImportService {
         ))
     }
 
+    /// Fork: the Spotify client the library sync reads through.
+    pub fn client(&self) -> &SpotifyClient {
+        &self.client
+    }
+
+    /// Fork: refreshing API access over one user's link at `priority`,
+    /// with whether the link carries the library scopes.
+    pub async fn access(
+        &self,
+        user_id: &str,
+        priority: RequestPriority,
+    ) -> Result<(TokenRefresher<'_>, bool), ImportFailure> {
+        let link = self.link(user_id).await?;
+        let library = link.has_library_scopes();
+        Ok((self.refresher(user_id, link, priority)?, library))
+    }
+
     /// Owned playlists annotated with the imported mapping. Only playlists
     /// whose owner id matches the caller's Spotify id are listed; the id is
     /// fetched from `/me` when the link row does not carry it yet.
@@ -181,6 +199,7 @@ impl SpotifyImportService {
         user_id: &str,
     ) -> Result<SpotifyPlaylistListResponse, ImportFailure> {
         let stored = self.link(user_id).await?;
+        let library = stored.has_library_scopes();
         let mut spotify_user_id = stored.spotify_user_id.clone();
         // The listing answers a person waiting on the page.
         let refresher = self.refresher(user_id, stored, RequestPriority::UserInitiated)?;
@@ -201,6 +220,26 @@ impl SpotifyImportService {
             }
         }
 
+        // Fork: Liked Songs, listed first by the page.
+        let liked_songs = if library {
+            match self.client.liked_songs_count(&refresher).await {
+                Ok(count) => Some(SpotifyPlaylistItem {
+                    id: LIKED_SONGS.to_owned(),
+                    name: LIKED_SONGS_NAME.to_owned(),
+                    description: String::new(),
+                    track_count: count,
+                    cover_url: None,
+                    owner: String::new(),
+                    imported_playlist_id: imported.get(LIKED_SONGS).cloned(),
+                }),
+                Err(error) => {
+                    tracing::info!(?error, "spotify liked songs unreadable");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let playlists = listed
             .into_iter()
             .filter(|playlist| playlist.owner.id == spotify_user_id)
@@ -214,7 +253,11 @@ impl SpotifyImportService {
                 id: playlist.id,
             })
             .collect();
-        Ok(SpotifyPlaylistListResponse { playlists })
+        Ok(SpotifyPlaylistListResponse {
+            playlists,
+            liked_songs,
+            needs_reconnect: !library,
+        })
     }
 
     /// Ensure the internal record for one Spotify playlist: the
