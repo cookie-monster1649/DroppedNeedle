@@ -46,6 +46,7 @@ pub mod models;
 pub(crate) mod placement;
 pub mod reasons;
 pub(crate) mod release_join;
+mod release_merge;
 mod reset;
 pub(crate) mod retag_merge;
 mod retag_pairs;

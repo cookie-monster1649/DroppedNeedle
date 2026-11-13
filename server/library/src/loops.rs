@@ -793,8 +793,12 @@ pub(crate) fn start_loops(
         Schedule::new(SAME_FOLDER_EVERY)
             .with_initial_delay(Duration::from_secs(90))
             .with_backoff(Duration::from_secs(60), SAME_FOLDER_EVERY),
+        // Fork: then albums on one release (`corrections::release_merge`).
+        // The first pass, shortly after start, is the backfill.
         move |_ctx| match caught("same-folder merge", || {
-            corrections.merge_same_folder_albums()
+            corrections
+                .merge_same_folder_albums()
+                .and_then(|folded| Ok(folded + corrections.merge_same_release_albums()?))
         })? {
             Ok(_) => Ok(Next::Continue),
             Err(error) => Err(TickError::new(SAME_FOLDER_FAILED, error.to_string())),
