@@ -2138,6 +2138,26 @@ async fn followed(db: &Db, user_id: &str) -> Vec<(String, i64)> {
     .expect("follows read")
 }
 
+/// A 429 from Spotify stops the artist sync instead of skipping on.
+#[tokio::test]
+async fn a_rate_limited_artist_sync_stops_and_follows_nothing() {
+    let (_auth, bundle, deps, recorder, user_id, _guards) = library_rig().await;
+    recorder.slow_artist_albums();
+    let stopped = deps
+        .spotify_library
+        .sync_artists(&user_id, RequestPriority::UserInitiated)
+        .await;
+    assert!(stopped.is_err(), "a 429 stops the run, not just one artist");
+    assert!(followed(&bundle.db, &user_id).await.is_empty());
+    let asked = recorder
+        .snapshot()
+        .spotify_paths
+        .iter()
+        .filter(|path| path.starts_with("/artists/") && path.ends_with("/albums"))
+        .count();
+    assert_eq!(asked, 1, "no artist is asked after the first 429");
+}
+
 /// Fork: artists followed at Spotify are followed here without
 /// auto-download; unfollowing at Spotify removes only a follow the sync
 /// made, never one made by hand.
