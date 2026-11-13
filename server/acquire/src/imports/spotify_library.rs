@@ -571,13 +571,27 @@ impl SpotifyLibrary {
             if !due(false, row.and_then(|row| row.matched_at), now) {
                 continue;
             }
-            let titles = client.artist_album_titles(&refresher, &id).await?;
+            // One artist Spotify or a lookup refuses is skipped (and
+            // retried when due), never the whole sync.
+            let titles = match client.artist_album_titles(&refresher, &id).await {
+                Ok(titles) => titles,
+                Err(error) => {
+                    tracing::warn!(user = %user_id, artist = %id, error = ?error, "spotify artist albums failed; skipped");
+                    continue;
+                }
+            };
             let facts = ArtistFacts {
                 spotify_id: id.clone(),
                 name: name.clone(),
                 album_titles: titles,
             };
-            let found = resolve_artist(&facts, &lookups).await?;
+            let found = match resolve_artist(&facts, &lookups).await {
+                Ok(found) => found,
+                Err(error) => {
+                    tracing::warn!(user = %user_id, artist = %id, error = %error, "spotify artist match failed; skipped");
+                    continue;
+                }
+            };
             let mut by_sync = false;
             if let Some(found) = &found {
                 out.matched += 1;
@@ -948,7 +962,12 @@ impl SpotifyLibrary {
             }
             (Some(refresher), LinkKind::Artist) => {
                 let artist = client.artist(refresher, &link.id).await?;
-                let titles = client.artist_album_titles(refresher, &link.id).await?;
+                // The albums only back a name match; without them the
+                // match is just stricter.
+                let titles = client
+                    .artist_album_titles(refresher, &link.id)
+                    .await
+                    .unwrap_or_default();
                 out.name = artist.name.clone();
                 let facts = ArtistFacts {
                     spotify_id: link.id.clone(),
