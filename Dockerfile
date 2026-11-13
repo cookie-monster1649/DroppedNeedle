@@ -108,6 +108,29 @@ RUN curl -fsSL --retry 3 -o "ffmpeg-${FFMPEG_VERSION}.tar.xz" "https://ffmpeg.or
     && ./ffmpeg -version > /out/doc/BUILD \
     && cp "../ffmpeg-${FFMPEG_VERSION}.tar.xz" /out/doc/
 
+# Fork: yt-dlp for a still-hunting song's manual import from a YouTube or
+# SoundCloud link. The standalone build, pinned and checked against the
+# release's SHA2-256SUMS. Bump the version and both sums together.
+FROM debian:bookworm-slim AS ytdlp
+
+ARG TARGETARCH
+ARG YTDLP_VERSION=2026.10.26
+ARG YTDLP_SHA256_AMD64=767ba9dce7052aa196f8b12652f433d76de128ba168966fa84b6394d5e6c6795
+ARG YTDLP_SHA256_ARM64=e87e9533e89fe5889abaa21f5114dfe7756d6aa6219b83551add04d48b18e483
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN case "${TARGETARCH:-amd64}" in \
+        amd64) asset=yt-dlp_linux; sum="${YTDLP_SHA256_AMD64}" ;; \
+        arm64) asset=yt-dlp_linux_aarch64; sum="${YTDLP_SHA256_ARM64}" ;; \
+        *) echo "no yt-dlp build for ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL --retry 3 -o /yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/${asset}" \
+    && echo "${sum}  /yt-dlp" | sha256sum -c - \
+    && chmod 0755 /yt-dlp
+
 FROM debian:bookworm-slim
 
 ENV PORT=8688
@@ -135,6 +158,7 @@ RUN groupadd -r -g 1000 droppedneedle \
 COPY --from=builder /out/droppedneedle /usr/local/bin/droppedneedle
 COPY --from=builder /out/droppedneedle-tool /usr/local/bin/droppedneedle-tool
 COPY --from=ffmpeg /out/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ytdlp /yt-dlp /usr/local/bin/yt-dlp
 COPY --from=ffmpeg /out/doc /usr/share/doc/ffmpeg
 # The pristine web UI; the server stamps a copy into /app/cache/static at
 # startup (DROPPEDNEEDLE_STATIC_DIR defaults to /app/static).

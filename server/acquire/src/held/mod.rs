@@ -23,7 +23,10 @@
 //! that folder is still the import folder.
 
 pub mod explain;
+// Fork: yt-dlp fetches and the manual-import routes.
+pub mod fetch;
 pub mod http;
+pub mod manual_http;
 pub mod service;
 pub mod spotify_match;
 pub mod sql;

@@ -2147,6 +2147,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/downloads/manual-import/fetches/{fetch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How a fetch from a link is going.
+         *     `GET /api/v3/downloads/manual-import/fetches/{fetch_id}`.
+         */
+        get: operations["manual_fetch_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/downloads/quarantine": {
         parameters: {
             query?: never;
@@ -2469,6 +2489,69 @@ export interface paths {
          *     users. `POST /api/v3/downloads/upgrade/track`.
          */
         post: operations["upgrade_track_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/downloads/{task_id}/manual-import/link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fetch a still-hunting song's audio from a YouTube or SoundCloud link
+         *     and import it. Answers the fetch at once; follow it with
+         *     `GET /api/v3/downloads/manual-import/fetches/{fetch_id}`.
+         *     `POST /api/v3/downloads/{task_id}/manual-import/link`.
+         */
+        post: operations["manual_link_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/downloads/{task_id}/manual-import/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * YouTube links the app already knows for a still-hunting song.
+         *     `GET /api/v3/downloads/{task_id}/manual-import/links`.
+         */
+        get: operations["manual_links_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/downloads/{task_id}/manual-import/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import one uploaded audio file as a still-hunting song: it goes in at
+         *     the song's place, and the download is settled.
+         *     `POST /api/v3/downloads/{task_id}/manual-import/upload`.
+         */
+        post: operations["manual_upload_handler"];
         delete?: never;
         options?: never;
         head?: never;
@@ -15951,6 +16034,14 @@ export interface components {
          * @enum {string}
          */
         KeptWhy: "changed" | "not_in_bin" | "not_plain_file" | "unreadable";
+        /** @description A YouTube link the app already knows for a song. */
+        KnownLink: {
+            album_name: string;
+            artist_name: string;
+            title: string;
+            url: string;
+            video_id: string;
+        };
         /** @description `GET /albums/{album_id}/lastfm`. */
         LastFmAlbumEnrichment: {
             /**
@@ -17977,6 +18068,38 @@ export interface components {
             /** Format: int64 */
             expected_operation_row_revision: number;
             idempotency_key: string;
+        };
+        /** @description One fetch from a link, as the person's tab follows it. */
+        ManualFetch: {
+            id: string;
+            /** @description What went wrong, or what became of the file. */
+            message?: string | null;
+            /**
+             * Format: double
+             * @description Downloaded so far, 0 to 100, while fetching.
+             */
+            percent?: number | null;
+            state: components["schemas"]["ManualFetchState"];
+            task_id: string;
+        };
+        /**
+         * @description How a fetch from a link is going.
+         * @enum {string}
+         */
+        ManualFetchState: "fetching" | "importing" | "done" | "failed";
+        /** @description A link to fetch the song from. */
+        ManualLinkRequest: {
+            /** @description A youtube.com, youtu.be, music.youtube.com or soundcloud.com page. */
+            url: string;
+        };
+        /** @description YouTube links the app already knows for the song. */
+        ManualLinksResponse: {
+            links: components["schemas"]["KnownLink"][];
+        };
+        /** @description The upload form: one `file` part, an audio file. */
+        ManualUploadForm: {
+            /** Format: binary */
+            file: string;
         };
         /** @description Match a file by hand. */
         MatchFileBody: {
@@ -30437,6 +30560,28 @@ export interface operations {
             };
         };
     };
+    manual_fetch_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Fetch id */
+                fetch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualFetch"];
+                };
+            };
+        };
+    };
     list_quarantine_handler: {
         parameters: {
             query?: {
@@ -30798,6 +30943,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpgradeRequestResponse"];
+                };
+            };
+        };
+    };
+    manual_link_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Download task id */
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManualLinkRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualFetch"];
+                };
+            };
+        };
+    };
+    manual_links_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Download task id */
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualLinksResponse"];
+                };
+            };
+        };
+    };
+    manual_upload_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Download task id */
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["ManualUploadForm"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HeldActionResponse"];
                 };
             };
         };

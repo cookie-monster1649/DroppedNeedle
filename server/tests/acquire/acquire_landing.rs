@@ -9094,3 +9094,131 @@ async fn a_want_with_no_length_is_checked_against_an_accepted_deezer_match() {
     );
     assert_eq!(paired, vec![WANT.to_owned()]);
 }
+
+/// Fork: a file uploaded onto a still-hunting song imports at that song
+/// with no matching step, settles its download, and only its owner (or an
+/// admin) can do it.
+#[tokio::test]
+async fn a_file_uploaded_onto_a_still_hunting_song_imports_and_settles_it() {
+    use droppedneedle_acquire::downloads::store::TaskDetails;
+    use tower::ServiceExt as _;
+    const WANT: &str = "want-0123456789abcdef0123456789abcdee";
+    let db = AcquireDb::scratch().expect("scratch db");
+    db.add_user("u-ada", "Ada", "trusted").await.expect("user");
+    db.add_user("u-bob", "Bob", "trusted").await.expect("user");
+    let dir = db.path().parent().expect("scratch dir").to_path_buf();
+    let config = Arc::new(
+        ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+            .expect("config"),
+    );
+    let platform = TestPlatform::on(db.db(), &dir)
+        .settings(config)
+        .build()
+        .await;
+    let (library, _) = library_at(&platform);
+    let music = dir.join("music");
+    std::fs::create_dir_all(&music).expect("music root");
+    library
+        .scans
+        .add_root(
+            Some("music".to_owned()),
+            music.to_string_lossy().into_owned(),
+            EffectivePolicy::Automatic,
+        )
+        .expect("root adds");
+    let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(Vec::new()));
+    let (acquire, _fixed) = acquire_serving(
+        &platform,
+        &library,
+        Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+    );
+    acquire
+        .journal
+        .run("test.seed", |store| {
+            let task = NewTask {
+                artist_name: "Beyoncé".to_owned(),
+                album_title: "Halo (Live)".to_owned(),
+                ..new_task("t-hunt", "")
+            };
+            store.insert_track_task(&task, WANT, 1.0)?;
+            store.set_task_details(
+                "t-hunt",
+                &TaskDetails {
+                    track_title: Some("Halo (Live)".to_owned()),
+                    ..TaskDetails::default()
+                },
+                1.0,
+            )
+        })
+        .await
+        .expect("task");
+    acquire
+        .db
+        .write("test.fail", |tx| {
+            tx.execute(
+                "UPDATE download_tasks SET status = 'failed', user_id = 'u-ada' WHERE id = 't-hunt'",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("failed");
+    let source = land_file(
+        &dir.join("src"),
+        "halo.flac",
+        "flac_full_01.flac",
+        "Halo (Live)",
+        1,
+    );
+    let bytes = std::fs::read(&source).expect("bytes");
+    let upload = |principal: Principal| {
+        let mut body = Vec::new();
+        body.extend_from_slice(
+            b"--XBOUNDARY\r\nContent-Disposition: form-data; name=\"file\"; filename=\"halo.flac\"\r\nContent-Type: audio/flac\r\n\r\n",
+        );
+        body.extend_from_slice(&bytes);
+        body.extend_from_slice(b"\r\n--XBOUNDARY--\r\n");
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/v3/downloads/t-hunt/manual-import/upload")
+            .header("content-type", "multipart/form-data; boundary=XBOUNDARY")
+            .body(axum::body::Body::from(body))
+            .expect("request");
+        let router = droppedneedle_acquire::held::http::routes()
+            .with_state(acquire.held.clone())
+            .into_router();
+        async move {
+            let response = with_test_principal(router, principal)
+                .oneshot(request)
+                .await
+                .expect("response");
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .expect("body");
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_default(),
+            )
+        }
+    };
+    let bob = test_principal("u-bob", Role::Trusted, "s-bob", SessionKind::Standard);
+    let (status, body) = upload(bob).await;
+    assert_eq!(status, 404, "someone else's song: {body}");
+    let ada = test_principal("u-ada", Role::Trusted, "s-ada", SessionKind::Standard);
+    let (status, body) = upload(ada).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["imported"], 1, "{body}");
+    let placed = files_under(&music, "flac");
+    assert_eq!(placed.len(), 1, "one file in the library: {placed:?}");
+    let status: Vec<String> = acquire
+        .db
+        .db()
+        .column("SELECT status FROM download_tasks WHERE id = 't-hunt'", []);
+    assert_eq!(status, vec!["completed".to_owned()], "the hunt is settled");
+    let held: Vec<String> = acquire.db.db().column(
+        "SELECT state FROM acquire_held_files WHERE source = 'upload'",
+        [],
+    );
+    assert_eq!(held, vec!["imported".to_owned()]);
+}

@@ -30,6 +30,8 @@
 	import StatusChip from '$lib/ui/StatusChip.svelte';
 
 	import CueCountdown from './CueCountdown.svelte';
+	// Fork: import a file by hand onto a still-hunting song.
+	import ManualImportMenu from './ManualImportMenu.svelte';
 	import TaskSampleButton from './TaskSampleButton.svelte';
 
 	let { task }: { task: DownloadTask } = $props();
@@ -174,6 +176,10 @@
 			>
 				Stop
 			</Button>
+			<!-- Fork: a curator can settle a hunted song with a file of their own. -->
+			{#if authStore.isTrusted && task.download_type === 'track'}
+				<ManualImportMenu taskId={task.id} songTitle={task.track_title ?? task.album_title} />
+			{/if}
 			{#if authStore.isAdmin && canReimport(task)}
 				<Button
 					variant="ghost"
