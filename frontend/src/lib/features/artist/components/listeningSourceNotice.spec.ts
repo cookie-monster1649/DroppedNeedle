@@ -14,11 +14,7 @@ describe('listeningSourceNotice', () => {
 		const cases: [SectionSources, (SectionSources | undefined)[], string | null][] = [
 			[answer({}), [undefined], null],
 			[answer({ configured: false, unavailable_sources: ['listenbrainz'] }), [], null],
-			[
-				answer({ source: 'lastfm', unavailable_sources: ['listenbrainz'] }),
-				[answer({})],
-				'ListenBrainz is unavailable, so these lists come from Last.fm.'
-			],
+			[answer({ source: 'lastfm', unavailable_sources: ['listenbrainz'] }), [answer({})], null],
 			[
 				answer({ source: 'lastfm' }),
 				[],

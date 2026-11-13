@@ -66,6 +66,7 @@
 		Shuffle
 	} from 'lucide-svelte';
 	import { listeningSourceNotice } from '$lib/features/artist/components/listeningSourceNotice';
+	import { listenSourceHealth } from '$lib/stores/listenSourceHealth.svelte';
 	import { mergeArtistReleasePages } from '$lib/features/artist/queries/artistReleasePages';
 	import { mergeArtistImages } from '$lib/features/album/queries/catalogAdapters';
 	import type { ReleaseGroup } from '$lib/features/album/queries/types';
@@ -220,6 +221,10 @@
 	}));
 	const topAlbums = $derived(discoveryEnabled ? topAlbumsQuery.data : undefined);
 	const sourceNotice = $derived(listeningSourceNotice([topSongs, topAlbums, similarArtists]));
+	// Fork: what the lists heard of ListenBrainz greys out its tab everywhere.
+	$effect(() => {
+		for (const answer of [topSongs, topAlbums, similarArtists]) listenSourceHealth.observe(answer);
+	});
 	const loadingTopAlbums = $derived(!discoveryEnabled || topAlbumsQuery.isLoading);
 	// Every list answered that no listening service is linked: one card says so.
 	const noService = $derived(
