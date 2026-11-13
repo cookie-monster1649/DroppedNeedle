@@ -27,6 +27,8 @@
 
 	import DownloadItem from './DownloadItem.svelte';
 	import HeldEntryCard from './HeldEntryCard.svelte';
+	import HeldGroup from './HeldGroup.svelte';
+	import { groupHeld } from './heldGroups';
 	import NowPressingHero from './NowPressingHero.svelte';
 	import QuarantinePanel from './QuarantinePanel.svelte';
 	import QueueSectionHead from './QueueSectionHead.svelte';
@@ -38,6 +40,8 @@
 	// Every download and upload whose files wait for a decision, one entry each.
 	const heldQuery = getHeldEntriesQuery();
 	const held = $derived(heldQuery.data?.entries ?? []);
+	// Fork: albums of one artist or one download sit together.
+	const heldGroups = $derived(groupHeld(held));
 	const heldTaskIds = $derived(
 		new Set(
 			held.flatMap((entry) =>
@@ -239,8 +243,15 @@
 					{/snippet}
 				</QueueSectionHead>
 				<div class="space-y-3">
-					{#each held as entry (entry.id)}
-						<HeldEntryCard {entry} retryTaskId={verdictTaskOf(entry)} />
+					{#each heldGroups as group (group.key)}
+						{#if group.entries.length > 1}
+							<HeldGroup {group} retryTaskOf={verdictTaskOf} />
+						{:else}
+							<HeldEntryCard
+								entry={group.entries[0]}
+								retryTaskId={verdictTaskOf(group.entries[0])}
+							/>
+						{/if}
 					{/each}
 				</div>
 			</section>

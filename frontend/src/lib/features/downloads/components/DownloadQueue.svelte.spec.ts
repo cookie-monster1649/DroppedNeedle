@@ -56,6 +56,7 @@ const download: HeldEntry = {
 	album_title: 'Drift',
 	created_at: 1,
 	expires_at: DOWNLOAD_EXPIRES,
+	reasons: [],
 	files: [file(1), file(2)]
 };
 
@@ -70,6 +71,7 @@ const upload: HeldEntry = {
 	album_title: 'Tidewater',
 	created_at: 2,
 	expires_at: UPLOAD_EXPIRES,
+	reasons: [],
 	files: [
 		file(3, { source: 'upload', source_task_id: null }),
 		file(4, { source: 'upload', source_task_id: null })

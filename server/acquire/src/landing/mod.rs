@@ -27,12 +27,14 @@
 
 pub mod confine;
 pub mod decision;
+pub mod foreign;
 pub mod hold;
 pub mod library;
 pub mod matching;
 pub mod ports;
 pub mod probe;
 pub mod quality;
+pub mod quality_words;
 pub mod specs;
 pub(crate) mod sql;
 pub mod want;
@@ -966,7 +968,16 @@ impl LandingService {
         let any_local = held.iter().any(|item| !item.code.against_source());
         self.record_wrong_product(task, target, &held, imported_tracks.len())
             .await;
-        let held_count = self.hold(task, target, landing, Some(found), held).await;
+        let held_count = self
+            .hold(
+                task,
+                target,
+                landing,
+                Some(found),
+                Some(&found.release),
+                held,
+            )
+            .await;
 
         // What the release still lacks after this landing: the next
         // candidate is asked for these positions only. A track the person
@@ -1109,6 +1120,7 @@ impl LandingService {
         target: &Target,
         landing: &Landing,
         found: Option<&FoundRelease>,
+        verify: Option<&droppedneedle_library::matching::Release>,
         held: Vec<Held<'_>>,
     ) -> usize {
         if held.is_empty() {
@@ -1124,6 +1136,7 @@ impl LandingService {
                     target,
                     item.file,
                     paired,
+                    verify,
                     &root,
                     item.code,
                     &item.detail,
@@ -1718,11 +1731,13 @@ fn non_empty(value: &str) -> Option<String> {
 /// The held file for one landed file, with the release track it was
 /// paired to when there is one. The file is named by its path inside the
 /// download, so two discs' `01.flac` stay apart.
+#[allow(clippy::too_many_arguments)]
 fn hold_item(
     task: &TaskRow,
     target: &Target,
     file: &LandedFile,
     paired: Option<(&FoundRelease, usize)>,
+    verify: Option<&droppedneedle_library::matching::Release>,
     root: &Path,
     code: Reason,
     detail: &str,
@@ -1754,9 +1769,12 @@ fn hold_item(
                 disc_number: Some(i64::from(
                     track.map_or(tag.disc_number.max(1), |(_, track)| track.disc.max(1)),
                 )),
-                track_number: Some(i64::from(
-                    track.map_or(tag.track_number, |(_, track)| track.position),
-                ))
+                // Fork: a file paired to no track shows its own number only
+                // when the release's track at that number is its song.
+                track_number: match track {
+                    Some((_, track)) => Some(i64::from(track.position)),
+                    None => foreign::trusted_number(verify, file),
+                }
                 .filter(|number| *number > 0),
                 track_title: track
                     .map(|(_, track)| track.title.clone())
