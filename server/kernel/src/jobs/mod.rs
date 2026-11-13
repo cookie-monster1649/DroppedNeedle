@@ -42,6 +42,8 @@ pub mod events_kick;
 pub mod events_watcher;
 pub mod personal_mix;
 pub mod playlist_export;
+// Fork: live playlist folders.
+pub mod playlist_folders;
 pub mod playlist_sync;
 pub mod plugin_ticks;
 pub mod precache;
@@ -67,4 +69,6 @@ pub const BOOT_JOBS: &[&str] = &[
     playlist_sync::JOB_NAME,
     events_watcher::JOB_NAME,
     discovery_demand::JOB_NAME,
+    // Fork: live playlist folders.
+    playlist_folders::JOB_NAME,
 ];

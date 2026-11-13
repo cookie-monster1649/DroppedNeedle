@@ -32,6 +32,8 @@ use droppedneedle_kernel::jobs::events_watcher::{self, PollTimeSource};
 use droppedneedle_kernel::jobs::personal_mix::{self, PersonalMixer};
 use droppedneedle_kernel::jobs::playlist_export::M3uPlaylistExporter;
 use droppedneedle_kernel::jobs::playlist_sync;
+// Fork: live playlist folders.
+use droppedneedle_kernel::jobs::playlist_folders::{self, PlaylistFolderJob};
 use droppedneedle_kernel::jobs::precache::{self, PrecacheLimits};
 use droppedneedle_kernel::jobs::precache_phases::{LibraryPrecache, PrecacheSources};
 use droppedneedle_kernel::jobs::presence;
@@ -236,6 +238,8 @@ pub struct JobsSetup {
     scans: ScansEnded,
     queues: QueueSetup,
     handlers: Handlers,
+    // Fork: live playlist folders.
+    playlist_folders: Arc<PlaylistFolderJob>,
 }
 
 /// The jobs table handle the areas enqueue through, built once beside the
@@ -349,6 +353,12 @@ impl JobsSetup {
             scans,
             queues,
             handlers,
+            // Fork: live playlist folders.
+            playlist_folders: Arc::new(PlaylistFolderJob::new(
+                platform.db.clone(),
+                &config,
+                platform.clock.clone(),
+            )),
         }
     }
 
@@ -446,6 +456,13 @@ impl JobsSetup {
             discovery_demand::default_schedule(),
         )
         .map_err(already_running(discovery_demand::JOB_NAME))?;
+        // Fork: live playlist folders.
+        playlist_folders::spawn_on(
+            &self.supervisor,
+            Arc::clone(&self.playlist_folders),
+            playlist_folders::default_schedule(),
+        )
+        .map_err(already_running(playlist_folders::JOB_NAME))?;
         warmup::start_all(&self.supervisor, &self.warmups)
             .map_err(|_| "a remotes warmup is already running".to_owned())?;
         self.precache_trigger()

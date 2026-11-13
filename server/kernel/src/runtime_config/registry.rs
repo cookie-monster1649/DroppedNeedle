@@ -111,6 +111,8 @@ section_list! {
         LibraryManagement,
         EditionPreferences,
         Appearance,
+        // Fork: live playlist folders.
+        PlaylistFolders,
     ],
     secret: [
         YouTubeConnection,

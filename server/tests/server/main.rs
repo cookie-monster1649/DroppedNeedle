@@ -18,6 +18,8 @@ mod config_secrets;
 mod contract;
 mod envelope;
 mod events_stream;
+// Fork: live playlist folders.
+mod fork_playlist_folders;
 mod health;
 mod http_gate;
 mod jobs_events;
