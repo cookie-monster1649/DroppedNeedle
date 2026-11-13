@@ -11,6 +11,16 @@
 		isLocalOnlyRow,
 		toSuggestResultsV1
 	} from '$lib/features/search/queries/SearchV3Adapters';
+	// Fork: a pasted Spotify link opens its album, song or artist here.
+	import { goto } from '$app/navigation';
+	import { withBasePath } from '$lib/utils/basePath';
+	import SpotifyIcon from '$lib/media/icons/SpotifyIcon.svelte';
+	import { resolveSpotifyLink } from '$lib/features/spotify/queries/library.svelte';
+	import {
+		notFoundMessage,
+		parseSpotifyLink,
+		resolutionPath
+	} from '$lib/features/spotify/state/spotifyLink';
 
 	interface Props {
 		query: string;
@@ -69,8 +79,47 @@
 		activeIndex >= 0 && activeIndex < suggestions.length ? `${id}-option-${activeIndex}` : undefined
 	);
 
+	// Fork: Spotify links resolve instead of suggesting.
+	let spotifyState = $state<{ resolving: boolean; message: string | null } | null>(null);
+	let spotifyAbort: AbortController | null = null;
+
+	async function resolveLink(input: string) {
+		spotifyAbort?.abort();
+		const abort = new AbortController();
+		spotifyAbort = abort;
+		spotifyState = { resolving: true, message: null };
+		showDropdown = true;
+		try {
+			const resolution = await resolveSpotifyLink(input, abort.signal);
+			if (abort.signal.aborted) return;
+			const path = resolutionPath(resolution);
+			if (path) {
+				spotifyState = null;
+				closeDropdown();
+				await goto(withBasePath(path));
+			} else {
+				spotifyState = { resolving: false, message: notFoundMessage(resolution.name) };
+			}
+		} catch {
+			if (abort.signal.aborted) return;
+			spotifyState = {
+				resolving: false,
+				message: "Couldn't read this Spotify link. Try again in a moment."
+			};
+		}
+	}
+
 	function handleInput() {
 		clearTimeout(debounceTimeout);
+		if (parseSpotifyLink(query)) {
+			queryEnabled = false;
+			debouncedQuery = '';
+			activeIndex = -1;
+			void resolveLink(query);
+			return;
+		}
+		spotifyAbort?.abort();
+		spotifyState = null;
 		queryEnabled = false;
 		debouncedQuery = '';
 		activeIndex = -1;
@@ -97,6 +146,10 @@
 
 	function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
+		if (parseSpotifyLink(query)) {
+			void resolveLink(query);
+			return;
+		}
 		closeDropdown();
 		onSearch();
 	}
@@ -215,7 +268,20 @@
 		</div>
 	</form>
 
-	{#if showDropdown && (suggestions.length > 0 || loading || remoteStatus !== 'ok')}
+	{#if showDropdown && spotifyState}
+		<div
+			class="absolute top-full left-0 right-0 z-60 mt-1 flex items-center gap-3 rounded-box bg-base-200 p-3 shadow-xl"
+			role="status"
+		>
+			<SpotifyIcon class="size-5 shrink-0 text-spotify" />
+			{#if spotifyState.resolving}
+				<span class="loading loading-spinner loading-sm" aria-hidden="true"></span>
+				<span class="text-sm">Finding this Spotify link…</span>
+			{:else}
+				<span class="text-sm">{spotifyState.message}</span>
+			{/if}
+		</div>
+	{:else if showDropdown && (suggestions.length > 0 || loading || remoteStatus !== 'ok')}
 		<ul
 			role="listbox"
 			id={listboxId}

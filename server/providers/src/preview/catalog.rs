@@ -101,6 +101,14 @@ struct WireAlbum {
     tracks: Option<Hits<WireTrack>>,
 }
 
+/// Fork: an answer read for its id alone; Deezer answers a miss with an
+/// `error` object and no id.
+#[derive(Debug, Deserialize)]
+struct WireId {
+    #[serde(default)]
+    id: Option<i64>,
+}
+
 #[derive(Debug, Deserialize)]
 struct WireIsrcTrack {
     #[allow(dead_code)]
@@ -275,6 +283,35 @@ impl PreviewClient {
         };
         let track: WireIsrcTrack = decode(&reply)?;
         Ok(track.album.and_then(|album| album.id))
+    }
+
+    /// Fork: the Deezer album carrying barcode `upc` (`/album/upc:<UPC>`),
+    /// with its track list; `None` when Deezer has none.
+    ///
+    /// # Errors
+    ///
+    /// The typed failure of a call or of its answer.
+    pub async fn deezer_album_of_upc(
+        &self,
+        upc: &str,
+        priority: RequestPriority,
+    ) -> Result<Option<DeezerAlbum>, ProviderError> {
+        let upc: String = upc.chars().filter(char::is_ascii_digit).collect();
+        if upc.len() < 8 {
+            return Ok(None);
+        }
+        let segment = format!("upc:{upc}");
+        let Some(reply) = self
+            .deezer_get(&["album", segment.as_str()], &[], priority)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let found: WireId = decode(&reply)?;
+        match found.id {
+            Some(id) if id > 0 => self.deezer_album(id, priority).await,
+            _ => Ok(None),
+        }
     }
 
     /// One Deezer album with its track list, `None` when Deezer has none.

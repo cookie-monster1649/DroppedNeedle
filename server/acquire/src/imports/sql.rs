@@ -81,4 +81,74 @@ droppedneedle_kernel::sql! {
     /// Fork: the request status of track key `?1` and when it was asked, seconds.
     pub(super) ROW_REQUEST = "SELECT status, requested_at / 1000 FROM request_history \
              WHERE musicbrainz_id_lower = 'track:' || ?1";
+
+    // Fork: the Spotify library (spotify_library.rs).
+
+    /// Users with a library sync on.
+    pub(crate) LIBRARY_USERS = "SELECT user_id, follow_sync, album_sync FROM acquire_spotify_library \
+         WHERE follow_sync = 1 OR album_sync = 1";
+    /// One user's library settings.
+    pub(crate) LIBRARY_ROW = "SELECT follow_sync, album_sync, artists_checked_at, albums_checked_at, \
+         last_error FROM acquire_spotify_library WHERE user_id = ?1";
+    /// Save one user's toggles.
+    pub(crate) SET_LIBRARY = "INSERT INTO acquire_spotify_library (user_id, follow_sync, album_sync, \
+         created_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (user_id) DO UPDATE SET \
+         follow_sync = excluded.follow_sync, album_sync = excluded.album_sync";
+    /// Make sure one user has a settings row.
+    pub(crate) ENSURE_LIBRARY = "INSERT INTO acquire_spotify_library (user_id, created_at) \
+         VALUES (?1, ?2) ON CONFLICT (user_id) DO NOTHING";
+    /// Record a finished artist check.
+    pub(crate) ARTISTS_CHECKED = "UPDATE acquire_spotify_library SET artists_checked_at = ?2, \
+         last_error = ?3 WHERE user_id = ?1";
+    /// Record a finished album check.
+    pub(crate) ALBUMS_CHECKED = "UPDATE acquire_spotify_library SET albums_checked_at = ?2, \
+         last_error = ?3 WHERE user_id = ?1";
+    /// Record a failed check.
+    pub(crate) LIBRARY_FAILED = "UPDATE acquire_spotify_library SET last_error = ?2 WHERE user_id = ?1";
+
+    /// One user's saved albums, as last read.
+    pub(crate) SAVED_ALBUMS = "SELECT spotify_album_id, title, artist_name, year, cover_url, \
+         release_group, matched_by, matched_at, reviewed, favorite_album_id \
+         FROM acquire_spotify_saved_albums WHERE user_id = ?1 \
+         ORDER BY saved_at DESC, first_seen_at DESC, title";
+    /// Count the albums flagged new.
+    pub(crate) NEW_ALBUMS = "SELECT COUNT(*) FROM acquire_spotify_saved_albums \
+         WHERE user_id = ?1 AND reviewed = 0";
+    /// Save one album as read.
+    pub(crate) UPSERT_ALBUM = "INSERT INTO acquire_spotify_saved_albums (user_id, spotify_album_id, \
+         title, artist_name, year, cover_url, total_tracks, upc, saved_at, first_seen_at, \
+         reviewed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+         ON CONFLICT (user_id, spotify_album_id) DO UPDATE SET title = excluded.title, \
+         artist_name = excluded.artist_name, year = excluded.year, \
+         cover_url = excluded.cover_url, total_tracks = excluded.total_tracks, \
+         upc = excluded.upc, saved_at = excluded.saved_at";
+    /// Record one album's lookup.
+    pub(crate) MATCH_ALBUM = "UPDATE acquire_spotify_saved_albums SET release_group = ?3, \
+         matched_by = ?4, matched_at = ?5 WHERE user_id = ?1 AND spotify_album_id = ?2";
+    /// Record the favourite the sync added.
+    pub(crate) FAVORITED_ALBUM = "UPDATE acquire_spotify_saved_albums SET favorite_album_id = ?3 \
+         WHERE user_id = ?1 AND spotify_album_id = ?2";
+    /// Forget one un-saved album.
+    pub(crate) DROP_ALBUM = "DELETE FROM acquire_spotify_saved_albums \
+         WHERE user_id = ?1 AND spotify_album_id = ?2";
+    /// Confirm the review: nothing is new any more.
+    pub(crate) REVIEW_ALBUMS = "UPDATE acquire_spotify_saved_albums SET reviewed = 1 WHERE user_id = ?1";
+    /// Whether a request for an album is open or done.
+    pub(crate) REQUESTED = "SELECT 1 FROM request_history WHERE musicbrainz_id_lower = ?1 \
+         AND status NOT IN ('cancelled', 'failed', 'rejected')";
+
+    /// One user's followed artists, as last read.
+    pub(crate) FOLLOWED = "SELECT spotify_artist_id, name, artist_mbid, matched_at, followed_by_sync \
+         FROM acquire_spotify_followed_artists WHERE user_id = ?1";
+    /// Save one artist as read.
+    pub(crate) UPSERT_ARTIST = "INSERT INTO acquire_spotify_followed_artists (user_id, spotify_artist_id, \
+         name, first_seen_at) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT (user_id, spotify_artist_id) DO UPDATE SET name = excluded.name";
+    /// Record one artist's lookup and whether the sync made the follow.
+    pub(crate) MATCH_ARTIST = "UPDATE acquire_spotify_followed_artists SET artist_mbid = ?3, \
+         matched_by = ?4, matched_at = ?5, followed_by_sync = ?6 \
+         WHERE user_id = ?1 AND spotify_artist_id = ?2";
+    /// Forget one unfollowed artist.
+    pub(crate) DROP_ARTIST = "DELETE FROM acquire_spotify_followed_artists \
+         WHERE user_id = ?1 AND spotify_artist_id = ?2";
 }

@@ -4284,6 +4284,11 @@ mod extension_chains {
                 "catalog/0013_source_artists.sql",
                 "c2d0ad8fcb588259429a9b574879c98afb19039ba5bbadb7b61d768d034eb0d9",
             ),
+            (
+                "catalog",
+                "catalog/0014_spotify_library.sql",
+                "a55ce785503ed1231aebc261186f42e53ff6e524d530876d0dd7ab6f404b06cb",
+            ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {

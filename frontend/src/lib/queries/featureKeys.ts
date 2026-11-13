@@ -176,7 +176,10 @@ export const SpotifyQueryKeyFactory = {
 	// Fork: where the newest import into one playlist stands.
 	importStatusRoot: (userId: UserId) => key(userScope(userId), 'spotify', 'import-status'),
 	importStatus: (userId: UserId, playlistId: string | null) =>
-		key(userScope(userId), 'spotify', 'import-status', playlistId)
+		key(userScope(userId), 'spotify', 'import-status', playlistId),
+	// Fork: the library sync (followed artists, saved albums).
+	library: (userId: UserId) => key(userScope(userId), 'spotify', 'library'),
+	savedAlbums: (userId: UserId) => key(userScope(userId), 'spotify', 'library', 'albums')
 };
 
 // Service health is the server's, the same for everyone.

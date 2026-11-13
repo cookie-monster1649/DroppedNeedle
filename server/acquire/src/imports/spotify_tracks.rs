@@ -36,7 +36,9 @@ pub struct ProvenTrack {
     pub group: String,
 }
 
-fn names_agree(heard: &str, asked: &str) -> bool {
+/// Whether two artist names stand for the same artist (fork: shared with
+/// the link resolver).
+pub fn names_agree(heard: &str, asked: &str) -> bool {
     let (heard, asked) = (heard.trim().to_lowercase(), asked.trim().to_lowercase());
     if heard.is_empty() || asked.is_empty() {
         return false;
@@ -47,7 +49,9 @@ fn names_agree(heard: &str, asked: &str) -> bool {
         || (asked.len() >= 3 && heard.contains(&asked))
 }
 
-fn titles_agree(a: &str, b: &str) -> bool {
+/// Whether two titles agree, versions and credits aside (fork: shared
+/// with the link resolver).
+pub fn titles_agree(a: &str, b: &str) -> bool {
     let (x, y) = (core_title(a), core_title(b));
     (!x.is_empty() && string_dist(&x, &y) <= NAME_GATE) || string_dist(a, b) <= NAME_GATE
 }
