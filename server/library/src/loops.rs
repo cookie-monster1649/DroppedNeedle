@@ -788,17 +788,20 @@ pub(crate) fn start_loops(
     let (db, blobs) = (setup.db.clone(), setup.core.blobs.clone());
     supervisor.one_shot(UNDO_MOVE_JOB, move |ctx| undo_move(db, blobs, ctx))?;
     let corrections = services.corrections.clone();
+    let mutations = services.mutations.clone();
     supervisor.periodic_blocking(
         SAME_FOLDER_JOB,
         Schedule::new(SAME_FOLDER_EVERY)
             .with_initial_delay(Duration::from_secs(90))
             .with_backoff(Duration::from_secs(60), SAME_FOLDER_EVERY),
         // Fork: then albums on one release (`corrections::release_merge`).
-        // The first pass, shortly after start, is the backfill.
+        // The first pass, shortly after start, is the backfill. Fork: true
+        // clashes on one release are settled first, keeping the better file.
         move |_ctx| match caught("same-folder merge", || {
-            corrections
-                .merge_same_folder_albums()
-                .and_then(|folded| Ok(folded + corrections.merge_same_release_albums()?))
+            corrections.merge_same_folder_albums().and_then(|folded| {
+                corrections.settle_release_clashes(&mutations)?;
+                Ok(folded + corrections.merge_same_release_albums()?)
+            })
         })? {
             Ok(_) => Ok(Next::Continue),
             Err(error) => Err(TickError::new(SAME_FOLDER_FAILED, error.to_string())),
