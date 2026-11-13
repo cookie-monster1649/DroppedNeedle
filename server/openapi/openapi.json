@@ -47723,6 +47723,7 @@
           "origin",
           "state",
           "created_at",
+          "reasons",
           "files"
         ],
         "properties": {
@@ -47786,6 +47787,13 @@
           },
           "origin": {
             "$ref": "#/components/schemas/EntryOrigin"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldReasonSummary"
+            },
+            "description": "Fork: each reason the entry's files are held for, once, said for\nall of them (the artists they claim, the quality they are)."
           },
           "recording_mbid": {
             "type": [
@@ -48014,6 +48022,34 @@
           },
           "release_group_mbid": {
             "type": "string"
+          }
+        }
+      },
+      "HeldReasonSummary": {
+        "type": "object",
+        "description": "One reason an entry holds files for, said once for all of them.",
+        "required": [
+          "reason",
+          "count",
+          "text",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "What the person can do about it."
+          },
+          "count": {
+            "type": "integer",
+            "description": "How many of the entry's files it holds.",
+            "minimum": 0
+          },
+          "reason": {
+            "$ref": "#/components/schemas/Reason"
+          },
+          "text": {
+            "type": "string",
+            "description": "What is wrong, for all of them."
           }
         }
       },
