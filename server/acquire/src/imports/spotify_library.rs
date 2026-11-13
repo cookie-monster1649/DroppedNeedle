@@ -575,6 +575,11 @@ impl SpotifyLibrary {
             // retried when due), never the whole sync.
             let titles = match client.artist_album_titles(&refresher, &id).await {
                 Ok(titles) => titles,
+                // Slow down or a lost link stops the whole run; the next
+                // pass picks up where this one stopped.
+                Err(error @ (SpotifyError::RateLimited { .. } | SpotifyError::NotLinked)) => {
+                    return Err(error.into());
+                }
                 Err(error) => {
                     tracing::warn!(user = %user_id, artist = %id, error = ?error, "spotify artist albums failed; skipped");
                     continue;

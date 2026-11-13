@@ -93,6 +93,7 @@ pub struct MockRecorder {
     saved_more: Arc<std::sync::atomic::AtomicBool>,
     unsaved: Arc<std::sync::atomic::AtomicBool>,
     unfollowed: Arc<std::sync::atomic::AtomicBool>,
+    albums_slowed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MockRecorder {
@@ -129,6 +130,12 @@ impl MockRecorder {
     pub fn set_followed(&self, followed: bool) {
         self.unfollowed
             .store(!followed, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Fork: every artist-albums call is rate limited (429) from now on.
+    pub fn slow_artist_albums(&self) {
+        self.albums_slowed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn flag(flag: &std::sync::atomic::AtomicBool) -> bool {
@@ -694,6 +701,13 @@ async fn spotify_artist_albums(
         .get("limit")
         .and_then(|limit| limit.parse::<u32>().ok())
         .unwrap_or(20);
+    if MockRecorder::flag(&state.recorder.albums_slowed) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, "3600")],
+        )
+            .into_response();
+    }
     if limit > 10 || id == SPOTIFY_ARTIST_REFUSED {
         return StatusCode::BAD_REQUEST.into_response();
     }
