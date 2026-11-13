@@ -333,6 +333,11 @@ fn names_are_sanitised_and_deduplicated() {
     assert_eq!(tree::sanitise("///", "x", 150), "___");
     assert_eq!(tree::sanitise("   ", "Untitled", 150), "Untitled");
     assert_eq!(tree::sanitise("ééé", "x", 3), "é");
+    // Decomposed (NFD) Hangul, as some tags carry it, comes out composed.
+    assert_eq!(
+        tree::sanitise("\u{110b}\u{1173}\u{11b7}", "x", 150),
+        "\u{c74c}"
+    );
 }
 
 /// A change waits one quiet tick before it lands (the debounce).
