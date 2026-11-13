@@ -6,12 +6,16 @@
 //! return it) and its track leaves the catalog. See
 //! [`crate::corrections::release_merge`].
 
-use super::{Mutations, MutationError, Removal, RemovalEntry, Removed};
+use super::{MutationError, Mutations, Removal, RemovalEntry, Removed};
 
 impl Mutations {
     /// Move the file of indexed track `track_id` to the recycle bin and
     /// take its track out of the catalog, recorded under `actor`.
-    pub fn recycle_clash_copy(&self, track_id: &str, actor: &str) -> Result<Removed, MutationError> {
+    pub fn recycle_clash_copy(
+        &self,
+        track_id: &str,
+        actor: &str,
+    ) -> Result<Removed, MutationError> {
         let track = self.indexed_track(track_id, None)?;
         let album_id = track.album_id.clone();
         let removal = Removal {

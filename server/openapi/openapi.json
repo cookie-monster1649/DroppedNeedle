@@ -6687,6 +6687,45 @@
         ]
       }
     },
+    "/api/v3/downloads/manual-import/fetches/{fetch_id}": {
+      "get": {
+        "tags": [
+          "held"
+        ],
+        "summary": "How a fetch from a link is going.\n`GET /api/v3/downloads/manual-import/fetches/{fetch_id}`.",
+        "operationId": "manual_fetch_handler",
+        "parameters": [
+          {
+            "name": "fetch_id",
+            "in": "path",
+            "description": "Fetch id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualFetch"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/downloads/quarantine": {
       "get": {
         "tags": [
@@ -7333,6 +7372,143 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UpgradeRequestResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/downloads/{task_id}/manual-import/link": {
+      "post": {
+        "tags": [
+          "held"
+        ],
+        "summary": "Fetch a still-hunting song's audio from a YouTube or SoundCloud link\nand import it. Answers the fetch at once; follow it with\n`GET /api/v3/downloads/manual-import/fetches/{fetch_id}`.\n`POST /api/v3/downloads/{task_id}/manual-import/link`.",
+        "operationId": "manual_link_handler",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Download task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualFetch"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/downloads/{task_id}/manual-import/links": {
+      "get": {
+        "tags": [
+          "held"
+        ],
+        "summary": "YouTube links the app already knows for a still-hunting song.\n`GET /api/v3/downloads/{task_id}/manual-import/links`.",
+        "operationId": "manual_links_handler",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Download task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualLinksResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/downloads/{task_id}/manual-import/upload": {
+      "post": {
+        "tags": [
+          "held"
+        ],
+        "summary": "Import one uploaded audio file as a still-hunting song: it goes in at\nthe song's place, and the download is settled.\n`POST /api/v3/downloads/{task_id}/manual-import/upload`.",
+        "operationId": "manual_upload_handler",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "description": "Download task id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualUploadForm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeldActionResponse"
                 }
               }
             }
@@ -49340,6 +49516,34 @@
           "unreadable"
         ]
       },
+      "KnownLink": {
+        "type": "object",
+        "description": "A YouTube link the app already knows for a song.",
+        "required": [
+          "url",
+          "video_id",
+          "title",
+          "artist_name",
+          "album_name"
+        ],
+        "properties": {
+          "album_name": {
+            "type": "string"
+          },
+          "artist_name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "video_id": {
+            "type": "string"
+          }
+        }
+      },
       "LastFmAlbumEnrichment": {
         "type": "object",
         "description": "`GET /albums/{album_id}/lastfm`.",
@@ -53710,6 +53914,92 @@
           },
           "idempotency_key": {
             "type": "string"
+          }
+        }
+      },
+      "ManualFetch": {
+        "type": "object",
+        "description": "One fetch from a link, as the person's tab follows it.",
+        "required": [
+          "id",
+          "task_id",
+          "state"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What went wrong, or what became of the file."
+          },
+          "percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Downloaded so far, 0 to 100, while fetching."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ManualFetchState"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ManualFetchState": {
+        "type": "string",
+        "description": "How a fetch from a link is going.",
+        "enum": [
+          "fetching",
+          "importing",
+          "done",
+          "failed"
+        ]
+      },
+      "ManualLinkRequest": {
+        "type": "object",
+        "description": "A link to fetch the song from.",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "A youtube.com, youtu.be, music.youtube.com or soundcloud.com page."
+          }
+        }
+      },
+      "ManualLinksResponse": {
+        "type": "object",
+        "description": "YouTube links the app already knows for the song.",
+        "required": [
+          "links"
+        ],
+        "properties": {
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnownLink"
+            }
+          }
+        }
+      },
+      "ManualUploadForm": {
+        "type": "object",
+        "description": "The upload form: one `file` part, an audio file.",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
           }
         }
       },

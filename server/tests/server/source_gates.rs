@@ -823,6 +823,9 @@ fn identity_reads_go_through_their_definitions() {
 /// request or a loop starts and waits for, or that logs its own end.
 const SPAWN_PLACES: &[&str] = &["kernel/src/jobs/", "kernel/src/db/"];
 
+const YTDLP_PUMP: &str = "yt-dlp's stderr reader, bound to one fetch and joined by it";
+const MANUAL_FETCH: &str =
+    "a fork manual fetch a curator starts; bounded by its timeout, it records its own end";
 const AWAITED: &str = "blocking file or store work, awaited by the request or loop that runs it";
 const UPLOAD_CLEANUP: &str = "removes unused uploads when the request's guard drops";
 const DROP_IMPORT_STEP: &str = "blocking file work, awaited by the drop import that runs it";
@@ -867,6 +870,8 @@ const SPAWN_SITES: &[(&str, usize, &str)] = &[
     ("acquire/src/drop_import/mod.rs", 12, DROP_IMPORT_STEP),
     ("acquire/src/drop_import/mod.rs", 1, DROP_IMPORT),
     ("acquire/src/held/service.rs", 8, AWAITED),
+    ("acquire/src/held/fetch.rs", 1, YTDLP_PUMP),
+    ("acquire/src/held/manual_http.rs", 1, MANUAL_FETCH),
     ("acquire/src/import_folder/mod.rs", 5, LOOP_STEP),
     ("acquire/src/intake/dispose.rs", 1, AWAITED),
     ("acquire/src/landing/hold.rs", 1, AWAITED),

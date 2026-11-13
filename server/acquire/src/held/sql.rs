@@ -288,6 +288,20 @@ droppedneedle_kernel::sql! {
                  THEN 'already_owned' END, \
              staging_paths = '[]', updated_at = ?3 \
              WHERE id = ?1 AND status IN ('needs_review', 'processing')";
+    /// Fork: a download task as a manual import reads it.
+    pub(crate) MANUAL_TASK = "SELECT id, user_id, download_type, release_group_mbid, release_mbid, \
+               release_track_mbid, recording_mbid, artist_name, album_title, track_title, \
+               track_number, disc_number FROM download_tasks WHERE id = ?1";
+    /// Fork: YouTube links known for a song: by recording `?1`, by album
+    /// `?2` at track `?3` disc `?4`, or by title `?5` and artist `?6`.
+    pub(crate) MANUAL_LINKS = "SELECT video_id, MAX(track_name), MAX(artist_name), MAX(album_name) \
+         FROM catalog_youtube_track_links \
+         WHERE (?1 IS NOT NULL AND lower(recording_mbid) = lower(?1)) \
+            OR (lower(album_id) = lower(?2) AND track_number = ?3 \
+                AND disc_number = coalesce(?4, 1)) \
+            OR (?5 IS NOT NULL AND lower(track_name) = lower(?5) \
+                AND lower(artist_name) = lower(?6)) \
+         GROUP BY video_id ORDER BY MAX(created_at) DESC LIMIT 10";
 }
 
 /// `?, ?, ...` for a list of `len` values.
