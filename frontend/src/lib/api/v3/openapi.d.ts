@@ -10123,6 +10123,12 @@ export interface components {
              */
             audiodb_name_search_fallback: boolean;
             /**
+             * @description Fork: search Deezer beside MusicBrainz, adding the albums and
+             *     artists MusicBrainz does not have.
+             * @default true
+             */
+            deezer_search_enabled: boolean;
+            /**
              * @description Direct remote images.
              * @default true
              */

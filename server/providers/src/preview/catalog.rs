@@ -191,6 +191,25 @@ struct ArtistAlbumsPage {
     next: Option<String>,
 }
 
+/// Fork: one hit of Deezer's free-text album or artist search, as search
+/// results show it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeezerSearchHit {
+    pub id: i64,
+    /// Album title or artist name.
+    #[serde(default, alias = "name")]
+    pub title: String,
+    /// Albums: `album`, `ep`, `single` or `compile`.
+    #[serde(default)]
+    pub record_type: Option<String>,
+    /// Albums: the artist.
+    #[serde(default)]
+    pub artist: Option<NamedRef>,
+    /// Album cover or artist picture.
+    #[serde(default, alias = "cover_xl", alias = "picture_xl")]
+    pub image_url: Option<String>,
+}
+
 /// Albums read from one artist's discography at most.
 pub const ARTIST_ALBUMS_CAP: usize = 300;
 const ARTIST_ALBUMS_PAGE: usize = 100;
@@ -433,5 +452,46 @@ impl PreviewClient {
         }
         out.truncate(ARTIST_ALBUMS_CAP);
         Ok(out)
+    }
+
+    /// Fork: Deezer's free-text search of `kind` (`album` or `artist`),
+    /// best first, at most `limit`.
+    ///
+    /// # Errors
+    ///
+    /// The typed failure of the call or of its answer.
+    pub async fn deezer_search_text(
+        &self,
+        kind: &str,
+        text: &str,
+        limit: u32,
+        priority: RequestPriority,
+    ) -> Result<Vec<DeezerSearchHit>, ProviderError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 50).to_string();
+        let Some(reply) = self
+            .deezer_get(
+                &["search", kind],
+                &[("q", text), ("limit", limit.as_str())],
+                priority,
+            )
+            .await?
+        else {
+            return Ok(Vec::new());
+        };
+        let hits: Hits<DeezerSearchHit> = decode(&reply)?;
+        Ok(hits
+            .data
+            .into_iter()
+            .map(|mut hit| {
+                hit.image_url = nonempty(hit.image_url);
+                hit.record_type = nonempty(hit.record_type);
+                hit
+            })
+            .filter(|hit| !hit.title.trim().is_empty())
+            .collect())
     }
 }
