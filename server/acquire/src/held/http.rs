@@ -17,6 +17,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
+use super::explain::{self, Asked, HeldReasonSummary};
 use super::service::{Acted, HeldError, HeldService, is_retry, rechecks, retries_by_itself};
 use super::store::{Entry, EntryOrigin, EntryState, HeldFile, HeldRoot};
 use crate::downloads::queue_rows::Viewer;
@@ -75,14 +76,15 @@ fn actions_for(file: &HeldFile, want: bool) -> Vec<HeldFileAction> {
 
 /// The reason a file is held, as one sentence. A file left in the import
 /// folder was never copied anywhere: it is still in the import folder.
-fn reason_text(file: &HeldFile) -> String {
-    let text = file.reason.message();
+fn reason_text(file: &HeldFile, asked: Asked<'_>) -> String {
+    // Fork: said from the file itself (`held::explain`).
+    let text = explain::file_text(file, asked);
     match file.root {
         HeldRoot::Import => text.replace(
             "The held file is still here.",
             "The file is still in the import folder.",
         ),
-        HeldRoot::Held | HeldRoot::Drop => text.to_owned(),
+        HeldRoot::Held | HeldRoot::Drop => text,
     }
 }
 
@@ -126,13 +128,14 @@ pub struct HeldFileResponse {
 
 impl From<HeldFile> for HeldFileResponse {
     fn from(file: HeldFile) -> Self {
-        Self::of(file, false)
+        Self::of(file, false, Asked::default())
     }
 }
 
 impl HeldFileResponse {
-    fn of(file: HeldFile, want: bool) -> Self {
-        let reason_text = reason_text(&file);
+    fn of(file: HeldFile, want: bool, asked: Asked<'_>) -> Self {
+        let reason_text = reason_text(&file, asked);
+        let reason_action = explain::action_text(file.reason, asked);
         Self {
             actions: actions_for(&file, want),
             id: file.id,
@@ -153,7 +156,7 @@ impl HeldFileResponse {
             source_task_id: file.source_task_id,
             reason: file.reason,
             reason_text,
-            reason_action: file.reason.action().to_owned(),
+            reason_action,
             reason_kind: file.reason.kind(),
             reason_detail: file.reason_detail,
             created_at: file.created_at,
@@ -187,6 +190,9 @@ pub struct HeldEntryResponse {
     /// The library album whose match a person should check before the
     /// better copy held here can go in: its "Check this album" target.
     pub check_album_id: Option<String>,
+    /// Fork: each reason the entry's files are held for, once, said for
+    /// all of them (the artists they claim, the quality they are).
+    pub reasons: Vec<HeldReasonSummary>,
     pub files: Vec<HeldFileResponse>,
 }
 
@@ -198,7 +204,19 @@ impl From<Entry> for HeldEntryResponse {
                 .recording_mbid
                 .as_deref()
                 .is_some_and(crate::requests::ledger::is_want_key);
+        let asked = Asked {
+            artist: entry.artist_name.as_deref(),
+            album: entry.album_title.as_deref(),
+        };
+        let reasons = explain::summaries(&entry.files, asked);
+        let files = entry
+            .files
+            .iter()
+            .cloned()
+            .map(|file| HeldFileResponse::of(file, want, asked))
+            .collect();
         Self {
+            reasons,
             next_retry_at: entry.retry_at.filter(|_| retries),
             check_album_id: None,
             id: entry.id,
@@ -211,11 +229,7 @@ impl From<Entry> for HeldEntryResponse {
             album_title: entry.album_title,
             created_at: entry.created_at,
             expires_at: entry.expires_at,
-            files: entry
-                .files
-                .into_iter()
-                .map(|file| HeldFileResponse::of(file, want))
-                .collect(),
+            files,
         }
     }
 }

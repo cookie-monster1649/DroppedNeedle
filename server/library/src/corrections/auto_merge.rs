@@ -43,37 +43,63 @@ impl Corrections {
         }
         let mut folded = 0;
         for (keep, folds) in groups {
-            let track_ids = self.album_tracks(&folds)?;
-            if track_ids.is_empty() {
-                continue;
+            if self.merge_albums_into(&keep, &folds, &actor, "auto-merge")? {
+                tracing::info!(album = %keep, merged = folds.len(), "same-folder albums merged");
+                folded += folds.len();
             }
-            let request = MembershipRequest {
-                kind: MembershipKind::Merge,
-                album_id: None,
-                track_ids,
-                expected_album_revisions: BTreeMap::new(),
-                target_album_id: Some(keep.clone()),
-                title: None,
-                album_artist_name: None,
-                identity_choice: IdentityChoice::RetainManual,
-            };
-            let previewed = self.preview_membership(&request, &actor)?;
-            let key = format!(
-                "auto-merge:{keep}:{}",
-                folds.iter().cloned().collect::<Vec<_>>().join(",")
-            );
-            self.apply_membership(
-                &request,
-                &ApplyMeta {
-                    preview_token: previewed.token,
-                    idempotency_key: Some(key),
-                    actor: actor.clone(),
-                },
-            )?;
-            tracing::info!(album = %keep, merged = folds.len(), "same-folder albums merged");
-            folded += folds.len();
         }
         Ok(folded)
+    }
+
+    /// Fold `folds` into `keep` through the album page's merge preview and
+    /// apply, recorded under `actor`. Answers whether anything moved.
+    pub(super) fn merge_albums_into(
+        &self,
+        keep: &str,
+        folds: &BTreeSet<String>,
+        actor: &str,
+        key_prefix: &str,
+    ) -> Result<bool, CorrectionError> {
+        let track_ids = self.album_tracks(folds)?;
+        if track_ids.is_empty() {
+            return Ok(false);
+        }
+        let request = MembershipRequest {
+            kind: MembershipKind::Merge,
+            album_id: None,
+            track_ids,
+            expected_album_revisions: BTreeMap::new(),
+            target_album_id: Some(keep.to_owned()),
+            title: None,
+            album_artist_name: None,
+            identity_choice: IdentityChoice::RetainManual,
+        };
+        let previewed = self.preview_membership(&request, actor)?;
+        let key = format!(
+            "{key_prefix}:{keep}:{}",
+            folds.iter().cloned().collect::<Vec<_>>().join(",")
+        );
+        self.apply_membership(
+            &request,
+            &ApplyMeta {
+                preview_token: previewed.token,
+                idempotency_key: Some(key),
+                actor: actor.to_owned(),
+            },
+        )?;
+        Ok(true)
+    }
+
+    /// The first administrator, whom automatic merges are recorded under.
+    pub(super) fn merge_actor(&self) -> Result<Option<String>, CorrectionError> {
+        self.db().read_blocking(
+            "corrections.merge_actor",
+            |conn| -> Result<_, CorrectionError> {
+                Ok(conn
+                    .query_row(sql::FIRST_ADMIN.text(), [], |row| row.get(0))
+                    .optional()?)
+            },
+        )
     }
 
     /// The tracks of `albums` (a merge takes whole albums from any of them).

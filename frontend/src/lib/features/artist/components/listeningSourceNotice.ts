@@ -29,8 +29,10 @@ export function listeningSourceNotice(
 	}
 	const standIn = known.find((answer) => answer.source !== answer.asked_source);
 	if (standIn) {
-		const why = down.has(asked) ? 'is unavailable' : 'has nothing here';
-		return `${LABEL[asked]} ${why}, so these lists come from ${LABEL[standIn.source]}.`;
+		// Fork: an unavailable service is greyed out in the source switcher,
+		// which moves to the other one by itself; no line is needed.
+		if (down.has(asked)) return null;
+		return `${LABEL[asked]} has nothing here, so these lists come from ${LABEL[standIn.source]}.`;
 	}
 	if (down.has(asked)) return `${LABEL[asked]} is unavailable. These lists may be out of date.`;
 	return null;

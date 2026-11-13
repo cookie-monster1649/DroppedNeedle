@@ -79,10 +79,18 @@
 	);
 
 	// Each distinct reason once, with how many files it holds when the entry has several.
+	// Fork: the server says each reason once for all its files (`reasons`).
 	const reasons = $derived.by(() => {
+		if (entry.reasons?.length) {
+			return entry.reasons.map((item) => ({
+				text: item.text,
+				count: item.count,
+				action: item.action
+			}));
+		}
 		const counts = new SvelteMap<string, number>();
 		for (const file of files) counts.set(file.reason_text, (counts.get(file.reason_text) ?? 0) + 1);
-		return [...counts].map(([text, count]) => ({ text, count }));
+		return [...counts].map(([text, count]) => ({ text, count, action: null as string | null }));
 	});
 
 	function idsOffering(action: HeldFileAction): number[] {
@@ -220,6 +228,9 @@
 							{reason.text}{#if reasons.length > 1}<span class="text-muted"
 									>{` (${reason.count})`}</span
 								>{/if}
+							{#if reason.action}
+								<span class="block text-xs text-muted">{reason.action}</span>
+							{/if}
 						</li>
 					{/each}
 				</ul>
