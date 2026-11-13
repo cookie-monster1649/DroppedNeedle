@@ -130,6 +130,10 @@ impl From<DropError> for HeldError {
     }
 }
 
+// Fork: a file imported by hand onto a still-hunting song.
+mod manual;
+pub use self::manual::{KnownLink, ManualFetch, ManualFetchState, ManualFetches, ManualTask};
+
 const GONE: &str = "That held entry was not found. It may have been handled already.";
 
 /// An import-folder entry whose folder is not the import folder any more.
@@ -195,6 +199,8 @@ pub struct HeldService {
     /// held files they had: tried again only once that count changes (or
     /// after a restart).
     weak_tried: Mutex<HashMap<i64, i64>>,
+    /// Fork: fetches from a link for a still-hunting song (`manual`).
+    manual_fetches: ManualFetches,
 }
 
 impl HeldService {
@@ -215,6 +221,7 @@ impl HeldService {
             cut_off: Mutex::new(Vec::new()),
             heard_asked: Mutex::new(HashSet::new()),
             weak_tried: Mutex::new(HashMap::new()),
+            manual_fetches: ManualFetches::default(),
         }
     }
 

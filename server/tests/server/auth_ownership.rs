@@ -694,12 +694,34 @@ const SHARED_REVIEW: &str = "library reviews are shared by curators";
 const SHARED_LINK: &str = "YouTube links are shared by everyone on the server";
 const PLUGIN_ROUTE: &str = "a plugin's own route: the plugin checks its caller";
 
+const MANUAL_IMPORT: &str = "fork: curator-only; the service answers 404 for another user's task unless admin (acquire_landing::a_file_uploaded_onto_a_still_hunting_song_imports_and_settles_it)";
+
 /// Writes under an exempt family that hold nothing one user owns.
 const EXACT_EXEMPTIONS: &[(&str, &str, &str)] = &[
     (
         "DELETE",
         "/api/v3/playlists/{playlist_id}/members/me",
         "removes only the caller's own membership (reads_collections checks it)",
+    ),
+    (
+        "POST",
+        "/api/v3/downloads/{task_id}/manual-import/upload",
+        MANUAL_IMPORT,
+    ),
+    (
+        "POST",
+        "/api/v3/downloads/{task_id}/manual-import/link",
+        MANUAL_IMPORT,
+    ),
+    (
+        "GET",
+        "/api/v3/downloads/{task_id}/manual-import/links",
+        MANUAL_IMPORT,
+    ),
+    (
+        "GET",
+        "/api/v3/downloads/manual-import/fetches/{fetch_id}",
+        "fork: a random in-memory fetch id, answered only to the curator who started it or an admin",
     ),
     (
         "POST",

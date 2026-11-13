@@ -61,7 +61,12 @@ pub(crate) fn copy_rank(
     )
 }
 
-type Clash = (String, (usize, i64, i64, i64), String, (usize, i64, i64, i64));
+type Clash = (
+    String,
+    (usize, i64, i64, i64),
+    String,
+    (usize, i64, i64, i64),
+);
 
 impl Corrections {
     /// Merge albums that share a release and do not clash; answers how many
@@ -127,13 +132,14 @@ impl Corrections {
 
     /// Whether any file an album's rows name is still on disk.
     fn files_present(&self, album: &str) -> Result<bool, CorrectionError> {
-        let paths = self
-            .db()
-            .read_blocking("corrections.album_file_paths", |conn| -> Result<_, CorrectionError> {
+        let paths = self.db().read_blocking(
+            "corrections.album_file_paths",
+            |conn| -> Result<_, CorrectionError> {
                 let mut statement = conn.prepare_cached(sql::ALBUM_FILE_PATHS.text())?;
                 let rows = statement.query_map([album], |row| row.get::<_, String>(0))?;
                 Ok(rows.collect::<Result<Vec<_>, _>>()?)
-            })?;
+            },
+        )?;
         Ok(paths
             .iter()
             .any(|path| std::fs::symlink_metadata(path).is_ok()))
@@ -159,7 +165,11 @@ impl Corrections {
                     continue;
                 }
                 // Equal never replaces: the kept album's file stays.
-                let loser = if other_rank > kept_rank { &kept } else { &other };
+                let loser = if other_rank > kept_rank {
+                    &kept
+                } else {
+                    &other
+                };
                 match mutations.recycle_clash_copy(loser, &actor) {
                     Ok(_) => {
                         tracing::info!(album = %keep, other = %fold, track = %loser, "release clash settled; the worse copy went to the recycle bin");
@@ -176,19 +186,31 @@ impl Corrections {
     }
 
     fn release_clashes(&self, keep: &str, fold: &str) -> Result<Vec<Clash>, CorrectionError> {
-        self.db()
-            .read_blocking("corrections.release_track_clashes", |conn| -> Result<_, CorrectionError> {
+        self.db().read_blocking(
+            "corrections.release_track_clashes",
+            |conn| -> Result<_, CorrectionError> {
                 let mut statement = conn.prepare_cached(sql::RELEASE_TRACK_CLASHES.text())?;
                 let rows = statement.query_map([keep, fold], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        copy_rank(&row.get::<_, String>(1)?, row.get(2)?, row.get(3)?, row.get(4)?),
+                        copy_rank(
+                            &row.get::<_, String>(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ),
                         row.get::<_, String>(5)?,
-                        copy_rank(&row.get::<_, String>(6)?, row.get(7)?, row.get(8)?, row.get(9)?),
+                        copy_rank(
+                            &row.get::<_, String>(6)?,
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                        ),
                     ))
                 })?;
                 Ok(rows.collect::<Result<Vec<_>, _>>()?)
-            })
+            },
+        )
     }
 
     fn merge_live_release_albums(&self) -> Result<usize, CorrectionError> {

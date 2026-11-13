@@ -12810,7 +12810,11 @@ async fn a_ghost_copy_on_a_release_folds_into_the_live_album() {
     plant(&music, "old/01.flac", "flac_full_02.flac");
     let library = bundle(&scratch).await;
     scan(&library).await;
-    library.scan_store.db().run_sql(ONE_RELEASE).expect("identities");
+    library
+        .scan_store
+        .db()
+        .run_sql(ONE_RELEASE)
+        .expect("identities");
     let ghost_album = query(
         &library,
         "SELECT COUNT(DISTINCT local_album_id) FROM local_tracks",
@@ -12850,7 +12854,9 @@ async fn a_ghost_copy_on_a_release_folds_into_the_live_album() {
         "the live file is untouched"
     );
     assert_eq!(
-        corrections.merge_same_release_albums().expect("second pass"),
+        corrections
+            .merge_same_release_albums()
+            .expect("second pass"),
         0
     );
 }
@@ -12864,7 +12870,11 @@ async fn a_ghost_with_a_file_still_on_disk_is_left_alone() {
     plant(&music, "old/01.flac", "flac_full_02.flac");
     let library = bundle(&scratch).await;
     scan(&library).await;
-    library.scan_store.db().run_sql(ONE_RELEASE).expect("identities");
+    library
+        .scan_store
+        .db()
+        .run_sql(ONE_RELEASE)
+        .expect("identities");
     // The row says missing, but the file is there.
     library
         .scan_store
@@ -12893,7 +12903,11 @@ async fn a_release_clash_keeps_the_better_file_and_merges() {
     plant(&music, "c/01.flac", "flac_full_02.flac");
     let library = bundle(&scratch).await;
     scan(&library).await;
-    library.scan_store.db().run_sql(ONE_RELEASE).expect("identities");
+    library
+        .scan_store
+        .db()
+        .run_sql(ONE_RELEASE)
+        .expect("identities");
     let services = crate::common::library::services(&library);
     let corrections = services.corrections;
     assert_eq!(
