@@ -27,12 +27,14 @@
 
 pub mod confine;
 pub mod decision;
+pub mod foreign;
 pub mod hold;
 pub mod library;
 pub mod matching;
 pub mod ports;
 pub mod probe;
 pub mod quality;
+pub mod quality_words;
 pub mod specs;
 pub(crate) mod sql;
 pub mod want;
@@ -492,7 +494,9 @@ impl LandingService {
                     release_mbid: None,
                     distance: None,
                 };
-                let held = self.hold_decided(task, &target, &landing, &decision).await;
+                let held = self
+                    .hold_decided(task, &target, &landing, &decision, None)
+                    .await;
                 Acted::holding(decision, held)
             }
             None => {
@@ -520,7 +524,9 @@ impl LandingService {
                     _ => {
                         let whole_copy = whole_copy(&decision, &matched)
                             || want_agreed(&target, &landing, &decision);
-                        let held = self.hold_decided(task, &target, &landing, &decision).await;
+                        let held = self
+                            .hold_decided(task, &target, &landing, &decision, matched.best())
+                            .await;
                         Acted {
                             whole_copy,
                             ..Acted::holding(decision, held)
@@ -702,6 +708,7 @@ impl LandingService {
         target: &Target,
         landing: &Landing,
         decision: &Decision,
+        found: Option<&FoundRelease>,
     ) -> (usize, bool) {
         let Outcome::Hold { code, detail } = &decision.outcome else {
             return (0, false);
@@ -718,10 +725,29 @@ impl LandingService {
         // download holding the song twice files it once; the rest wait for
         // a person.
         let mut paired = false;
+        // Fork: songs by other artists that are no track of the release are
+        // not part of this album: they are left where they landed, never
+        // held under it (`landing::foreign`). Unless nothing would be left.
+        let release = found.map(|found| &found.release);
+        let foreign: HashSet<usize> = release
+            .map(|release| foreign::foreign_files(target, landing, release))
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let foreign = if foreign.len() < landing.audio.len() {
+            foreign
+        } else {
+            HashSet::new()
+        };
+        if !foreign.is_empty() {
+            tracing::info!(task_id = %task.id, left_out = foreign.len(), "files by other artists not held under the album");
+        }
         let held: Vec<Held<'_>> = landing
             .audio
             .iter()
-            .map(|file| {
+            .enumerate()
+            .filter(|(index, _)| !foreign.contains(index))
+            .map(|(_, file)| {
                 let track = ask
                     .as_ref()
                     .filter(|_| !paired && want::agrees(target, file))
@@ -736,7 +762,8 @@ impl LandingService {
             })
             .collect();
         (
-            self.hold(task, target, landing, ask.as_ref(), held).await,
+            self.hold(task, target, landing, ask.as_ref(), release, held)
+                .await,
             false,
         )
     }
@@ -971,7 +998,16 @@ impl LandingService {
         let any_local = held.iter().any(|item| !item.code.against_source());
         self.record_wrong_product(task, target, &held, imported_tracks.len())
             .await;
-        let held_count = self.hold(task, target, landing, Some(found), held).await;
+        let held_count = self
+            .hold(
+                task,
+                target,
+                landing,
+                Some(found),
+                Some(&found.release),
+                held,
+            )
+            .await;
 
         // What the release still lacks after this landing: the next
         // candidate is asked for these positions only. A track the person
@@ -1114,6 +1150,7 @@ impl LandingService {
         target: &Target,
         landing: &Landing,
         found: Option<&FoundRelease>,
+        verify: Option<&droppedneedle_library::matching::Release>,
         held: Vec<Held<'_>>,
     ) -> usize {
         if held.is_empty() {
@@ -1129,6 +1166,7 @@ impl LandingService {
                     target,
                     item.file,
                     paired,
+                    verify,
                     &root,
                     item.code,
                     &item.detail,
@@ -1712,11 +1750,13 @@ fn non_empty(value: &str) -> Option<String> {
 /// The held file for one landed file, with the release track it was
 /// paired to when there is one. The file is named by its path inside the
 /// download, so two discs' `01.flac` stay apart.
+#[allow(clippy::too_many_arguments)]
 fn hold_item(
     task: &TaskRow,
     target: &Target,
     file: &LandedFile,
     paired: Option<(&FoundRelease, usize)>,
+    verify: Option<&droppedneedle_library::matching::Release>,
     root: &Path,
     code: Reason,
     detail: &str,
@@ -1748,9 +1788,12 @@ fn hold_item(
                 disc_number: Some(i64::from(
                     track.map_or(tag.disc_number.max(1), |(_, track)| track.disc.max(1)),
                 )),
-                track_number: Some(i64::from(
-                    track.map_or(tag.track_number, |(_, track)| track.position),
-                ))
+                // Fork: a file paired to no track shows its own number only
+                // when the release's track at that number is its song.
+                track_number: match track {
+                    Some((_, track)) => Some(i64::from(track.position)),
+                    None => foreign::trusted_number(verify, file),
+                }
                 .filter(|number| *number > 0),
                 track_title: track
                     .map(|(_, track)| track.title.clone())

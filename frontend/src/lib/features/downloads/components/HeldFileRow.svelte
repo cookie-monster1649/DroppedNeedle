@@ -71,9 +71,11 @@
 	const recording = $derived(file.recording_mbid ?? entry.recording_mbid ?? null);
 	const offers = $derived(new Set(file.actions));
 
+	// Fork: a number is shown only for a file paired to the release's track,
+	// so a song that is not on the album never reads as one of its tracks.
 	const title = $derived(
 		file.track_title
-			? `${file.track_number ? `${file.track_number}. ` : ''}${file.track_title}`
+			? `${file.track_number && file.release_track_mbid ? `${file.track_number}. ` : ''}${file.track_title}`
 			: file.original_name
 	);
 

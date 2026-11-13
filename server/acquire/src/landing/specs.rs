@@ -234,6 +234,7 @@ pub fn match_specs() -> Vec<Box<dyn ImportSpec>> {
         Box::new(ReleaseFound),
         Box::new(PinnedEdition),
         Box::new(IdsAgree),
+        Box::new(ForeignArtists),
         Box::new(CloseAlbumMatch),
         Box::new(ArtistEvidence),
         Box::new(OwnArtist),
@@ -700,7 +701,13 @@ impl ImportSpec for RecipeListed {
             if !names_format(recipe, format) {
                 return Verdict::hold(
                     Reason::FormatNotListed,
-                    format!("{} isn't in your quality settings", format.to_uppercase()),
+                    super::quality_words::not_listed_sentence(
+                        recipe,
+                        format,
+                        file.header.bitrate_kbps,
+                        file.header.bit_depth,
+                        file.header.sample_rate,
+                    ),
                 );
             }
             let fit = recipe_fit(
@@ -717,9 +724,12 @@ impl ImportSpec for RecipeListed {
             if fit == RecipeFit::Outside {
                 return Verdict::hold(
                     Reason::FormatNotListed,
-                    format!(
-                        "{} at this quality isn't in your quality settings",
-                        format.to_uppercase()
+                    super::quality_words::not_listed_sentence(
+                        recipe,
+                        format,
+                        file.header.bitrate_kbps,
+                        file.header.bit_depth,
+                        file.header.sample_rate,
                     ),
                 );
             }
@@ -878,6 +888,61 @@ impl ImportSpec for IdsAgree {
             ),
             _ => Verdict::accept(),
         }
+    }
+}
+
+/// Fork: an album download that is mostly songs by other artists, none of
+/// them a track of the release (a mixed compilation), is the wrong release:
+/// the source is skipped and another tried, instead of holding another
+/// artist's songs under the album ([`super::foreign`]).
+struct ForeignArtists;
+
+impl ImportSpec for ForeignArtists {
+    fn name(&self) -> &'static str {
+        "foreign_artists"
+    }
+
+    fn check(&self, subject: &Subject<'_>) -> Verdict {
+        if subject.target.is_track {
+            return Verdict::accept();
+        }
+        let Some(found) = subject.matched.and_then(MatchSummary::best) else {
+            return Verdict::accept();
+        };
+        let total = subject.landing.audio.len();
+        let foreign =
+            super::foreign::foreign_files(subject.target, subject.landing, &found.release);
+        if foreign.is_empty() {
+            return Verdict::accept();
+        }
+        let named = super::foreign::foreign_artists(subject.landing, &foreign)
+            .iter()
+            .take(3)
+            .map(|(name, count)| format!("{name} ({count})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let artist = if subject.target.artist_name.trim().is_empty() {
+            found.release.artist_text()
+        } else {
+            subject.target.artist_name.clone()
+        };
+        if total >= 2 && foreign.len() * 2 > total {
+            return Verdict::reject(
+                Reason::WrongAlbum,
+                Disposition::Permanent,
+                Some(QuarantineReason::VerifyFailed),
+                format!(
+                    "{} of the {total} files are songs by other artists ({named}), not {artist}, \
+                     and none of them is a track of '{}'",
+                    foreign.len(),
+                    found.release.title
+                ),
+            );
+        }
+        Verdict::note(format!(
+            "{} file(s) by other artists ({named}) are not part of the album and were left out",
+            foreign.len()
+        ))
     }
 }
 

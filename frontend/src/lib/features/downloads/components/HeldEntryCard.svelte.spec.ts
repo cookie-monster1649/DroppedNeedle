@@ -48,6 +48,7 @@ const leftover: HeldEntry = {
 	album_title: null,
 	created_at: 1,
 	expires_at: null,
+	reasons: [],
 	files: [file(1), file(2)]
 };
 
@@ -94,5 +95,47 @@ describe('a leftover of the import folder', () => {
 			.toBeVisible();
 		await dialog.getByRole('button', { name: 'Discard' }).click();
 		await expect.poll(() => api.calls('POST /api/v3/held/{entry_id}/discard').length).toBe(1);
+	});
+});
+
+describe('fork: reasons said for the whole entry', () => {
+	it('shows the server summary with its action, and no track number for an unpaired file', async () => {
+		fakeApi({});
+		const mixed: HeldEntry = {
+			...leftover,
+			id: 480,
+			origin: 'download',
+			artist_name: 'Jack Johnson',
+			album_title: 'On and On',
+			reasons: [
+				{
+					reason: 'weak_match',
+					count: 2,
+					text: 'These files don’t line up with On and On by Jack Johnson. Their tags name: John Mayer (2).',
+					action: 'Listen, then Import the files that really are On and On.'
+				}
+			],
+			files: [
+				{
+					...file(1),
+					reason: 'weak_match',
+					track_number: 4,
+					track_title: 'Your Body Is a Wonderland'
+				},
+				{ ...file(2), reason: 'weak_match', track_number: 8, track_title: 'Daughters' }
+			]
+		};
+		await renderWithQuery(HeldEntryCard, { entry: mixed });
+		await expect
+			.element(page.getByText('Their tags name: John Mayer (2).', { exact: false }))
+			.toBeVisible();
+		await expect
+			.element(page.getByText('Listen, then Import the files that really are On and On.'))
+			.toBeVisible();
+		await page.getByRole('button', { name: 'Show 2 files' }).click();
+		await expect
+			.element(page.getByText('Your Body Is a Wonderland', { exact: true }))
+			.toBeVisible();
+		await expect.element(page.getByText('4. Your Body Is a Wonderland')).not.toBeInTheDocument();
 	});
 });
