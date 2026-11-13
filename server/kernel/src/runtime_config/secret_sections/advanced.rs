@@ -56,6 +56,9 @@ pub struct AdvancedSettings {
     pub ignored_releases_retention_days: i64,
     /// Store-prune cadence hours.
     pub store_prune_interval_hours: i64,
+    /// Fork: search Deezer beside MusicBrainz, adding the albums and
+    /// artists MusicBrainz does not have.
+    pub deezer_search_enabled: bool,
 }
 
 impl Default for AdvancedSettings {
@@ -80,6 +83,7 @@ impl Default for AdvancedSettings {
             request_history_retention_days: 180,
             ignored_releases_retention_days: 365,
             store_prune_interval_hours: 6,
+            deezer_search_enabled: true,
         }
     }
 }

@@ -17,6 +17,9 @@ use droppedneedle_providers::virtual_ids::{self, Kind};
 use super::{SourceIdentity, mint, sql};
 use crate::provider_match::{DEEZER, MatchTrack, ProviderMatch, ProviderMatchState, deezer_url};
 
+/// The provider the catalogue keeps.
+pub const PROVIDER: &str = DEEZER;
+
 /// How long a kept track list stands before the source is read again.
 pub const TRACKS_RECHECK_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
@@ -283,6 +286,36 @@ pub fn albums_of(conn: &Connection, artist_id: &str) -> rusqlite::Result<Vec<Cat
         });
     }
     Ok(out)
+}
+
+/// Keep Deezer artist `artist_id` (as a search found it) and mint its
+/// stand-in id, which this answers.
+///
+/// # Errors
+///
+/// A store fault.
+pub fn keep_artist(
+    conn: &Connection,
+    artist_id: &str,
+    name: &str,
+    picture_url: Option<&str>,
+    now: i64,
+) -> rusqlite::Result<String> {
+    conn.prepare_cached(sql::KEEP_SOURCE_ARTIST.text())?
+        .execute(params![DEEZER, artist_id, name, picture_url, now])?;
+    mint(conn, DEEZER, Kind::Artist, artist_id, None, now)
+}
+
+/// The name Deezer artist `artist_id` goes by here, if the library knows
+/// it.
+///
+/// # Errors
+///
+/// A store fault.
+pub fn artist_name(conn: &Connection, artist_id: &str) -> rusqlite::Result<Option<String>> {
+    conn.prepare_cached(sql::SOURCE_ARTIST_NAME.text())?
+        .query_row(params![DEEZER, artist_id], |row| row.get(0))
+        .optional()
 }
 
 /// The Deezer artist stand-in artist `uuid` names, if it was minted.

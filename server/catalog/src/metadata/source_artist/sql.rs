@@ -2,13 +2,18 @@
 
 droppedneedle_kernel::sql! {
     /// The provider's picture of stand-in artist `?1`, from a confirmed
-    /// album match that credits it.
+    /// album match that credits it, else (fork) as search found it.
     pub(super) SOURCE_ARTIST_PICTURE = "SELECT m.artist_picture_url FROM source_identities s \
            JOIN library_album_provider_matches m \
              ON m.provider = s.provider AND m.provider_artist_id = s.provider_id \
           WHERE s.uuid = ?1 AND s.kind = 'artist' \
             AND m.match_state = 'confirmed' AND m.artist_picture_url IS NOT NULL \
-          ORDER BY m.updated_at DESC LIMIT 1";
+         UNION ALL \
+         SELECT a.picture_url FROM source_identities s \
+           JOIN source_artists a \
+             ON a.provider = s.provider AND a.provider_artist_id = s.provider_id \
+          WHERE s.uuid = ?1 AND s.kind = 'artist' AND a.picture_url IS NOT NULL \
+          LIMIT 1";
     /// The held albums whose confirmed match credits stand-in artist `?1`:
     /// release group, title, year, the provider's record type.
     pub(super) SOURCE_ARTIST_ALBUMS = "SELECT e.release_group_mbid, b.title, b.year, \

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import SettingsPaneHeader from './SettingsPaneHeader.svelte';
-	import { Database, History, ImageIcon } from 'lucide-svelte';
+	import { Database, History, ImageIcon, Search } from 'lucide-svelte';
 	import {
 		createSaveAdvancedSettingsMutation,
 		getAdvancedSettingsQuery
@@ -12,6 +12,7 @@
 	import SettingsSectionCollapse from './SettingsSectionCollapse.svelte';
 	import SettingsStorageQueue from './SettingsStorageQueue.svelte';
 	import SettingsAudioDB from './SettingsAudioDB.svelte';
+	import ToggleRow from '$lib/ui/ToggleRow.svelte';
 
 	const section = createSettingsSection(
 		getAdvancedSettingsQuery(),
@@ -22,6 +23,8 @@
 	let openStorageQueue = $state(true);
 	let openAudioDB = $state(false);
 	let openRetention = $state(false);
+	// Fork: the Deezer search switch.
+	let openSources = $state(false);
 
 	const QUEUE_FIELDS = [
 		'discover_queue_size',
@@ -77,6 +80,25 @@
 					name="advanced-settings"
 				>
 					<SettingsAudioDB bind:data={() => draft, (value) => Object.assign(draft, value)} />
+				</SettingsSectionCollapse>
+
+				<!-- Fork: Deezer beside MusicBrainz in search. -->
+				<SettingsSectionCollapse
+					title="Search Sources"
+					description="Where search looks beyond MusicBrainz"
+					icon={Search}
+					iconBgClass="bg-secondary/10"
+					iconTextClass="text-secondary"
+					bind:isOpen={openSources}
+					name="advanced-settings"
+				>
+					<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4 pt-2">
+						<ToggleRow
+							label="Search Deezer"
+							description="Add albums and artists MusicBrainz does not have, marked Deezer"
+							bind:checked={draft.deezer_search_enabled}
+						/>
+					</div>
 				</SettingsSectionCollapse>
 
 				<SettingsSectionCollapse

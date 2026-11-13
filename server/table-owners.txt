@@ -277,6 +277,7 @@ local_track_genres
 local_track_lyrics
 local_tracks
 local_tracks_fts
+source_artists
 source_catalogue
 source_edition_checks
 source_editions
