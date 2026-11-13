@@ -437,7 +437,9 @@ impl SpotifyClient {
     }
 
     /// Fork: the first page of an artist's albums and singles
-    /// (`GET /artists/{id}/albums`), for the album-overlap check.
+    /// (`GET /artists/{id}/albums`), for the album-overlap check. Spotify
+    /// answers 400 to a `limit` over 10 for development-mode apps
+    /// (February 2026), so the page is kept at 10.
     ///
     /// # Errors
     ///
@@ -451,7 +453,7 @@ impl SpotifyClient {
         self.get(
             access_token,
             &["artists", artist_id, "albums"],
-            &[("include_groups", "album,single"), ("limit", "50")],
+            &[("include_groups", "album,single"), ("limit", "10")],
             priority,
         )
         .await

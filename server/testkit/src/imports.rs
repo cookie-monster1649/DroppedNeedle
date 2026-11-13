@@ -516,6 +516,8 @@ pub const SPOTIFY_LINK_ALBUM: &str = "0NeonMeridian000000001";
 pub const SPOTIFY_LINK_ARTIST: &str = "0AuroraCurrent00000001";
 /// A Spotify album id nothing here matches ("Nothing Known").
 pub const SPOTIFY_LINK_UNKNOWN: &str = "0NothingKnown000000001";
+/// Fork: a followed artist whose albums Spotify answers with a 400.
+pub const SPOTIFY_ARTIST_REFUSED: &str = "0RefusedArtist00000001";
 
 fn midnight_drive() -> Value {
     json!({
@@ -617,6 +619,8 @@ async fn spotify_following(State(state): State<SpotifyState>, headers: HeaderMap
     if !MockRecorder::flag(&state.recorder.unfollowed) {
         items.push(json!({"id": SPOTIFY_LINK_ARTIST, "name": "Aurora Current", "images": []}));
     }
+    // An artist whose albums Spotify refuses: the sync skips it.
+    items.push(json!({"id": SPOTIFY_ARTIST_REFUSED, "name": "Static Refusal", "images": []}));
     let total = items.len();
     Json(
         json!({"artists": {"items": items, "next": null, "cursors": {"after": null},
@@ -679,10 +683,19 @@ async fn spotify_artist_albums(
     State(state): State<SpotifyState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     record_path(&state, format!("/artists/{id}/albums"));
     if !spotify_authed(&headers) {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+    // Like the live API for development-mode apps: a limit over 10 is a 400.
+    let limit = params
+        .get("limit")
+        .and_then(|limit| limit.parse::<u32>().ok())
+        .unwrap_or(20);
+    if limit > 10 || id == SPOTIFY_ARTIST_REFUSED {
+        return StatusCode::BAD_REQUEST.into_response();
     }
     Json(
         json!({"items": [album_body("sp-album-1", "Neon Meridian", "Aurora Current", 1)],

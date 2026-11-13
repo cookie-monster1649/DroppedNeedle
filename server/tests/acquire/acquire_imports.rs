@@ -2157,7 +2157,9 @@ async fn followed_artists_sync_and_only_sync_made_follows_are_removed() {
         .sync_artists(&user_id, RequestPriority::UserInitiated)
         .await
         .expect("sync runs");
-    assert_eq!((synced.read, synced.matched, synced.followed), (1, 1, 1));
+    // The second followed artist's albums are refused (a 400): it is
+    // skipped and the rest of the sync goes on.
+    assert_eq!((synced.read, synced.matched, synced.followed), (2, 1, 1));
     assert_eq!(
         followed(&bundle.db, &user_id).await,
         vec![("Aurora Current".to_owned(), 0)]
@@ -2344,7 +2346,7 @@ async fn saved_albums_are_matched_flagged_new_and_never_requested() {
         (json!(true), json!(false))
     );
     assert_eq!(body["saved_albums"], json!(2));
-    assert_eq!(body["followed_artists"], json!(1));
+    assert_eq!(body["followed_artists"], json!(2));
 }
 
 async fn resolve(deps: &ImportsDeps, user_id: &str, link: &str) -> (StatusCode, Value) {
