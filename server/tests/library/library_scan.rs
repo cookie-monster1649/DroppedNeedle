@@ -11167,3 +11167,63 @@ async fn same_folder_albums_merge_by_themselves() {
         "nothing left to merge"
     );
 }
+
+/// Fork: albums in different folders matched to one MusicBrainz release are
+/// merged when their tracks do not clash; one holding a track the kept
+/// album already has stays for the picker.
+#[tokio::test]
+async fn same_release_albums_merge_unless_they_clash() {
+    let scratch = ScratchDir::new("scan-same-release-merge");
+    let music = scratch.join("music");
+    plant(&music, "a/01.flac", "flac_full_02.flac");
+    plant(&music, "b/02.flac", "flac_full_02.flac");
+    plant(&music, "c/03.flac", "flac_full_02.flac");
+    let library = bundle(&scratch).await;
+    scan(&library).await;
+    let albums = |library: &LibrarySetup| {
+        query(
+            library,
+            "SELECT COUNT(DISTINCT local_album_id) FROM local_tracks \
+             WHERE availability = 'indexed'",
+        )
+    };
+    assert_eq!(albums(&library), 3, "three folders, three albums");
+    // All three on one release; a and b hold different release tracks, c
+    // holds the same release track as a.
+    library
+        .scan_store
+        .db()
+        .run_sql(
+            "INSERT OR IGNORE INTO auth_users (id, display_name, role, created_at) \
+             VALUES ('admin', 'Admin', 'admin', 1); \
+             INSERT INTO local_album_external_identities (local_album_id, release_group_mbid, \
+               release_mbid, decision_source, selected_at) \
+             SELECT DISTINCT local_album_id, 'rg', 'REL-1', 'automatic', 1 FROM local_tracks; \
+             INSERT INTO local_track_external_identities (local_track_id, recording_mbid, \
+               release_mbid, release_track_mbid, decision_source, selected_at) \
+             SELECT id, 'rec-' || relative_path, 'rel-1', \
+               CASE WHEN relative_path LIKE 'b/%' THEN 'rt-2' ELSE 'rt-1' END, 'automatic', 1 \
+             FROM local_tracks;",
+        )
+        .expect("identities");
+    let corrections = crate::common::library::services(&library).corrections;
+    let merged = corrections.merge_same_release_albums().expect("merge pass");
+    assert_eq!(merged, 1, "b folds in; a and c clash");
+    assert_eq!(albums(&library), 2);
+    assert_eq!(
+        query(
+            &library,
+            "SELECT COUNT(DISTINCT local_album_id) FROM local_tracks \
+             WHERE relative_path IN ('a/01.flac', 'c/03.flac')",
+        ),
+        2,
+        "the two copies of one track stay apart"
+    );
+    assert_eq!(
+        corrections
+            .merge_same_release_albums()
+            .expect("second pass"),
+        0,
+        "nothing more to merge"
+    );
+}

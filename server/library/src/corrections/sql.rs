@@ -318,6 +318,34 @@ droppedneedle_kernel::sql! {
                AND (older.created_at < keep.created_at \
                     OR (older.created_at = keep.created_at AND older.id < keep.id))) \
              ORDER BY keep.id, fold.id";
+    /// Fork: live albums with indexed tracks that share a MusicBrainz
+    /// release on one root. Answers the album to keep (the oldest of the
+    /// release's albums, locked or not) and each other album of it that no
+    /// person grouped by hand, oldest first.
+    pub(super) SAME_RELEASE_ALBUMS = "WITH live AS ( \
+               SELECT a.id, a.root_id, a.created_at, a.grouping_locked, \
+                      lower(i.release_mbid) AS rel \
+               FROM local_albums a \
+               JOIN local_album_external_identities i \
+                 ON i.local_album_id = a.id AND i.provider = 'musicbrainz' \
+               WHERE a.retired_into_album_id IS NULL AND a.has_indexed_track = 1 \
+                 AND i.release_mbid IS NOT NULL AND trim(i.release_mbid) <> '') \
+             SELECT keep.id, fold.id FROM live keep \
+             JOIN live fold ON fold.rel = keep.rel AND fold.root_id = keep.root_id \
+               AND fold.grouping_locked = 0 \
+               AND (fold.created_at > keep.created_at \
+                    OR (fold.created_at = keep.created_at AND fold.id > keep.id)) \
+             WHERE NOT EXISTS (SELECT 1 FROM live older WHERE older.rel = keep.rel \
+               AND older.root_id = keep.root_id \
+               AND (older.created_at < keep.created_at \
+                    OR (older.created_at = keep.created_at AND older.id < keep.id))) \
+             ORDER BY keep.id, fold.created_at, fold.id";
+    /// Fork: the release tracks an album's indexed tracks are matched to.
+    pub(super) ALBUM_RELEASE_TRACKS = "SELECT DISTINCT lower(e.release_track_mbid) \
+             FROM local_tracks t JOIN local_track_external_identities e \
+               ON e.local_track_id = t.id AND e.provider = 'musicbrainz' \
+             WHERE t.local_album_id = ?1 AND +t.availability = 'indexed' \
+               AND e.release_track_mbid IS NOT NULL";
     /// Fork: the account an automatic merge is recorded under, the first
     /// administrator.
     pub(super) FIRST_ADMIN = "SELECT id FROM auth_users WHERE role = 'admin' \
