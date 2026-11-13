@@ -14,12 +14,27 @@ pub struct PlaylistFolders {
     /// An absolute folder path as the server sees it, on the same mount as
     /// the library, or empty for off.
     pub path: String,
+    /// Optional explicit Nextcloud user per DroppedNeedle username, written
+    /// into the folders' `.users.json` for the host helper; it wins over
+    /// matching by email or SSO identity.
+    pub nextcloud_users: std::collections::BTreeMap<String, String>,
 }
 
 impl Section for PlaylistFolders {
     const KEY: &'static str = "fork_playlist_folders";
 
     fn validate(&self) -> Result<(), ConfigError> {
+        if self
+            .nextcloud_users
+            .iter()
+            .any(|(from, to)| from.trim().is_empty() || to.trim().is_empty())
+        {
+            return Err(ConfigError::Validation {
+                section: Self::KEY,
+                field: "nextcloud_users",
+                reason: "each entry needs a username and a Nextcloud user".to_owned(),
+            });
+        }
         let path = self.path.trim();
         if path.is_empty() {
             return Ok(());
