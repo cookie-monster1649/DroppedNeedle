@@ -28,6 +28,8 @@ use droppedneedle_kernel::runtime_config::sections::{
     UserPreferences, WantedWatcher,
 };
 use droppedneedle_kernel::runtime_config::{Masked, SecretSection, Section};
+// Fork: live playlist folders.
+use droppedneedle_kernel::runtime_config::sections::PlaylistFolders;
 
 type JsonResult<T> = Result<Json<T>, ApiError>;
 
@@ -166,6 +168,13 @@ section_routes! {
             => "ListenBrainz reads switch";
         put put_listenbrainz: "Save the ListenBrainz reads switch."
             => "Saved switch";
+    }
+    // Fork: live playlist folders.
+    plain PlaylistFolders at "/api/v3/settings/library/playlist-folders", read admin, write admin {
+        get get_playlist_folders: "Read the live playlist folders setting."
+            => "Playlist folders";
+        put put_playlist_folders: "Save the live playlist folders root. Each user's playlists are\nkept there as folders of hardlinks to the library files."
+            => "Saved playlist folders";
     }
     plain LyricsSettings at "/api/v3/settings/lyrics", read admin, write admin {
         get get_lyrics_settings: "Read the online lyrics lookup switch."

@@ -8916,6 +8916,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/settings/library/playlist-folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the live playlist folders setting. */
+        get: operations["get_playlist_folders"];
+        /**
+         * Save the live playlist folders root. Each user's playlists are
+         *     kept there as folders of hardlinks to the library files.
+         */
+        put: operations["put_playlist_folders"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/settings/library/policy-apply-preview": {
         parameters: {
             query?: never;
@@ -19874,6 +19895,18 @@ export interface components {
              * @description Last mutation time, epoch seconds.
              */
             updated_at: number;
+        };
+        /**
+         * @description The folder each user's playlists are mirrored into as hardlinks to the
+         *     library files. An empty path turns it off.
+         */
+        PlaylistFolders: {
+            /**
+             * @description An absolute folder path as the server sees it, on the same mount as
+             *     the library, or empty for off.
+             * @default
+             */
+            path: string;
         };
         /** @description `playlist_imported`: an imported playlist has its tracks. */
         PlaylistImported: {
@@ -48145,6 +48178,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImportFolderStatusResponse"];
+                };
+            };
+        };
+    };
+    get_playlist_folders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Playlist folders */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaylistFolders"];
+                };
+            };
+        };
+    };
+    put_playlist_folders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlaylistFolders"];
+            };
+        };
+        responses: {
+            /** @description Saved playlist folders */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaylistFolders"];
                 };
             };
         };

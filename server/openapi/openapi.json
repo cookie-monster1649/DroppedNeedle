@@ -32826,6 +32826,70 @@
         ]
       }
     },
+    "/api/v3/settings/library/playlist-folders": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Read the live playlist folders setting.",
+        "operationId": "get_playlist_folders",
+        "responses": {
+          "200": {
+            "description": "Playlist folders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaylistFolders"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Save the live playlist folders root. Each user's playlists are\nkept there as folders of hardlinks to the library files.",
+        "operationId": "put_playlist_folders",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaylistFolders"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved playlist folders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaylistFolders"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/settings/library/policy-apply-preview": {
       "post": {
         "tags": [
@@ -57982,6 +58046,17 @@
             "format": "int64",
             "description": "Last mutation time, epoch seconds.",
             "minimum": 0
+          }
+        }
+      },
+      "PlaylistFolders": {
+        "type": "object",
+        "description": "The folder each user's playlists are mirrored into as hardlinks to the\nlibrary files. An empty path turns it off.",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "An absolute folder path as the server sees it, on the same mount as\nthe library, or empty for off.",
+            "default": ""
           }
         }
       },

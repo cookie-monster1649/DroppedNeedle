@@ -44,6 +44,8 @@ pub fn statement_files() -> Vec<StatementFile> {
         crate::events::sql::registered(),
         crate::jobs::sql::registered(),
         crate::runtime_config::sql::registered(),
+        // Fork: live playlist folders.
+        crate::jobs::playlist_folders::sql::registered(),
     ]
 }
 
