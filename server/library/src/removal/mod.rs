@@ -21,6 +21,8 @@
 //! the async workers.
 
 pub mod recycle_bin;
+// Fork: the losing copy of a same-release clash goes to the recycle bin.
+mod clash;
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
