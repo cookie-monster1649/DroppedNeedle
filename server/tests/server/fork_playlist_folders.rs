@@ -68,6 +68,7 @@ impl Rig {
         self.config
             .save_blocking(PlaylistFolders {
                 path: root.display().to_string(),
+                ..PlaylistFolders::default()
             })
             .expect("playlist folders setting saves");
     }
@@ -439,4 +440,64 @@ fn a_root_inside_the_library_or_empty_is_off() {
     );
     rig.set_root(&inside);
     assert!(job.tick(true).is_err());
+}
+
+/// `.users.json` lists each user with a folder, with the sign-in names a
+/// host helper maps to file-share accounts (never the display name alone),
+/// and is rewritten only when it changes.
+#[test]
+fn the_users_manifest_lists_folders_and_identities() {
+    let rig = Rig::new("pl-folders-manifest");
+    rig.sql(
+        "UPDATE auth_users SET username = 'jj-monester', email = 'jj@example.test' \
+         WHERE id = 'u-jj'; \
+         INSERT INTO auth_providers (id, user_id, provider, provider_uid, created_at) VALUES \
+         ('ap-1', 'u-jj', 'oidc', 'sub-123', 1), \
+         ('ap-2', 'u-jj', 'local', 'jj-monester', 1);",
+    );
+    rig.track("t1", "Aurora", "Opener", "opener.flac");
+    rig.playlist("p1", "u-jj", "Road Trip");
+    rig.entry("p1", 0, "Aurora", "Opener", Some("t1"));
+    // The admin has only an unlinkable entry: no folder, not listed.
+    rig.playlist("p3", "u-admin", "Wishlist");
+    rig.entry("p3", 0, "Nobody", "Not Here", None);
+    let job = rig.job();
+    job.tick(true).unwrap();
+
+    let path = rig.root.join(".users.json");
+    let read = || -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    };
+    assert_eq!(
+        read(),
+        serde_json::json!([{
+            "user_id": "u-jj",
+            "username": "jj-monester",
+            "display_name": "JJ Monester",
+            "folder": "JJ Monester",
+            "email": "jj@example.test",
+            "sso": [{"provider": "oidc", "subject": "sub-123"}],
+            "nextcloud_user": null,
+        }])
+    );
+    let inode = std::fs::metadata(&path).unwrap().ino();
+    job.tick(true).unwrap();
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().ino(),
+        inode,
+        "unchanged, not rewritten"
+    );
+
+    rig.config
+        .save_blocking(PlaylistFolders {
+            path: rig.root.display().to_string(),
+            nextcloud_users: [("jj-monester".to_owned(), "jj.nc".to_owned())].into(),
+        })
+        .unwrap();
+    job.tick(true).unwrap();
+    assert_eq!(read()[0]["nextcloud_user"], "jj.nc");
+
+    rig.sql("DELETE FROM catalog_playlists WHERE id = 'p1';");
+    job.tick(true).unwrap();
+    assert_eq!(read(), serde_json::json!([]));
 }

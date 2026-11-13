@@ -17,6 +17,22 @@ crate::sql! {
     pub(super) PROBE_FILE = "SELECT t.file_path FROM catalog_playlist_tracks pt \
         CROSS JOIN local_tracks t ON t.id = pt.library_file_id \
         WHERE pt.library_file_id IS NOT NULL AND t.availability = 'indexed' LIMIT 1";
+    /// Every user's sign-in names: username, email and SSO subjects (local
+    /// passwords left out), for the users manifest.
+    pub(super) USER_IDENTITIES = "SELECT u.id AS user_id, u.username AS username, \
+        u.email AS email, p.provider AS provider, p.provider_uid AS subject \
+        FROM auth_users u LEFT JOIN auth_providers p \
+        ON p.user_id = u.id AND p.provider <> 'local' \
+        ORDER BY u.id, p.provider, p.provider_uid";
+
+    /// One user's sign-in name.
+    pub(super) row IdentityRow for [USER_IDENTITIES] {
+        user_id: String,
+        username: Option<String>,
+        email: Option<String>,
+        provider: Option<String>,
+        subject: Option<String>,
+    }
 
     /// One playlist entry and its owner.
     pub(super) row FolderEntryRow for [FOLDER_ENTRIES] {
