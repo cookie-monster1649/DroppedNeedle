@@ -11,6 +11,8 @@ This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`.
 - **Deezer as a metadata source (stage a):** Deezer albums and artists get permanent stand-in IDs prefixed `d0ab1e00-50c3-8…`, recorded in a `source_identities` table. Their pages are served from Deezer data, and a single guard keeps these IDs away from MusicBrainz, Cover Art Archive, ListenBrainz, Last.fm and AudioDB.
 - **Deezer albums request as one download (stage b):** an album on stand-in IDs is requested through the normal edition request. One task with the Deezer track list as its plan asks only for the missing tracks. Tracks a settled partial or failed task left behind are asked for one by one, at their place on the album, after 30 minutes.
 - **Deezer artist pages and covers (stage c):** artists on stand-in IDs show the library's albums by them and their Deezer picture, and their Last.fm bio is looked up by name. Albums on stand-in IDs with no art of their own use the Deezer cover.
+- **Deezer discography:** an artist on stand-in IDs lists every album, EP and single Deezer has for them (up to 300), not only the ones you hold. Each links to a normal album page with its Deezer tracklist, and Request album plans one download from it.
+- **Deezer search:** being added on `nuc/v3.0.0-beta.4` alongside the discography work; not yet in this branch's history.
 - **Deezer editions (stage d):** Deezer's other editions of an album (explicit or clean, deluxe, remastered) are looked up monthly and listed as editions of it, so any of them can be requested.
 - **Deezer tags:** files from Deezer albums get `DEEZER_ALBUMID`, `DEEZER_TRACKID` and `DEEZER_ARTISTID` tags.
 - **Switching to MusicBrainz:** an album moves to MusicBrainz automatically once MusicBrainz has a confident match.
@@ -26,6 +28,13 @@ This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`.
 - **Matching by hand:** a hand match keeps the edition that was requested. Partial albums match by exact name or ISRC.
 - **Fewer albums stuck in To Decide:** when the same tracks arrive more than once, only the best copy of each is kept. Weak held albums then re-match by themselves.
 - **Merging:** "Merge albums" folds copies of a release together, keeping the best file of each song. Same-folder albums merge by themselves.
+- **Same-release albums merge by themselves:** local albums matched to the same MusicBrainz release on one library root are folded into the oldest one by a background pass (its first run after start is the backfill), through the same merge as the album page. Albums a person grouped by hand are left alone, and copies that hold the same track stay apart, so the "Copies in your library" picker only shows for real clashes.
+
+**To Decide (held files)**
+- **Other artists' songs left out:** a file tagged with another artist whose title matches no track of the album is never held under that album or given a track number. A download that is mostly such files (a mixed compilation) is rejected as the wrong album, blocklisted, and the next source is tried.
+- **No borrowed track numbers:** a held file shows a track number only when it is paired to that track, or its own title is the title at that position.
+- **Grouped albums:** albums held for the same artist or from the same download sit in one collapsible group with its artist and count. The group has Import all / Discard all for each reason its albums share, and each album and file keeps its own buttons.
+- **Plain reasons:** every hold reason is explained from the file itself. For example, the artist and title the file claims against the album you asked for, or its real format, bit depth, sample rate or bitrate against your quality settings, plus the setting to change ("Add 24-bit / 192 kHz FLAC in Settings → Download Client → Acquisition quality…"). Each album shows each reason once, with a count.
 
 **Spotify and playlists**
 - **Spotify metadata:** songs import with Spotify's title, artist, album, ISRC and link, even when MusicBrainz doesn't know them.
@@ -49,6 +58,7 @@ This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`.
 - **Shared IDs:** if another artist already holds that MusicBrainz ID, a merge is suggested in the Artists tab.
 
 **Other**
+- **ListenBrainz unavailable:** where you can pick ListenBrainz or Last.fm (artist Popular, Popular, Trending, Your top), an unavailable ListenBrainz shows as a greyed-out tab with a tooltip, and Last.fm is picked automatically. When ListenBrainz comes back the tab is enabled again, but you stay on the tab you're on.
 - **Login:** `OIDC_NEW_USER_ROLE` sets the role for new SSO accounts.
 - **Player:** a track that ends unheard is reloaded transcoded. A playlist row's play button starts the queue at that row.
 
