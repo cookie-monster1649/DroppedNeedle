@@ -30,6 +30,10 @@ pub struct TokenAnswer {
     /// Lifetime in seconds.
     #[serde(default)]
     pub expires_in: Option<i64>,
+    /// Fork: the scopes granted, space-separated; a refresh grant may
+    /// leave it out.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 /// The current user, `GET /me`.
@@ -105,7 +109,7 @@ pub enum TrackCount {
 }
 
 /// One cover image.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Image {
     /// Image address.
     pub url: String,
@@ -159,7 +163,7 @@ pub struct PlaylistEntry {
 }
 
 /// The track (or episode) of one entry.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct EntryTrack {
     /// Spotify track id. The key is required; a local file sends null.
     #[serde(deserialize_with = "nullable")]
@@ -191,7 +195,7 @@ pub struct EntryTrack {
 }
 
 /// One credited artist.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ArtistRef {
     /// Artist name.
     #[serde(default)]
@@ -199,7 +203,7 @@ pub struct ArtistRef {
 }
 
 /// The album a track is on.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AlbumRef {
     /// Spotify album id, null for a local file.
     #[serde(default)]
@@ -213,16 +217,16 @@ pub struct AlbumRef {
 }
 
 /// A track's outside ids.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ExternalIds {
     /// International Standard Recording Code.
     #[serde(default)]
     pub isrc: Option<String>,
 }
 
-/// Fork: one album as `GET /albums/{id}` gives it, the parts the import
-/// proves it with.
-#[derive(Debug, Deserialize)]
+/// Fork: one album as `GET /albums/{id}` (and `/me/albums`) gives it, the
+/// parts the import and the resolver prove it with.
+#[derive(Debug, Clone, Deserialize)]
 pub struct AlbumDetail {
     /// Spotify album id.
     #[serde(default)]
@@ -230,10 +234,129 @@ pub struct AlbumDetail {
     /// The album's outside ids.
     #[serde(default)]
     pub external_ids: Option<AlbumExternalIds>,
+    /// Album title.
+    #[serde(default)]
+    pub name: String,
+    /// Credited artists.
+    #[serde(default)]
+    pub artists: Vec<SpotifyArtist>,
+    /// Tracks on the album.
+    #[serde(default)]
+    pub total_tracks: Option<i64>,
+    /// Release date, as precise as Spotify knows it (`2011`, `2011-05-03`).
+    #[serde(default)]
+    pub release_date: Option<String>,
+    /// `album`, `single` or `compilation`.
+    #[serde(default)]
+    pub album_type: Option<String>,
+    /// Cover images.
+    #[serde(default)]
+    pub images: Option<Vec<Image>>,
+}
+
+/// Fork: an artist as Spotify lists it (album credits, `/artists/{id}`,
+/// `/me/following`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpotifyArtist {
+    /// Spotify artist id; credits on some local files carry none.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Artist name.
+    #[serde(default)]
+    pub name: String,
+    /// Pictures, on the full artist object only.
+    #[serde(default)]
+    pub images: Option<Vec<Image>>,
+}
+
+/// Fork: one page of the caller's Liked Songs, `GET /me/tracks`. Each
+/// item carries its track under `track`, as a playlist entry does.
+#[derive(Debug, Deserialize)]
+pub struct SavedTrackPage {
+    /// The saved tracks on this page, newest first.
+    pub items: Vec<PlaylistEntry>,
+    /// Address of the next page; null on the last.
+    #[serde(default)]
+    pub next: Option<String>,
+    /// Saved tracks across every page.
+    #[serde(default)]
+    pub total: i64,
+}
+
+/// Fork: one saved album, `GET /me/albums`.
+#[derive(Debug, Deserialize)]
+pub struct SavedAlbum {
+    /// When it was saved (ISO 8601).
+    #[serde(default)]
+    pub added_at: Option<String>,
+    /// The album.
+    pub album: AlbumDetail,
+}
+
+/// Fork: one page of the caller's saved albums, `GET /me/albums`.
+#[derive(Debug, Deserialize)]
+pub struct SavedAlbumPage {
+    /// The saved albums on this page, newest first.
+    pub items: Vec<SavedAlbum>,
+    /// Address of the next page; null on the last.
+    #[serde(default)]
+    pub next: Option<String>,
+    /// Saved albums across every page.
+    #[serde(default)]
+    pub total: i64,
+}
+
+/// Fork: `GET /me/following?type=artist`, a cursor page under `artists`.
+#[derive(Debug, Deserialize)]
+pub struct FollowedArtists {
+    /// The page.
+    pub artists: ArtistCursorPage,
+}
+
+/// Fork: one cursor page of followed artists.
+#[derive(Debug, Deserialize)]
+pub struct ArtistCursorPage {
+    /// The artists on this page.
+    pub items: Vec<SpotifyArtist>,
+    /// Address of the next page; null on the last.
+    #[serde(default)]
+    pub next: Option<String>,
+    /// The cursor the next page starts after.
+    #[serde(default)]
+    pub cursors: Option<Cursors>,
+    /// Followed artists across every page.
+    #[serde(default)]
+    pub total: i64,
+}
+
+/// Fork: a cursor page's cursors.
+#[derive(Debug, Deserialize)]
+pub struct Cursors {
+    /// The last id on this page.
+    #[serde(default)]
+    pub after: Option<String>,
+}
+
+/// Fork: one page of an artist's albums, `GET /artists/{id}/albums`.
+#[derive(Debug, Deserialize)]
+pub struct ArtistAlbumPage {
+    /// The albums on this page.
+    pub items: Vec<AlbumDetail>,
+    /// Address of the next page; null on the last.
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
+/// Fork: Spotify's oEmbed answer for a public link, the name only.
+#[derive(Debug, Deserialize)]
+pub struct OEmbed {
+    /// The item's title (a song, album, artist or playlist name).
+    #[serde(default)]
+    pub title: String,
 }
 
 /// Fork: an album's outside ids.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AlbumExternalIds {
     /// Universal Product Code (the barcode).
     #[serde(default)]

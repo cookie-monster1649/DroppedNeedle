@@ -1,4 +1,6 @@
 <script lang="ts">
+	// Fork: `?track=<recording>` (a pasted Spotify song link) marks that song.
+	import { page as pageState } from '$app/state';
 	import type {
 		AlbumBasicInfo,
 		LocalAlbumMatch,
@@ -190,6 +192,26 @@
 			});
 		}
 	}
+
+	// Fork: the song a pasted Spotify link named, scrolled to once.
+	const highlightRecording = $derived(pageState.url.searchParams.get('track'));
+	let highlightScrolled = false;
+	$effect(() => {
+		const recording = highlightRecording;
+		if (!recording || highlightScrolled) return;
+		// The rows can render after the page: look for a few seconds.
+		let tries = 0;
+		const timer = setInterval(() => {
+			const row = document.querySelector(`[data-recording="${CSS.escape(recording)}"]`);
+			tries += 1;
+			if (row) {
+				highlightScrolled = true;
+				row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+			}
+			if (row || tries > 40) clearInterval(timer);
+		}, 250);
+		return () => clearInterval(timer);
+	});
 </script>
 
 <ul class="divide-y divide-paper-border/70">
@@ -279,9 +301,11 @@
 				integrations.current.download_client}
 			{@const rateTrack = libMeta && onRateTrack ? onRateTrack : null}
 			<li
+				data-recording={track.recording_id ?? undefined}
 				class="px-2 py-0.5 transition-colors hover:[--dn-quiet-ink:currentColor] focus-within:[--dn-quiet-ink:currentColor] sm:px-4 {isCurrentlyPlaying
 					? 'bg-selected'
 					: 'hover:bg-base-content/4'}"
+				class:dn-linked-track={!!highlightRecording && track.recording_id === highlightRecording}
 			>
 				<!-- One line from 640 up. Narrower, the format, length and status
 				     drop to a line under the title so the title keeps its room. -->
@@ -579,3 +603,11 @@
 		{/each}
 	{/each}
 </ul>
+
+<style>
+	/* Fork: the song a pasted Spotify link named. */
+	.dn-linked-track {
+		background-color: color-mix(in oklab, var(--color-accent) 18%, transparent);
+		border-radius: 0.5rem;
+	}
+</style>

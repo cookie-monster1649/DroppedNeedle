@@ -54,6 +54,21 @@ pub struct SpotifyConnection {
     pub username: String,
     /// Spotify user id, seeding the owner filter.
     pub spotify_user_id: String,
+    /// Fork: the scopes the link was granted, space-separated; empty for a
+    /// link made before they were kept.
+    pub scope: String,
+}
+
+impl SpotifyConnection {
+    /// Fork: whether the link was granted every library scope (Liked
+    /// Songs, saved albums, followed artists). A link made before them
+    /// needs connecting again; its playlists stay.
+    pub fn has_library_scopes(&self) -> bool {
+        let granted: Vec<&str> = self.scope.split_whitespace().collect();
+        droppedneedle_providers::spotify::LIBRARY_SCOPES
+            .iter()
+            .all(|scope| granted.contains(scope))
+    }
 }
 
 impl std::fmt::Debug for SpotifyConnection {
@@ -64,6 +79,7 @@ impl std::fmt::Debug for SpotifyConnection {
             .field("expires_at_unix", &self.expires_at_unix)
             .field("username", &self.username)
             .field("spotify_user_id", &self.spotify_user_id)
+            .field("scope", &self.scope)
             .finish()
     }
 }

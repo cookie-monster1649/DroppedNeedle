@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page as pageState } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { onDestroy, untrack } from 'svelte';
 	import {
@@ -225,6 +226,19 @@
 		}
 		await handleRequestMissing();
 	}
+
+	// Fork: "Download all" on Liked Songs opens the playlist with
+	// `?request=all`: ask for every song once the list is in.
+	let requestAllAsked = false;
+	$effect(() => {
+		if (requestAllAsked || !playlist) return;
+		if (pageState.url.searchParams.get('request') !== 'all') return;
+		requestAllAsked = true;
+		const url = new URL(window.location.href);
+		url.searchParams.delete('request');
+		history.replaceState(history.state, '', url);
+		void handleRequestAll();
+	});
 
 	function applySourcesMap(sources: Record<string, string[]>, onlyMissing = false) {
 		if (!playlist) return;

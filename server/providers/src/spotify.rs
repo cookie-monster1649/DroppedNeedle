@@ -30,8 +30,16 @@ pub const SOURCE: &str = "spotify";
 pub const API_BASE: &str = "https://api.spotify.com/v1";
 /// Spotify accounts origin: the authorize page and the token grants.
 pub const ACCOUNTS_BASE: &str = "https://accounts.spotify.com";
-/// OAuth scopes the import asks for.
-pub const SCOPES: &str = "playlist-read-private playlist-read-collaborative user-read-private";
+/// OAuth scopes the import asks for. Fork: the library scopes read Liked
+/// Songs, saved albums (`user-library-read`) and followed artists
+/// (`user-follow-read`).
+pub const SCOPES: &str = "playlist-read-private playlist-read-collaborative user-read-private user-library-read user-follow-read";
+/// Fork: the scopes the library sync needs on top of the playlist ones.
+pub const LIBRARY_SCOPES: [&str; 2] = ["user-library-read", "user-follow-read"];
+/// Fork: Spotify's public web origin, which answers oEmbed for a link.
+pub const WEB_BASE: &str = "https://open.spotify.com";
+/// Fork: saved items read per page (Spotify's maximum).
+pub const LIBRARY_PAGE: i64 = 50;
 /// Largest Web API or accounts answer read.
 const MAX_BODY_BYTES: usize = 4 * 1024 * 1024;
 /// Playlists read per page of the caller's list (Spotify's maximum).
@@ -74,6 +82,8 @@ pub struct TokenGrant {
     pub refresh_token: Option<String>,
     /// Lifetime in seconds (default 3600).
     pub expires_in_secs: i64,
+    /// Fork: the scopes granted, when the grant names them.
+    pub scope: Option<String>,
 }
 
 impl std::fmt::Debug for TokenGrant {
@@ -85,6 +95,7 @@ impl std::fmt::Debug for TokenGrant {
                 &self.refresh_token.as_ref().map(|_| "<redacted>"),
             )
             .field("expires_in_secs", &self.expires_in_secs)
+            .field("scope", &self.scope)
             .finish()
     }
 }
@@ -95,6 +106,7 @@ impl From<TokenAnswer> for TokenGrant {
             access_token: answer.access_token,
             refresh_token: answer.refresh_token,
             expires_in_secs: answer.expires_in.unwrap_or(3600),
+            scope: answer.scope.filter(|scope| !scope.trim().is_empty()),
         }
     }
 }
@@ -105,6 +117,9 @@ pub struct SpotifyClient {
     executor: Executor,
     api_base: Option<Url>,
     accounts_base: Option<Url>,
+    /// Fork: where oEmbed is asked: Spotify's web origin beside the real
+    /// API, else the API's own address (a test mock serves both).
+    web_base: Option<Url>,
 }
 
 impl SpotifyClient {
@@ -112,10 +127,16 @@ impl SpotifyClient {
     /// accounts host at `accounts_base`.
     #[must_use]
     pub fn new(executor: Executor, api_base: &str, accounts_base: &str) -> Self {
+        let web_base = if api_base.trim_end_matches('/') == API_BASE {
+            WEB_BASE
+        } else {
+            api_base
+        };
         Self {
             executor,
             api_base: parse_base(api_base, SOURCE),
             accounts_base: parse_base(accounts_base, SOURCE),
+            web_base: parse_base(web_base, SOURCE),
         }
     }
 
@@ -315,6 +336,147 @@ impl SpotifyClient {
     ) -> Result<models::AlbumDetail, ProviderError> {
         self.get(access_token, &["albums", album_id], &[], priority)
             .await
+    }
+
+    /// Fork: one page of the caller's Liked Songs (`GET /me/tracks`), from
+    /// `offset`, `limit` at a time (at most [`LIBRARY_PAGE`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`]; a link without `user-library-read` is
+    /// refused (403).
+    pub async fn saved_tracks_page(
+        &self,
+        access_token: &str,
+        offset: i64,
+        limit: i64,
+        priority: RequestPriority,
+    ) -> Result<models::SavedTrackPage, ProviderError> {
+        let (limit, offset) = (limit.clamp(1, LIBRARY_PAGE).to_string(), offset.to_string());
+        self.get(
+            access_token,
+            &["me", "tracks"],
+            &[("limit", &limit), ("offset", &offset)],
+            priority,
+        )
+        .await
+    }
+
+    /// Fork: one page of the caller's saved albums (`GET /me/albums`), from
+    /// `offset`, [`LIBRARY_PAGE`] at a time.
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::saved_tracks_page`].
+    pub async fn saved_albums_page(
+        &self,
+        access_token: &str,
+        offset: i64,
+        priority: RequestPriority,
+    ) -> Result<models::SavedAlbumPage, ProviderError> {
+        let (limit, offset) = (LIBRARY_PAGE.to_string(), offset.to_string());
+        self.get(
+            access_token,
+            &["me", "albums"],
+            &[("limit", &limit), ("offset", &offset)],
+            priority,
+        )
+        .await
+    }
+
+    /// Fork: one cursor page of the artists the caller follows
+    /// (`GET /me/following?type=artist`), after cursor `after`.
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`]; a link without `user-follow-read` is
+    /// refused (403).
+    pub async fn followed_artists_page(
+        &self,
+        access_token: &str,
+        after: Option<&str>,
+        priority: RequestPriority,
+    ) -> Result<models::FollowedArtists, ProviderError> {
+        let limit = LIBRARY_PAGE.to_string();
+        let mut query = vec![("type", "artist"), ("limit", limit.as_str())];
+        if let Some(after) = after {
+            query.push(("after", after));
+        }
+        self.get(access_token, &["me", "following"], &query, priority)
+            .await
+    }
+
+    /// Fork: one track (`GET /tracks/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`].
+    pub async fn track(
+        &self,
+        access_token: &str,
+        track_id: &str,
+        priority: RequestPriority,
+    ) -> Result<models::EntryTrack, ProviderError> {
+        self.get(access_token, &["tracks", track_id], &[], priority)
+            .await
+    }
+
+    /// Fork: one artist (`GET /artists/{id}`).
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`].
+    pub async fn artist(
+        &self,
+        access_token: &str,
+        artist_id: &str,
+        priority: RequestPriority,
+    ) -> Result<models::SpotifyArtist, ProviderError> {
+        self.get(access_token, &["artists", artist_id], &[], priority)
+            .await
+    }
+
+    /// Fork: the first page of an artist's albums and singles
+    /// (`GET /artists/{id}/albums`), for the album-overlap check.
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`].
+    pub async fn artist_albums_page(
+        &self,
+        access_token: &str,
+        artist_id: &str,
+        priority: RequestPriority,
+    ) -> Result<models::ArtistAlbumPage, ProviderError> {
+        self.get(
+            access_token,
+            &["artists", artist_id, "albums"],
+            &[("include_groups", "album,single"), ("limit", "50")],
+            priority,
+        )
+        .await
+    }
+
+    /// Fork: the name behind a public Spotify link, through oEmbed, which
+    /// needs no account. `link` is the canonical `open.spotify.com` address
+    /// the caller built from a parsed id.
+    ///
+    /// # Errors
+    ///
+    /// The executor's typed failure, or a payload error.
+    pub async fn oembed(
+        &self,
+        link: &str,
+        priority: RequestPriority,
+    ) -> Result<models::OEmbed, ProviderError> {
+        let base = self
+            .web_base
+            .as_ref()
+            .ok_or_else(|| unusable_base(SOURCE))?;
+        let request =
+            Request::get(base, &["oembed"], &[("url", link)]).map_err(|_| unusable_base(SOURCE))?;
+        let reply = self.executor.send(request, priority).await?;
+        decode(&reply)
     }
 
     /// One authenticated Web API GET of `path`. Each path value is one

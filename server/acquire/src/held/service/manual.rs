@@ -274,33 +274,27 @@ impl HeldService {
 fn manual_task_row(rows: &HeldRows<'_>, task_id: &str) -> rusqlite::Result<Option<ManualTask>> {
     use rusqlite::OptionalExtension as _;
     rows.conn()
-        .query_row(
-            crate::held::sql::MANUAL_TASK.text(),
-            [task_id],
-            |row| {
-                Ok(ManualTask {
-                    task_id: row.get(0)?,
-                    user_id: row.get(1)?,
-                    download_type: row.get(2)?,
-                    release_group_mbid: row.get(3)?,
-                    release_mbid: row.get::<_, Option<String>>(4)?.filter(|v| !v.is_empty()),
-                    release_track_mbid: row.get::<_, Option<String>>(5)?.filter(|v| !v.is_empty()),
-                    recording_mbid: row.get::<_, Option<String>>(6)?.filter(|v| !v.is_empty()),
-                    artist_name: row.get(7)?,
-                    album_title: row.get(8)?,
-                    track_title: row.get(9)?,
-                    track_number: row.get(10)?,
-                    disc_number: row.get(11)?,
-                })
-            },
-        )
+        .query_row(crate::held::sql::MANUAL_TASK.text(), [task_id], |row| {
+            Ok(ManualTask {
+                task_id: row.get(0)?,
+                user_id: row.get(1)?,
+                download_type: row.get(2)?,
+                release_group_mbid: row.get(3)?,
+                release_mbid: row.get::<_, Option<String>>(4)?.filter(|v| !v.is_empty()),
+                release_track_mbid: row.get::<_, Option<String>>(5)?.filter(|v| !v.is_empty()),
+                recording_mbid: row.get::<_, Option<String>>(6)?.filter(|v| !v.is_empty()),
+                artist_name: row.get(7)?,
+                album_title: row.get(8)?,
+                track_title: row.get(9)?,
+                track_number: row.get(10)?,
+                disc_number: row.get(11)?,
+            })
+        })
         .optional()
 }
 
 fn known_links(rows: &HeldRows<'_>, task: &ManualTask) -> rusqlite::Result<Vec<KnownLink>> {
-    let mut statement = rows.conn().prepare(
-        crate::held::sql::MANUAL_LINKS.text(),
-    )?;
+    let mut statement = rows.conn().prepare(crate::held::sql::MANUAL_LINKS.text())?;
     let links = statement.query_map(
         rusqlite::params![
             task.recording_mbid,

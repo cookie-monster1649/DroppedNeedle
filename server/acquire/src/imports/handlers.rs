@@ -45,9 +45,14 @@ use super::models::{
     SpotifyImportRequest, SpotifyImportResponse, SpotifyImportStatus, SpotifyPlaylistListResponse,
     SpotifyRedirectUri, SpotifySettings, SpotifySyncState, SpotifySyncUpdate,
 };
+use super::models::{
+    SpotifyLibraryState, SpotifyLibraryUpdate, SpotifyResolution, SpotifyResolveQuery,
+    SpotifySavedAlbumList,
+};
 use super::spotify::{ImportFailure, SpotifyImportService};
 use super::spotify_albums::AlbumResolver;
 use super::spotify_client::{SpotifyClient, SpotifyError, now_unix_secs};
+use super::spotify_library::{LibraryError, SpotifyLibrary};
 use super::spotify_oauth::{PendingAuth, SPOTIFY_CALLBACK_PATH, SpotifyConnection, redirect_uri};
 use super::spotify_store::{CollectionsPlaylistBridge, SqliteSpotifyLinks, SqliteSpotifyStates};
 use super::spotify_sync::{SpotifySyncs, SyncSettingError};
@@ -80,6 +85,9 @@ pub struct ImportsDeps {
     pub spotify_imports: SpotifyImports,
     /// Fork: which imported playlists are kept in step with Spotify.
     pub spotify_syncs: SpotifySyncs,
+    /// Fork: followed artists and saved albums kept in step, and pasted
+    /// Spotify links resolved.
+    pub spotify_library: Arc<SpotifyLibrary>,
     /// Probes behind the download client status reads.
     pub probes: Arc<HealthProbes>,
     /// Fresh ids, the OAuth state fallback when the OS RNG fails.
@@ -131,6 +139,13 @@ pub fn routes() -> Routes<ImportsDeps> {
         .user(routes!(get_spotify_sync, put_spotify_sync))
         .user(routes!(get_playlist_rows))
         .user(routes!(disconnect_spotify))
+        // Fork: the Spotify library and pasted links.
+        .user(routes!(get_spotify_library, put_spotify_library))
+        .user(routes!(sync_spotify_artists))
+        .user(routes!(list_spotify_saved_albums))
+        .user(routes!(scan_spotify_saved_albums))
+        .user(routes!(review_spotify_saved_albums))
+        .user(routes!(resolve_spotify_link))
         .user(routes!(get_slskd_status))
         .admin(routes!(get_sabnzbd_status))
 }
@@ -447,6 +462,7 @@ async fn finish_spotify_link(deps: &ImportsDeps, query: SpotifyCallbackQuery) ->
         expires_at_unix: now_unix_secs(deps.spotify_links.clock().as_ref()) + grant.expires_in_secs,
         username,
         spotify_user_id,
+        scope: grant.scope.unwrap_or_default(),
     };
     if let Err(cause) = deps.spotify_links.upsert(&pending.user_id, &link).await {
         tracing::error!(%cause, "spotify link write failed");
@@ -757,4 +773,151 @@ pub async fn get_playlist_rows(
     })?
     .ok_or(ImportsError::NotFound)?;
     Ok(Json(super::playlist_rows::PlaylistRowsResponse { rows }))
+}
+
+/// Fork: map a library failure to the wire.
+fn library_failed(error: LibraryError) -> ImportsError {
+    match error {
+        LibraryError::Import(ImportFailure::Settings(error)) => settings_failed(error),
+        LibraryError::Import(ImportFailure::Spotify(error)) => spotify_failed(error),
+        LibraryError::NeedsReconnect => ImportsError::Conflict {
+            message: LibraryError::NeedsReconnect.message(),
+        },
+        LibraryError::Resolve(error) => ImportsError::Unavailable {
+            cause: format!("spotify link resolution failed: {error}"),
+        },
+        LibraryError::Store(cause) => ImportsError::internal(&cause),
+    }
+}
+
+/// Fork: the caller's Spotify library sync: toggles, Spotify's counts,
+/// and whether the link needs reconnecting for library access.
+#[utoipa::path(get, tag = "imports", path = "/api/v3/acquire/spotify/library",
+    responses(
+        (status = 200, description = "Library sync state", body = SpotifyLibraryState),
+        (status = 400, description = "Spotify not linked"),
+    ))]
+pub async fn get_spotify_library(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+) -> Result<Json<SpotifyLibraryState>, ApiError> {
+    let state = deps
+        .spotify_library
+        .state(principal.user_id())
+        .await
+        .map_err(library_failed)?;
+    Ok(Json(state))
+}
+
+/// Fork: turn the followed-artist and saved-album syncs on or off.
+#[utoipa::path(put, tag = "imports", path = "/api/v3/acquire/spotify/library",
+    request_body = SpotifyLibraryUpdate,
+    responses(
+        (status = 200, description = "Library sync state", body = SpotifyLibraryState),
+        (status = 400, description = "Spotify not linked"),
+    ))]
+pub async fn put_spotify_library(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+    ValidJson(body): ValidJson<SpotifyLibraryUpdate>,
+) -> Result<Json<SpotifyLibraryState>, ApiError> {
+    deps.spotify_library
+        .set(principal.user_id(), body.follow_sync, body.album_sync)
+        .await
+        .map_err(library_failed)?;
+    let state = deps
+        .spotify_library
+        .state(principal.user_id())
+        .await
+        .map_err(library_failed)?;
+    Ok(Json(state))
+}
+
+/// Fork: follow the artists followed at Spotify now, in the background.
+/// Follows only: auto-download stays off and nothing is downloaded.
+#[utoipa::path(post, tag = "imports", path = "/api/v3/acquire/spotify/library/artists/sync",
+    responses(
+        (status = 202, description = "Started (or already running)"),
+    ))]
+pub async fn sync_spotify_artists(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+) -> StatusCode {
+    deps.spotify_library.spawn(principal.user_id(), false);
+    StatusCode::ACCEPTED
+}
+
+/// Fork: the albums saved at Spotify, matched here, for the review.
+#[utoipa::path(get, tag = "imports", path = "/api/v3/acquire/spotify/library/albums",
+    responses(
+        (status = 200, description = "Saved albums", body = SpotifySavedAlbumList),
+    ))]
+pub async fn list_spotify_saved_albums(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+) -> Result<Json<SpotifySavedAlbumList>, ApiError> {
+    let albums = deps
+        .spotify_library
+        .albums(principal.user_id())
+        .await
+        .map_err(library_failed)?;
+    Ok(Json(albums))
+}
+
+/// Fork: read the saved albums again now, in the background. Nothing is
+/// requested.
+#[utoipa::path(post, tag = "imports", path = "/api/v3/acquire/spotify/library/albums/scan",
+    responses(
+        (status = 202, description = "Started (or already running)"),
+    ))]
+pub async fn scan_spotify_saved_albums(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+) -> StatusCode {
+    deps.spotify_library.spawn(principal.user_id(), true);
+    StatusCode::ACCEPTED
+}
+
+/// Fork: confirm the saved-album review: no album shows as new any more.
+#[utoipa::path(post, tag = "imports", path = "/api/v3/acquire/spotify/library/albums/reviewed",
+    responses(
+        (status = 204, description = "Reviewed"),
+    ))]
+pub async fn review_spotify_saved_albums(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+) -> Result<StatusCode, ApiError> {
+    deps.spotify_library
+        .mark_reviewed(principal.user_id())
+        .await
+        .map_err(library_failed)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Fork: the album, song or artist here a pasted Spotify link names.
+/// Never a guess: no confident match answers `found: false` with the
+/// Spotify name.
+#[utoipa::path(get, tag = "imports", path = "/api/v3/resolve/spotify",
+    params(SpotifyResolveQuery),
+    responses(
+        (status = 200, description = "Resolution", body = SpotifyResolution),
+        (status = 400, description = "Not a Spotify track, album or artist link"),
+        (status = 502, description = "Spotify, MusicBrainz or Deezer failed"),
+    ))]
+pub async fn resolve_spotify_link(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+    ValidQuery(query): ValidQuery<SpotifyResolveQuery>,
+) -> Result<Json<SpotifyResolution>, ApiError> {
+    let resolved = deps
+        .spotify_library
+        .resolve_link(principal.user_id(), &query.url)
+        .await
+        .map_err(library_failed)?;
+    resolved.map(Json).ok_or_else(|| {
+        ImportsError::InvalidInput {
+            message: "Not a Spotify track, album or artist link".to_owned(),
+        }
+        .into()
+    })
 }
