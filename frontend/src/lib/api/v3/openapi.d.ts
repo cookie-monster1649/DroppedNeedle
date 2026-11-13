@@ -196,6 +196,101 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/acquire/spotify/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: the caller's Spotify library sync: toggles, Spotify's counts,
+         *     and whether the link needs reconnecting for library access.
+         */
+        get: operations["get_spotify_library"];
+        /** Fork: turn the followed-artist and saved-album syncs on or off. */
+        put: operations["put_spotify_library"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/acquire/spotify/library/albums": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fork: the albums saved at Spotify, matched here, for the review. */
+        get: operations["list_spotify_saved_albums"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/acquire/spotify/library/albums/reviewed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fork: confirm the saved-album review: no album shows as new any more. */
+        post: operations["review_spotify_saved_albums"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/acquire/spotify/library/albums/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork: read the saved albums again now, in the background. Nothing is
+         *     requested.
+         */
+        post: operations["scan_spotify_saved_albums"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/acquire/spotify/library/artists/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork: follow the artists followed at Spotify now, in the background.
+         *     Follows only: auto-download stays off and nothing is downloaded.
+         */
+        post: operations["sync_spotify_artists"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/acquire/spotify/playlists": {
         parameters: {
             query?: never;
@@ -7975,6 +8070,27 @@ export interface paths {
          *     with the request key.
          */
         post: operations["request_want_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/resolve/spotify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: the album, song or artist here a pasted Spotify link names.
+         *     Never a guess: no confident match answers `found: false` with the
+         *     Spotify name.
+         */
+        get: operations["resolve_spotify_link"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -23900,6 +24016,56 @@ export interface components {
              */
             state: string;
         };
+        /** @description Fork: the caller's Spotify library sync (Profile, Spotify card). */
+        SpotifyLibraryState: {
+            /**
+             * @description Saved albums are read again every 15 minutes; new ones are flagged
+             *     for review, never requested by themselves.
+             */
+            album_sync: boolean;
+            /**
+             * Format: int64
+             * @description Epoch milliseconds of the last saved-album check.
+             */
+            albums_checked_at?: number | null;
+            /** @description A saved-album scan is running. */
+            albums_scanning: boolean;
+            /**
+             * Format: int64
+             * @description Epoch milliseconds of the last followed-artist check.
+             */
+            artists_checked_at?: number | null;
+            /** @description A followed-artist sync is running. */
+            artists_syncing: boolean;
+            /** @description Followed artists at Spotify are followed here (never auto-download). */
+            follow_sync: boolean;
+            /**
+             * Format: int64
+             * @description Artists the caller follows at Spotify, when Spotify answered.
+             */
+            followed_artists?: number | null;
+            /** @description Why the last check failed. */
+            last_error?: string | null;
+            /** @description The link lacks the library scopes: reconnect Spotify first. */
+            needs_reconnect: boolean;
+            /**
+             * Format: int64
+             * @description Saved albums flagged new since the last review.
+             */
+            new_albums: number;
+            /**
+             * Format: int64
+             * @description Albums the caller saved at Spotify, when Spotify answered.
+             */
+            saved_albums?: number | null;
+        };
+        /** @description Fork: turn the Spotify library syncs on or off. */
+        SpotifyLibraryUpdate: {
+            /** @description Keep the saved albums in step. */
+            album_sync: boolean;
+            /** @description Follow the artists followed at Spotify. */
+            follow_sync: boolean;
+        };
         /** @description One owned Spotify playlist. */
         SpotifyPlaylistItem: {
             /** @description Picked cover URL, smallest image at least 250 wide. */
@@ -23922,6 +24088,17 @@ export interface components {
         };
         /** @description Owned playlists. */
         SpotifyPlaylistListResponse: {
+            /**
+             * @description Fork: the caller's Liked Songs as a playlist (id `liked`), when the
+             *     link may read them.
+             */
+            liked_songs?: null | components["schemas"]["SpotifyPlaylistItem"];
+            /**
+             * @description Fork: the link predates the library scopes: connect Spotify again to
+             *     read Liked Songs, saved albums and followed artists. Imported
+             *     playlists stay.
+             */
+            needs_reconnect?: boolean;
             /** @description Playlists owned by the caller's Spotify account. */
             playlists: components["schemas"]["SpotifyPlaylistItem"][];
         };
@@ -23929,6 +24106,61 @@ export interface components {
         SpotifyRedirectUri: {
             /** @description Byte-exact URI registered in the Spotify dashboard. */
             redirect_uri: string;
+        };
+        /** @description Fork: what a pasted Spotify link resolved to. */
+        SpotifyResolution: {
+            /** @description The album to open (a track's album too). */
+            album_id?: string | null;
+            /** @description The credited artist, when known. */
+            artist?: string | null;
+            /** @description The artist to open. */
+            artist_id?: string | null;
+            /** @description A confident match was found. */
+            found: boolean;
+            /** @description `track`, `album` or `artist`. */
+            kind: string;
+            /** @description The name Spotify gives it. */
+            name: string;
+            /** @description A track's recording on that album, to highlight. */
+            recording_id?: string | null;
+            /** @description `musicbrainz` or `deezer`. */
+            source?: string | null;
+            /** @description What proved it: isrc, link, barcode, name. */
+            via?: string | null;
+        };
+        /** @description Fork: one album saved at Spotify, as the review shows it. */
+        SpotifySavedAlbum: {
+            artist_name: string;
+            cover_url?: string | null;
+            /** @description The library holds a copy. */
+            held: boolean;
+            /** @description Saved since the last review; never requested by itself. */
+            is_new: boolean;
+            /** @description How it matched: barcode, link, deezer_barcode, name, deezer_name. */
+            matched_by?: string | null;
+            /**
+             * @description The album here (MusicBrainz release group or Deezer stand-in);
+             *     `None` when nothing matched: not found.
+             */
+            release_group?: string | null;
+            /** @description A request for it is open or done. */
+            requested: boolean;
+            /** @description Spotify album id. */
+            spotify_album_id: string;
+            title: string;
+            /** Format: int64 */
+            year?: number | null;
+        };
+        /** @description Fork: the saved-album review. */
+        SpotifySavedAlbumList: {
+            albums: components["schemas"]["SpotifySavedAlbum"][];
+            /**
+             * Format: int64
+             * @description Epoch milliseconds of the last finished scan.
+             */
+            checked_at?: number | null;
+            /** @description A scan is running; read again shortly. */
+            scanning: boolean;
         };
         /** @description Admin Spotify app settings (issue #298). */
         SpotifySettings: {
@@ -26162,6 +26394,142 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
+            };
+        };
+    };
+    get_spotify_library: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Library sync state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifyLibraryState"];
+                };
+            };
+            /** @description Spotify not linked */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    put_spotify_library: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpotifyLibraryUpdate"];
+            };
+        };
+        responses: {
+            /** @description Library sync state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifyLibraryState"];
+                };
+            };
+            /** @description Spotify not linked */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    list_spotify_saved_albums: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Saved albums */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifySavedAlbumList"];
+                };
+            };
+        };
+    };
+    review_spotify_saved_albums: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reviewed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    scan_spotify_saved_albums: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Started (or already running) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    sync_spotify_artists: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Started (or already running) */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -46097,6 +46465,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WantIntakeResponse"];
+                };
+            };
+        };
+    };
+    resolve_spotify_link: {
+        parameters: {
+            query: {
+                /** @description An open.spotify.com link or spotify: URI. */
+                url: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Resolution */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpotifyResolution"];
+                };
+            };
+            /** @description Not a Spotify track, album or artist link */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Spotify, MusicBrainz or Deezer failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

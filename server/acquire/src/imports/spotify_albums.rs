@@ -222,6 +222,59 @@ impl AlbumResolver {
     }
 }
 
+impl AlbumResolver {
+    /// Fork: a MusicBrainz view on the configured source at `priority`,
+    /// for the link resolver (`spotify_resolve`).
+    ///
+    /// # Errors
+    ///
+    /// The MusicBrainz settings do not read.
+    pub fn view(&self, priority: RequestPriority) -> Result<MusicBrainzView, ProviderError> {
+        let Some(settings) = self.settings.read() else {
+            return Err(ProviderError::NotConfigured {
+                provider: SOURCE,
+                message: "the musicbrainz settings cannot be read".to_owned(),
+            });
+        };
+        Ok(self
+            .musicbrainz
+            .fixed(self.musicbrainz.source_from(&settings), priority))
+    }
+
+    /// Fork: the release group of the MusicBrainz releases that link
+    /// Spotify album `album.spotify_id`, when they agree on one. Needs no
+    /// ISRC: the link proves the album.
+    ///
+    /// # Errors
+    ///
+    /// A MusicBrainz failure.
+    pub async fn resolve_link(
+        &self,
+        album: &SpotifyAlbum,
+        priority: RequestPriority,
+    ) -> Result<Option<ProvenAlbum>, ProviderError> {
+        if album.spotify_id.is_empty()
+            || !album.spotify_id.chars().all(|c| c.is_ascii_alphanumeric())
+        {
+            return Ok(None);
+        }
+        let view = self.view(priority)?;
+        let resolution = view
+            .resolve_url(
+                &format!("https://open.spotify.com/album/{}", album.spotify_id),
+                &["release-rels"],
+                Criticality::IdentityCritical,
+            )
+            .await?;
+        let ids: Vec<String> = resolution
+            .relations
+            .iter()
+            .filter_map(|relation| relation.release.as_ref().map(|release| release.id.clone()))
+            .collect();
+        prove_releases(&view, album, &ids, false).await
+    }
+}
+
 /// Fork: where a Spotify album's barcode is kept.
 fn barcode_key(id: &str) -> CacheKey {
     CacheKey::hashed(Source::MusicBrainz, "spotify_album_upc", &[id])

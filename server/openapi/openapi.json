@@ -416,6 +416,181 @@
         ]
       }
     },
+    "/api/v3/acquire/spotify/library": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: the caller's Spotify library sync: toggles, Spotify's counts,\nand whether the link needs reconnecting for library access.",
+        "operationId": "get_spotify_library",
+        "responses": {
+          "200": {
+            "description": "Library sync state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifyLibraryState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Spotify not linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: turn the followed-artist and saved-album syncs on or off.",
+        "operationId": "put_spotify_library",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpotifyLibraryUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Library sync state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifyLibraryState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Spotify not linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/acquire/spotify/library/albums": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: the albums saved at Spotify, matched here, for the review.",
+        "operationId": "list_spotify_saved_albums",
+        "responses": {
+          "200": {
+            "description": "Saved albums",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifySavedAlbumList"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/acquire/spotify/library/albums/reviewed": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: confirm the saved-album review: no album shows as new any more.",
+        "operationId": "review_spotify_saved_albums",
+        "responses": {
+          "204": {
+            "description": "Reviewed"
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/acquire/spotify/library/albums/scan": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: read the saved albums again now, in the background. Nothing is\nrequested.",
+        "operationId": "scan_spotify_saved_albums",
+        "responses": {
+          "202": {
+            "description": "Started (or already running)"
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/acquire/spotify/library/artists/sync": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: follow the artists followed at Spotify now, in the background.\nFollows only: auto-download stays off and nothing is downloaded.",
+        "operationId": "sync_spotify_artists",
+        "responses": {
+          "202": {
+            "description": "Started (or already running)"
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/acquire/spotify/playlists": {
       "get": {
         "tags": [
@@ -29787,6 +29962,65 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WantIntakeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/resolve/spotify": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: the album, song or artist here a pasted Spotify link names.\nNever a guess: no confident match answers `found: false` with the\nSpotify name.",
+        "operationId": "resolve_spotify_link",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "description": "An open.spotify.com link or spotify: URI.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Resolution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpotifyResolution"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a Spotify track, album or artist link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Spotify, MusicBrainz or Deezer failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
                 }
               }
             }
@@ -67089,6 +67323,102 @@
           }
         }
       },
+      "SpotifyLibraryState": {
+        "type": "object",
+        "description": "Fork: the caller's Spotify library sync (Profile, Spotify card).",
+        "required": [
+          "needs_reconnect",
+          "follow_sync",
+          "album_sync",
+          "new_albums",
+          "artists_syncing",
+          "albums_scanning"
+        ],
+        "properties": {
+          "album_sync": {
+            "type": "boolean",
+            "description": "Saved albums are read again every 15 minutes; new ones are flagged\nfor review, never requested by themselves."
+          },
+          "albums_checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Epoch milliseconds of the last saved-album check."
+          },
+          "albums_scanning": {
+            "type": "boolean",
+            "description": "A saved-album scan is running."
+          },
+          "artists_checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Epoch milliseconds of the last followed-artist check."
+          },
+          "artists_syncing": {
+            "type": "boolean",
+            "description": "A followed-artist sync is running."
+          },
+          "follow_sync": {
+            "type": "boolean",
+            "description": "Followed artists at Spotify are followed here (never auto-download)."
+          },
+          "followed_artists": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Artists the caller follows at Spotify, when Spotify answered."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last check failed."
+          },
+          "needs_reconnect": {
+            "type": "boolean",
+            "description": "The link lacks the library scopes: reconnect Spotify first."
+          },
+          "new_albums": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Saved albums flagged new since the last review."
+          },
+          "saved_albums": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Albums the caller saved at Spotify, when Spotify answered."
+          }
+        }
+      },
+      "SpotifyLibraryUpdate": {
+        "type": "object",
+        "description": "Fork: turn the Spotify library syncs on or off.",
+        "required": [
+          "follow_sync",
+          "album_sync"
+        ],
+        "properties": {
+          "album_sync": {
+            "type": "boolean",
+            "description": "Keep the saved albums in step."
+          },
+          "follow_sync": {
+            "type": "boolean",
+            "description": "Follow the artists followed at Spotify."
+          }
+        }
+      },
       "SpotifyPlaylistItem": {
         "type": "object",
         "description": "One owned Spotify playlist.",
@@ -67144,6 +67474,21 @@
           "playlists"
         ],
         "properties": {
+          "liked_songs": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpotifyPlaylistItem"
+              }
+            ],
+            "description": "Fork: the caller's Liked Songs as a playlist (id `liked`), when the\nlink may read them."
+          },
+          "needs_reconnect": {
+            "type": "boolean",
+            "description": "Fork: the link predates the library scopes: connect Spotify again to\nread Liked Songs, saved albums and followed artists. Imported\nplaylists stay."
+          },
           "playlists": {
             "type": "array",
             "items": {
@@ -67163,6 +67508,162 @@
           "redirect_uri": {
             "type": "string",
             "description": "Byte-exact URI registered in the Spotify dashboard."
+          }
+        }
+      },
+      "SpotifyResolution": {
+        "type": "object",
+        "description": "Fork: what a pasted Spotify link resolved to.",
+        "required": [
+          "kind",
+          "found",
+          "name"
+        ],
+        "properties": {
+          "album_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album to open (a track's album too)."
+          },
+          "artist": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The credited artist, when known."
+          },
+          "artist_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The artist to open."
+          },
+          "found": {
+            "type": "boolean",
+            "description": "A confident match was found."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`track`, `album` or `artist`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name Spotify gives it."
+          },
+          "recording_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A track's recording on that album, to highlight."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`musicbrainz` or `deezer`."
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What proved it: isrc, link, barcode, name."
+          }
+        }
+      },
+      "SpotifySavedAlbum": {
+        "type": "object",
+        "description": "Fork: one album saved at Spotify, as the review shows it.",
+        "required": [
+          "spotify_album_id",
+          "title",
+          "artist_name",
+          "is_new",
+          "held",
+          "requested"
+        ],
+        "properties": {
+          "artist_name": {
+            "type": "string"
+          },
+          "cover_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "held": {
+            "type": "boolean",
+            "description": "The library holds a copy."
+          },
+          "is_new": {
+            "type": "boolean",
+            "description": "Saved since the last review; never requested by itself."
+          },
+          "matched_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How it matched: barcode, link, deezer_barcode, name, deezer_name."
+          },
+          "release_group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album here (MusicBrainz release group or Deezer stand-in);\n`None` when nothing matched: not found."
+          },
+          "requested": {
+            "type": "boolean",
+            "description": "A request for it is open or done."
+          },
+          "spotify_album_id": {
+            "type": "string",
+            "description": "Spotify album id."
+          },
+          "title": {
+            "type": "string"
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "SpotifySavedAlbumList": {
+        "type": "object",
+        "description": "Fork: the saved-album review.",
+        "required": [
+          "albums",
+          "scanning"
+        ],
+        "properties": {
+          "albums": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpotifySavedAlbum"
+            }
+          },
+          "checked_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Epoch milliseconds of the last finished scan."
+          },
+          "scanning": {
+            "type": "boolean",
+            "description": "A scan is running; read again shortly."
           }
         }
       },

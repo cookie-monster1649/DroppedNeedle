@@ -48,7 +48,8 @@ use droppedneedle_providers::images::check_spotify_cover_url;
 use droppedneedle_providers::spotify::TokenGrant;
 use droppedneedle_providers::{ProviderEndpoints, Providers, RequestPriority, ReqwestWire};
 use droppedneedle_testkit::imports::{
-    LIDARR_KEY, LIDARR_MBID_ALL, LIDARR_MBID_NONE, MockRecorder, SPOTIFY_PLAYLIST_NO_TRACK_ID,
+    LIDARR_KEY, LIDARR_MBID_ALL, LIDARR_MBID_NONE, MockRecorder, SPOTIFY_LINK_ALBUM,
+    SPOTIFY_LINK_ARTIST, SPOTIFY_LINK_TRACK, SPOTIFY_LINK_UNKNOWN, SPOTIFY_PLAYLIST_NO_TRACK_ID,
     SPOTIFY_TOKEN, serve_lidarr, serve_spotify,
 };
 use droppedneedle_testkit::musicbrainz::MockMusicBrainz;
@@ -201,15 +202,26 @@ fn rig_with(
     let deps = ImportsDeps {
         lidarr: LidarrClient::new(http),
         lidarr_settings,
-        follows,
+        follows: follows.clone(),
         spotify: spotify_client,
         spotify_settings,
         spotify_states,
         spotify_links: spotify_links.clone(),
         spotify_playlists: spotify_playlists.clone(),
-        resolver,
+        resolver: resolver.clone(),
         spotify_imports,
         spotify_syncs: syncs.clone(),
+        spotify_library: Arc::new(imports::spotify_library::SpotifyLibrary::new(
+            service.clone(),
+            imports::spotify_resolve::Live::new(
+                resolver.clone(),
+                providers.previews.clone(),
+                AcquireDb::new(platform.db.clone(), platform.clock.clone()),
+                droppedneedle_providers::RequestPriority::BackgroundSync,
+            ),
+            AcquireDb::new(platform.db.clone(), platform.clock.clone()),
+            follows.clone(),
+        )),
         probes: Arc::new(LiveProbes::bundle(&probes)),
         ids: Arc::new(FixedIdGenerator),
         base_path: String::new(),
@@ -1188,6 +1200,7 @@ async fn a_synced_spotify_playlist_follows_spotify_and_asks_for_new_songs() {
         bundle.bridge.clone(),
         bundle.syncs.clone(),
         asked.clone(),
+        bundle.deps.spotify_library.clone(),
     );
     assert_eq!(sync.run_once().await, 1, "the first check imports");
     assert!(
@@ -1573,6 +1586,7 @@ async fn spotify_sqlite_stores_persist_and_expire() {
         expires_at_unix: 1_900_000_000,
         username: "Una".to_owned(),
         spotify_user_id: "una-sp".to_owned(),
+        scope: "playlist-read-private user-library-read".to_owned(),
     };
     links.upsert("u1", &link).await.expect("store writes");
     assert_eq!(
@@ -1883,6 +1897,7 @@ fn import_secrets_never_logged() {
         expires_at_unix: 1,
         username: "u".to_owned(),
         spotify_user_id: "s".to_owned(),
+        scope: String::new(),
     };
     let debug = format!("{connection:?}");
     assert!(!debug.contains("SUPERSECRET"), "{debug}");
@@ -1891,7 +1906,553 @@ fn import_secrets_never_logged() {
         access_token: "ACCESS-SUPERSECRET".to_owned(),
         refresh_token: Some("REFRESH-SUPERSECRET".to_owned()),
         expires_in_secs: 3600,
+        scope: None,
     };
     let debug = format!("{grant:?}");
     assert!(!debug.contains("SUPERSECRET"), "{debug}");
+}
+
+// Fork: the Spotify library (Liked Songs, followed artists, saved albums)
+// and pasted Spotify links.
+
+/// The Neon Meridian release group the MusicBrainz mock proves.
+const NEON_GROUP: &str = "5907a1b0-0000-4000-8000-000000000b01";
+/// The Glass Tides release group the MusicBrainz mock proves.
+const GLASS_GROUP: &str = "5907a1b0-0000-4000-8000-000000000b02";
+
+/// The rig's deps with the library over a scripted Deezer: no album by
+/// name or barcode, no song by ISRC, and one artist "Aurora Current".
+fn with_scripted_deezer(auth: &AuthRig, bundle: &Rig) -> ImportsDeps {
+    use droppedneedle_providers::test_support::ScriptedWire;
+    let wire = Arc::new(ScriptedWire::new());
+    let json_type = [("content-type", "application/json")];
+    let deezer = "http://127.0.0.1:9/deezer";
+    wire.answer(
+        &format!("{deezer}/search/album"),
+        200,
+        &json_type,
+        r#"{"data":[]}"#,
+    );
+    wire.answer(
+        &format!("{deezer}/search/artist"),
+        200,
+        &json_type,
+        r#"{"data":[{"id":7,"name":"Aurora Current"}]}"#,
+    );
+    for isrc in ["USRC17607839", "USRC17607840"] {
+        wire.answer(
+            &format!("{deezer}/track/isrc:{isrc}"),
+            404,
+            &json_type,
+            "{}",
+        );
+    }
+    let platform = &auth.platform;
+    let db = AcquireDb::new(platform.db.clone(), platform.clock.clone());
+    let mut deps = bundle.deps.clone();
+    deps.spotify_library = Arc::new(imports::spotify_library::SpotifyLibrary::new(
+        bundle.service.clone(),
+        imports::spotify_resolve::Live::new(
+            bundle.deps.resolver.clone(),
+            Providers::unpaced(wire).previews.clone(),
+            db.clone(),
+            RequestPriority::BackgroundSync,
+        ),
+        db,
+        bundle.deps.follows.clone(),
+    ));
+    deps
+}
+
+/// A linked user with the library scopes on a scripted Deezer.
+async fn library_rig() -> (
+    AuthRig,
+    Rig,
+    ImportsDeps,
+    MockRecorder,
+    String,
+    Vec<Box<dyn std::any::Any>>,
+) {
+    let (auth, admin_id, user_id) = seed_rig().await;
+    let (api, accounts, covers, recorder) = serve_spotify().await.expect("mock serves");
+    let musicbrainz = serve_musicbrainz(&auth).await;
+    let bundle = rig_for(
+        &auth,
+        &api.base_url,
+        &accounts.base_url,
+        Some(&covers.base_url),
+    );
+    seed_spotify_app(bundle.deps.clone(), &admin_id).await;
+    link_spotify(bundle.deps.clone(), &recorder, &user_id).await;
+    let deps = with_scripted_deezer(&auth, &bundle);
+    let guards: Vec<Box<dyn std::any::Any>> = vec![
+        Box::new(api),
+        Box::new(accounts),
+        Box::new(covers),
+        Box::new(musicbrainz),
+    ];
+    (auth, bundle, deps, recorder, user_id, guards)
+}
+
+/// Fork: an account linked before the library scopes is asked to
+/// reconnect; reconnecting keeps its imported playlists.
+#[tokio::test]
+async fn an_old_spotify_link_is_asked_to_reconnect_and_keeps_its_playlists() {
+    let (_auth, bundle, deps, recorder, user_id, _guards) = library_rig().await;
+    let (status, body) = post_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/playlists/sp-playlist-1/import",
+        json!({"name": "Neon Nights"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let playlist_id = body["playlist_id"].as_str().expect("id").to_owned();
+    assert_eq!(
+        poll_job_done(&bundle, &user_id, "sp-playlist-1").await,
+        ImportState::Done
+    );
+
+    // The link as one made before the fork asked for library access.
+    let mut old = bundle
+        .spotify_links
+        .get(&user_id)
+        .await
+        .unwrap()
+        .expect("linked");
+    old.scope = String::new();
+    bundle
+        .spotify_links
+        .upsert(&user_id, &old)
+        .await
+        .expect("link saves");
+    let (status, body) = get_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/playlists",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["needs_reconnect"], json!(true));
+    assert_eq!(body["liked_songs"], Value::Null);
+    let (status, body) = get_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/library",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["needs_reconnect"], json!(true));
+
+    // Reconnect: the same playlist is still linked to its import.
+    link_spotify(deps.clone(), &recorder, &user_id).await;
+    let (_, body) = get_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/playlists",
+    )
+    .await;
+    assert_eq!(body["needs_reconnect"], json!(false));
+    let neon = body["playlists"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "sp-playlist-1")
+        .expect("listed");
+    assert_eq!(neon["imported_playlist_id"], json!(playlist_id));
+    assert_eq!(body["liked_songs"]["track_count"], json!(2));
+}
+
+/// Fork: Liked Songs imports as a playlist in Spotify's order and, synced,
+/// loses the songs unliked at Spotify.
+#[tokio::test]
+async fn liked_songs_sync_as_a_playlist_and_lose_unliked_songs() {
+    use imports::spotify_sync::SpotifySync;
+    let (_auth, bundle, deps, recorder, user_id, _guards) = library_rig().await;
+    let (status, body) = post_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/playlists/liked/import",
+        json!({"name": "Liked Songs"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let playlist_id = body["playlist_id"].as_str().expect("id").to_owned();
+    assert_eq!(
+        poll_job_done(&bundle, &user_id, "liked").await,
+        ImportState::Done
+    );
+    let names = |rows: Vec<PlaylistTrack>| -> Vec<String> {
+        rows.into_iter().map(|row| row.track_name).collect()
+    };
+    assert_eq!(
+        names(playlist_rows(&bundle.playlists, &user_id, &playlist_id).await),
+        vec!["Glass Tides".to_owned(), "Midnight Drive".to_owned()],
+        "newest like first"
+    );
+    let (_, body) = get_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/playlists",
+    )
+    .await;
+    assert_eq!(
+        body["liked_songs"]["imported_playlist_id"],
+        json!(playlist_id)
+    );
+
+    let (status, body) = put_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        &format!("/api/v3/acquire/spotify/synced/{playlist_id}"),
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let asked = Arc::new(Asked::default());
+    let sync = SpotifySync::new(
+        bundle.service.clone(),
+        bundle.bridge.clone(),
+        bundle.syncs.clone(),
+        asked.clone(),
+        bundle.deps.spotify_library.clone(),
+    );
+    assert_eq!(sync.run_once().await, 1, "the first check imports");
+    assert_eq!(sync.run_once().await, 0, "nothing liked or unliked");
+    recorder.unlike_song();
+    assert_eq!(sync.run_once().await, 1, "an unlike is a change");
+    assert_eq!(
+        names(playlist_rows(&bundle.playlists, &user_id, &playlist_id).await),
+        vec!["Glass Tides".to_owned()]
+    );
+    assert!(
+        asked.0.lock().unwrap().is_empty(),
+        "an unlike asks for nothing"
+    );
+}
+
+async fn followed(db: &Db, user_id: &str) -> Vec<(String, i64)> {
+    let user = user_id.to_owned();
+    db.read("test.followed", move |conn| {
+        let mut statement = conn.prepare(
+            "SELECT artist_name, auto_download FROM acquire_followed_artists \
+             WHERE user_id = ?1 ORDER BY artist_name",
+        )?;
+        let rows = statement.query_map([user], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok::<_, droppedneedle_kernel::db::DbError>(rows.collect::<Result<Vec<_>, _>>()?)
+    })
+    .await
+    .expect("follows read")
+}
+
+/// Fork: artists followed at Spotify are followed here without
+/// auto-download; unfollowing at Spotify removes only a follow the sync
+/// made, never one made by hand.
+#[tokio::test]
+async fn followed_artists_sync_and_only_sync_made_follows_are_removed() {
+    let (auth, bundle, deps, recorder, user_id, _guards) = library_rig().await;
+    let library = deps.spotify_library.clone();
+    let platform = &auth.platform;
+    let _ = platform;
+
+    // A follow the sync makes: auto-download off.
+    let synced = library
+        .sync_artists(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("sync runs");
+    assert_eq!((synced.read, synced.matched, synced.followed), (1, 1, 1));
+    assert_eq!(
+        followed(&bundle.db, &user_id).await,
+        vec![("Aurora Current".to_owned(), 0)]
+    );
+    let again = library
+        .sync_artists(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("sync runs");
+    assert_eq!(again.followed, 0, "a known artist is not looked up again");
+
+    recorder.set_followed(false);
+    let gone = library
+        .sync_artists(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("sync runs");
+    assert_eq!(gone.unfollowed, 1);
+    assert!(followed(&bundle.db, &user_id).await.is_empty());
+
+    // Followed by hand first: the sync does not own it and never removes it.
+    recorder.set_followed(true);
+    let first = library
+        .sync_artists(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("sync runs");
+    assert_eq!(first.followed, 1);
+    let mbid = {
+        let user = user_id.clone();
+        bundle
+            .db
+            .read("test.mbid", move |conn| {
+                Ok::<String, droppedneedle_kernel::db::DbError>(conn.query_row(
+                    "SELECT artist_mbid FROM acquire_followed_artists WHERE user_id = ?1",
+                    [user],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+            .unwrap()
+    };
+    // Now the user un- and re-follows by hand, and Spotify forgets the
+    // artist and lists it again: the follow is the user's.
+    recorder.set_followed(false);
+    deps.follows
+        .set_follow(&user_id, &mbid, false, None)
+        .await
+        .unwrap();
+    library
+        .sync_artists(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("sync runs");
+    deps.follows
+        .set_follow(&user_id, &mbid, true, Some("Aurora Current".to_owned()))
+        .await
+        .unwrap();
+    recorder.set_followed(true);
+    let hand = library
+        .sync_artists(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("sync runs");
+    assert_eq!((hand.matched, hand.followed), (1, 0), "already followed");
+    recorder.set_followed(false);
+    let kept = library
+        .sync_artists(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("sync runs");
+    assert_eq!(kept.unfollowed, 0);
+    assert_eq!(
+        followed(&bundle.db, &user_id).await,
+        vec![("Aurora Current".to_owned(), 0)],
+        "a follow made by hand stays"
+    );
+}
+
+/// Fork: saved albums are matched for review; the first scan is the
+/// baseline, a later save shows as new and is never requested, and an
+/// un-saved album leaves the review.
+#[tokio::test]
+async fn saved_albums_are_matched_flagged_new_and_never_requested() {
+    let (_auth, bundle, deps, recorder, user_id, _guards) = library_rig().await;
+    let library = deps.spotify_library.clone();
+    let scan = library
+        .scan_albums(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("scan runs");
+    assert_eq!((scan.read, scan.matched, scan.new), (2, 1, 0), "{scan:?}");
+    let (status, body) = get_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/library/albums",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let albums = body["albums"].as_array().expect("albums").clone();
+    assert_eq!(albums.len(), 2);
+    let neon = albums
+        .iter()
+        .find(|a| a["title"] == "Neon Meridian")
+        .unwrap();
+    assert_eq!(neon["release_group"], json!(NEON_GROUP));
+    assert_eq!(neon["matched_by"], json!("name"));
+    assert_eq!(neon["is_new"], json!(false), "the baseline is not new");
+    let unknown = albums
+        .iter()
+        .find(|a| a["title"] == "Nothing Known")
+        .unwrap();
+    assert_eq!(
+        unknown["release_group"],
+        Value::Null,
+        "not found, never guessed"
+    );
+
+    recorder.save_album();
+    let scan = library
+        .scan_albums(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("scan runs");
+    assert_eq!((scan.read, scan.new), (3, 1));
+    let (_, body) = get_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/library/albums",
+    )
+    .await;
+    let glass = body["albums"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["title"] == "Glass Tides")
+        .cloned()
+        .expect("listed");
+    assert_eq!(glass["is_new"], json!(true));
+    assert_eq!(glass["release_group"], json!(GLASS_GROUP));
+    let requests: i64 = bundle
+        .db
+        .read("test.requests", |conn| {
+            Ok::<i64, droppedneedle_kernel::db::DbError>(conn.query_row(
+                "SELECT COUNT(*) FROM request_history",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(requests, 0, "the sync never requests");
+
+    let response = authed_app(deps.clone(), &user_id, Role::User)
+        .oneshot(
+            Request::post("/api/v3/acquire/spotify/library/albums/reviewed")
+                .header("host", "app.test")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let (_, body) = get_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/library/albums",
+    )
+    .await;
+    assert!(
+        body["albums"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["is_new"] == json!(false))
+    );
+
+    recorder.unsave_album();
+    let scan = library
+        .scan_albums(&user_id, RequestPriority::UserInitiated)
+        .await
+        .expect("scan runs");
+    assert_eq!(scan.removed, 1);
+
+    // The toggles persist.
+    let (status, body) = put_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/library",
+        json!({"follow_sync": true, "album_sync": false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (body["follow_sync"].clone(), body["album_sync"].clone()),
+        (json!(true), json!(false))
+    );
+    assert_eq!(body["saved_albums"], json!(2));
+    assert_eq!(body["followed_artists"], json!(1));
+}
+
+async fn resolve(deps: &ImportsDeps, user_id: &str, link: &str) -> (StatusCode, Value) {
+    let encoded: String = link
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect();
+    get_json(
+        authed_app(deps.clone(), user_id, Role::User),
+        &format!("/api/v3/resolve/spotify?url={encoded}"),
+    )
+    .await
+}
+
+/// Fork: a pasted Spotify link opens the album, song or artist here; with
+/// no confident match it says so with the Spotify name.
+#[tokio::test]
+async fn pasted_spotify_links_resolve_or_say_not_found() {
+    let (_auth, _bundle, deps, _recorder, user_id, _guards) = library_rig().await;
+
+    let (status, body) = resolve(
+        &deps,
+        &user_id,
+        &format!("https://open.spotify.com/intl-de/track/{SPOTIFY_LINK_TRACK}?si=abc"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["kind"], json!("track"));
+    assert_eq!(body["found"], json!(true), "{body}");
+    assert_eq!(body["album_id"], json!(NEON_GROUP));
+    assert!(body["recording_id"].is_string(), "{body}");
+    assert_eq!(
+        (body["source"].clone(), body["via"].clone()),
+        (json!("musicbrainz"), json!("isrc"))
+    );
+
+    let (_, body) = resolve(
+        &deps,
+        &user_id,
+        &format!("spotify:album:{SPOTIFY_LINK_ALBUM}"),
+    )
+    .await;
+    assert_eq!(
+        (body["found"].clone(), body["album_id"].clone()),
+        (json!(true), json!(NEON_GROUP))
+    );
+
+    let (_, body) = resolve(
+        &deps,
+        &user_id,
+        &format!("open.spotify.com/album/{SPOTIFY_LINK_UNKNOWN}"),
+    )
+    .await;
+    assert_eq!(body["found"], json!(false), "{body}");
+    assert_eq!(body["name"], json!("Nothing Known"));
+    assert_eq!(body["album_id"], Value::Null);
+
+    let (_, body) = resolve(
+        &deps,
+        &user_id,
+        &format!("https://open.spotify.com/artist/{SPOTIFY_LINK_ARTIST}"),
+    )
+    .await;
+    assert_eq!(body["found"], json!(true), "{body}");
+    assert_eq!(body["source"], json!("deezer"));
+    assert!(body["artist_id"].is_string());
+
+    let (status, _) = resolve(&deps, &user_id, "https://open.spotify.com/playlist/x").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// Fork: without a Spotify link only the name is known (oEmbed): a song is
+/// never matched by name alone, and an album without its artist is not
+/// guessed.
+#[tokio::test]
+async fn without_a_spotify_link_only_the_name_is_known() {
+    let (_auth, bundle, deps, _recorder, user_id, _guards) = library_rig().await;
+    bundle.spotify_links.remove(&user_id).await.unwrap();
+    let (status, body) = resolve(
+        &deps,
+        &user_id,
+        &format!("https://open.spotify.com/track/{SPOTIFY_LINK_TRACK}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (body["found"].clone(), body["name"].clone()),
+        (json!(false), json!("Midnight Drive"))
+    );
+    let (_, body) = resolve(
+        &deps,
+        &user_id,
+        &format!("spotify:album:{SPOTIFY_LINK_ALBUM}"),
+    )
+    .await;
+    assert_eq!(
+        (body["found"].clone(), body["name"].clone()),
+        (json!(false), json!("Neon Meridian"))
+    );
+    let (_, body) = resolve(
+        &deps,
+        &user_id,
+        &format!("spotify:artist:{SPOTIFY_LINK_ARTIST}"),
+    )
+    .await;
+    assert_eq!(
+        (body["found"].clone(), body["source"].clone()),
+        (json!(true), json!("deezer"))
+    );
 }

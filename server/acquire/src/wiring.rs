@@ -517,6 +517,7 @@ impl AcquireSetup {
         let health = ports.providers.health.clone();
         let resolver = Arc::new(AlbumResolver::new(&ports.providers, config_store.live()));
         let spotify_client = SpotifyClient::new(&ports.providers);
+        let previews = ports.providers.previews.clone();
         let core = core(
             &stores,
             ids.clone(),
@@ -566,6 +567,18 @@ impl AcquireSetup {
             resolver.clone(),
         ));
         let spotify_syncs = crate::imports::spotify_sync::SpotifySyncs::new(db.clone());
+        // Fork: the Spotify library and link resolver.
+        let spotify_library = Arc::new(crate::imports::spotify_library::SpotifyLibrary::new(
+            spotify_service.clone(),
+            crate::imports::spotify_resolve::Live::new(
+                resolver.clone(),
+                previews,
+                db.clone(),
+                droppedneedle_providers::RequestPriority::BackgroundSync,
+            ),
+            db.clone(),
+            core.requests.follows.clone(),
+        ));
         let spotify_sync = Arc::new(crate::imports::spotify_sync::SpotifySync::new(
             spotify_service.clone(),
             spotify_playlists.clone(),
@@ -573,6 +586,7 @@ impl AcquireSetup {
             Arc::new(crate::imports::spotify_sync::RequestsSync::new(
                 core.requests.clone(),
             )),
+            spotify_library.clone(),
         ));
         let spotify_import_jobs = Arc::new(SpotifyImportJobs::new(spotify_service, events.clone()));
         let spotify_imports = SpotifyImports::new(platform.db.clone(), queue);
@@ -589,6 +603,7 @@ impl AcquireSetup {
             resolver,
             spotify_imports,
             spotify_syncs,
+            spotify_library,
             probes: Arc::new(LiveProbes::bundle(&probes)),
             ids: ids.clone(),
             base_path: config.base_path.clone(),

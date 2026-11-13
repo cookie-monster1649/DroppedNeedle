@@ -17,10 +17,19 @@ use super::spotify_store::SqliteSpotifyLinks;
 use droppedneedle_kernel::clock::Clock;
 use droppedneedle_providers::images::ImageClient;
 use droppedneedle_providers::spotify::models::{
-    EntryTrack, Image, PlaylistInfo, Profile, SimplifiedPlaylist, TrackCount,
+    AlbumDetail, EntryTrack, Image, PlaylistEntry, PlaylistInfo, Profile, SavedAlbum,
+    SimplifiedPlaylist, SpotifyArtist, TrackCount,
 };
 use droppedneedle_providers::spotify::{self, TokenGrant};
 use droppedneedle_providers::{ProviderError, Providers, RequestPriority};
+
+/// Fork: the Spotify "playlist" id the caller's Liked Songs import under
+/// (`spotify:liked`). Spotify's own ids are 22 base-62 characters, so it
+/// never names a real playlist.
+pub const LIKED_SONGS: &str = "liked";
+
+/// Fork: the name the Liked Songs playlist is created with.
+pub const LIKED_SONGS_NAME: &str = "Liked Songs";
 
 /// Seconds before expiry a token counts as expired.
 pub const REFRESH_BUFFER_SECS: i64 = 60;
@@ -250,6 +259,10 @@ impl SpotifyClient {
         refresher: &TokenRefresher<'_>,
         playlist_id: &str,
     ) -> Result<PlaylistInfo, SpotifyError> {
+        // Fork: Liked Songs has no playlist record at Spotify.
+        if playlist_id == LIKED_SONGS {
+            return self.liked_songs_info(refresher).await;
+        }
         let priority = refresher.priority;
         self.authed(refresher, "playlist", |token| async move {
             self.api.playlist(&token, playlist_id, priority).await
@@ -284,6 +297,10 @@ impl SpotifyClient {
         refresher: &TokenRefresher<'_>,
         playlist_id: &str,
     ) -> Result<Vec<EntryTrack>, SpotifyError> {
+        // Fork: Liked Songs read from the caller's library.
+        if playlist_id == LIKED_SONGS {
+            return self.liked_songs(refresher).await;
+        }
         let priority = refresher.priority;
         let mut tracks = Vec::new();
         let mut offset: i64 = 0;
@@ -296,27 +313,229 @@ impl SpotifyClient {
                 })
                 .await?;
             let page_len = page.items.len();
-            for entry in page.items {
-                if entry.is_local {
-                    continue;
-                }
-                let Some(track) = entry.track.or(entry.item) else {
-                    continue;
-                };
-                if track.id.as_deref().unwrap_or("").is_empty() {
-                    continue;
-                }
-                if track.kind.as_deref().unwrap_or("track") != "track" {
-                    continue;
-                }
-                tracks.push(track);
-            }
+            keep_tracks(page.items, &mut tracks);
             if page_len == 0 || page.next.is_none() {
                 break;
             }
             offset += spotify::ITEMS_PAGE;
         }
         Ok(tracks)
+    }
+
+    /// Fork: the caller's Liked Songs, newest first as Spotify orders them,
+    /// with the playlist entries' skips.
+    pub async fn liked_songs(
+        &self,
+        refresher: &TokenRefresher<'_>,
+    ) -> Result<Vec<EntryTrack>, SpotifyError> {
+        let priority = refresher.priority;
+        let mut tracks = Vec::new();
+        let mut offset: i64 = 0;
+        loop {
+            let page = self
+                .authed(refresher, "/me/tracks", |token| async move {
+                    self.api
+                        .saved_tracks_page(&token, offset, spotify::LIBRARY_PAGE, priority)
+                        .await
+                })
+                .await?;
+            let page_len = page.items.len();
+            keep_tracks(page.items, &mut tracks);
+            if page_len == 0 || page.next.is_none() {
+                break;
+            }
+            offset += spotify::LIBRARY_PAGE;
+        }
+        Ok(tracks)
+    }
+
+    /// Fork: how many songs the caller liked, from one small page.
+    pub async fn liked_songs_count(
+        &self,
+        refresher: &TokenRefresher<'_>,
+    ) -> Result<i64, SpotifyError> {
+        let priority = refresher.priority;
+        let page = self
+            .authed(refresher, "/me/tracks", |token| async move {
+                self.api.saved_tracks_page(&token, 0, 1, priority).await
+            })
+            .await?;
+        Ok(page.total)
+    }
+
+    /// Fork: Liked Songs as playlist metadata. Spotify gives the library no
+    /// snapshot id, so one is made from the count and the newest page: a
+    /// like or an unlike changes the count or that page, so an unchanged
+    /// one means there is nothing to sync.
+    async fn liked_songs_info(
+        &self,
+        refresher: &TokenRefresher<'_>,
+    ) -> Result<PlaylistInfo, SpotifyError> {
+        let priority = refresher.priority;
+        let page = self
+            .authed(refresher, "/me/tracks", |token| async move {
+                self.api
+                    .saved_tracks_page(&token, 0, spotify::LIBRARY_PAGE, priority)
+                    .await
+            })
+            .await?;
+        Ok(PlaylistInfo {
+            id: LIKED_SONGS.to_owned(),
+            images: None,
+            snapshot_id: Some(liked_snapshot(page.total, &page.items)),
+        })
+    }
+
+    /// Fork: every album the caller saved, newest first.
+    pub async fn saved_albums(
+        &self,
+        refresher: &TokenRefresher<'_>,
+    ) -> Result<Vec<SavedAlbum>, SpotifyError> {
+        let priority = refresher.priority;
+        let mut albums = Vec::new();
+        let mut offset: i64 = 0;
+        loop {
+            let page = self
+                .authed(refresher, "/me/albums", |token| async move {
+                    self.api.saved_albums_page(&token, offset, priority).await
+                })
+                .await?;
+            let page_len = page.items.len();
+            albums.extend(page.items);
+            if page_len == 0 || page.next.is_none() {
+                break;
+            }
+            offset += spotify::LIBRARY_PAGE;
+        }
+        Ok(albums)
+    }
+
+    /// Fork: how many albums the caller saved, from one page.
+    pub async fn saved_albums_total(
+        &self,
+        refresher: &TokenRefresher<'_>,
+    ) -> Result<i64, SpotifyError> {
+        let priority = refresher.priority;
+        let page = self
+            .authed(refresher, "/me/albums", |token| async move {
+                self.api.saved_albums_page(&token, 0, priority).await
+            })
+            .await?;
+        Ok(page.total)
+    }
+
+    /// Fork: how many artists the caller follows, from one page.
+    pub async fn followed_artists_total(
+        &self,
+        refresher: &TokenRefresher<'_>,
+    ) -> Result<i64, SpotifyError> {
+        let priority = refresher.priority;
+        let page = self
+            .authed(refresher, "/me/following", |token| async move {
+                self.api.followed_artists_page(&token, None, priority).await
+            })
+            .await?;
+        Ok(page.artists.total)
+    }
+
+    /// Fork: every artist the caller follows.
+    pub async fn followed_artists(
+        &self,
+        refresher: &TokenRefresher<'_>,
+    ) -> Result<Vec<SpotifyArtist>, SpotifyError> {
+        let priority = refresher.priority;
+        let mut artists: Vec<SpotifyArtist> = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let cursor = after.clone();
+            let page = self
+                .authed(refresher, "/me/following", |token| {
+                    let cursor = cursor.clone();
+                    async move {
+                        self.api
+                            .followed_artists_page(&token, cursor.as_deref(), priority)
+                            .await
+                    }
+                })
+                .await?
+                .artists;
+            let page_len = page.items.len();
+            artists.extend(
+                page.items
+                    .into_iter()
+                    .filter(|artist| artist.id.as_deref().is_some_and(|id| !id.is_empty())),
+            );
+            after = page.cursors.and_then(|cursors| cursors.after);
+            if page_len == 0 || page.next.is_none() || after.is_none() {
+                break;
+            }
+        }
+        Ok(artists)
+    }
+
+    /// Fork: one track (`GET /tracks/{id}`).
+    pub async fn track(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        track_id: &str,
+    ) -> Result<EntryTrack, SpotifyError> {
+        let priority = refresher.priority;
+        self.authed(refresher, "track", |token| async move {
+            self.api.track(&token, track_id, priority).await
+        })
+        .await
+    }
+
+    /// Fork: one album (`GET /albums/{id}`).
+    pub async fn album(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        album_id: &str,
+    ) -> Result<AlbumDetail, SpotifyError> {
+        let priority = refresher.priority;
+        self.authed(refresher, "album", |token| async move {
+            self.api.album(&token, album_id, priority).await
+        })
+        .await
+    }
+
+    /// Fork: one artist (`GET /artists/{id}`).
+    pub async fn artist(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        artist_id: &str,
+    ) -> Result<SpotifyArtist, SpotifyError> {
+        let priority = refresher.priority;
+        self.authed(refresher, "artist", |token| async move {
+            self.api.artist(&token, artist_id, priority).await
+        })
+        .await
+    }
+
+    /// Fork: the titles of an artist's albums and singles (first page).
+    pub async fn artist_album_titles(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        artist_id: &str,
+    ) -> Result<Vec<String>, SpotifyError> {
+        let priority = refresher.priority;
+        let page = self
+            .authed(refresher, "artist albums", |token| async move {
+                self.api
+                    .artist_albums_page(&token, artist_id, priority)
+                    .await
+            })
+            .await?;
+        Ok(page.items.into_iter().map(|album| album.name).collect())
+    }
+
+    /// Fork: the name behind a public link, without an account.
+    pub async fn oembed_title(&self, link: &str) -> Result<String, SpotifyError> {
+        self.api
+            .oembed(link, RequestPriority::UserInitiated)
+            .await
+            .map(|answer| answer.title)
+            .map_err(|error| unavailable("oembed", &error))
     }
 
     /// A playlist image and its content type, read under
@@ -333,6 +552,52 @@ impl SpotifyClient {
             .await
             .map_err(|error| unavailable("cover fetch", &error))
     }
+}
+
+/// The tracks among playlist (or Liked Songs) entries: locals, id-less
+/// rows and non-track types are skipped.
+fn keep_tracks(entries: Vec<PlaylistEntry>, tracks: &mut Vec<EntryTrack>) {
+    for entry in entries {
+        if entry.is_local {
+            continue;
+        }
+        let Some(track) = entry.track.or(entry.item) else {
+            continue;
+        };
+        if track.id.as_deref().unwrap_or("").is_empty() {
+            continue;
+        }
+        if track.kind.as_deref().unwrap_or("track") != "track" {
+            continue;
+        }
+        tracks.push(track);
+    }
+}
+
+/// Fork: the version of a Liked Songs list: its count and the ids of its
+/// newest page, hashed.
+pub fn liked_snapshot(total: i64, newest: &[PlaylistEntry]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(total.to_string().as_bytes());
+    for entry in newest {
+        let id = entry
+            .track
+            .as_ref()
+            .or(entry.item.as_ref())
+            .and_then(|track| track.id.as_deref())
+            .unwrap_or_default();
+        hasher.update(b"\x1f");
+        hasher.update(id.as_bytes());
+    }
+    let digest = hasher.finalize();
+    format!(
+        "liked-{total}-{}",
+        digest[..8]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 /// Refreshing token holder behind the authed calls, at the priority of the
@@ -407,6 +672,7 @@ impl<'a> TokenRefresher<'a> {
                 + grant.expires_in_secs,
             username: connection.username,
             spotify_user_id: connection.spotify_user_id,
+            scope: grant.scope.unwrap_or(connection.scope),
         };
         let kept = self
             .connections

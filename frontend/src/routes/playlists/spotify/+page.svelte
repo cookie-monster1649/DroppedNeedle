@@ -24,6 +24,8 @@
 	} from '$lib/features/playlists/queries/spotify.svelte';
 	import { withBasePath } from '$lib/utils/basePath';
 	import { providerUnavailableMessage } from '$lib/utils/serviceError';
+	// Fork: Liked Songs, first on the page.
+	import LikedSongsCard from '$lib/features/spotify/components/LikedSongsCard.svelte';
 
 	const playlistsQuery = getSpotifyPlaylistsQuery();
 	const importMutation = createImportSpotifyPlaylistMutation();
@@ -198,6 +200,13 @@
 			</div>
 		</div>
 	</header>
+
+	{#if playlistsQuery.isSuccess}
+		<LikedSongsCard
+			liked={playlistsQuery.data?.liked_songs}
+			needsReconnect={playlistsQuery.data?.needs_reconnect ?? false}
+		/>
+	{/if}
 
 	{#if playlistsQuery.isLoading}
 		<div class="dn-list-grid" aria-busy="true">

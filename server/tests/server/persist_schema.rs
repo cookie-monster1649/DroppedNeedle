@@ -74,7 +74,7 @@ fn fresh_migrate_marks_version_and_seeds() {
     assert_eq!(scalar(&connection, "PRAGMA user_version"), latest_version());
     // 177 upstream tables, plus the extension ledger and the catalogue
     // extension's tables (fork).
-    assert_eq!(table_names(&connection).len(), 191);
+    assert_eq!(table_names(&connection).len(), 194);
     assert_eq!(
         scalar(
             &connection,
@@ -1501,7 +1501,10 @@ const FOREIGN_KEYS: &[(&str, &str, &str, &str)] = &[
     ("source_edition_checks", "local_album_id", "local_albums", "CASCADE"),
     ("source_promotion_checks", "local_album_id", "local_albums", "CASCADE"),
     ("catalog_playlist_entry_identities", "entry_id", "catalog_playlist_tracks", "CASCADE"),
+    ("acquire_spotify_followed_artists", "user_id", "auth_users", "CASCADE"),
+    ("acquire_spotify_library", "user_id", "auth_users", "CASCADE"),
     ("acquire_spotify_playlist_syncs", "playlist_id", "catalog_playlists", "CASCADE"),
+    ("acquire_spotify_saved_albums", "user_id", "auth_users", "CASCADE"),
     ("catalog_playlist_tracks", "playlist_id", "catalog_playlists", "CASCADE"),
     ("catalog_playlists", "user_id", "auth_users", "CASCADE"),
     ("catalog_user_favorite_names", "user_id, item_kind, item_id", "catalog_user_favorites", "CASCADE"),
@@ -3871,6 +3874,11 @@ mod extension_chains {
                 "catalog",
                 "catalog/0013_source_artists.sql",
                 "c2d0ad8fcb588259429a9b574879c98afb19039ba5bbadb7b61d768d034eb0d9",
+            ),
+            (
+                "catalog",
+                "catalog/0014_spotify_library.sql",
+                "a55ce785503ed1231aebc261186f42e53ff6e524d530876d0dd7ab6f404b06cb",
             ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
