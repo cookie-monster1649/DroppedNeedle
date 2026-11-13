@@ -21,6 +21,11 @@
 //! library file. A filesystem that refuses (EXDEV, EPERM, ENOTSUP) turns
 //! the job off until the setting changes; it never falls back to copies.
 //!
+//! After every reconcile `<root>/.users.json` lists each user with a
+//! folder: id, username, folder, email, SSO subjects and the optional
+//! Nextcloud user override from the setting, rewritten only when it
+//! changes. The host helper maps users to file-share accounts from it.
+//!
 //! After a user's folder changes (or is removed), `<root>/.rescan/<folder>`
 //! is written for a host helper to ask the file share to rescan that
 //! folder. The server never talks to the file share itself.
@@ -272,6 +277,20 @@ impl PlaylistFolderJob {
             }
         }
         drop(state);
+        let overrides = self
+            .setting
+            .read()
+            .map(|setting| setting.nextcloud_users.clone())
+            .unwrap_or_default();
+        match self.read_identities() {
+            Ok(identities) => {
+                let manifest = manifest(&users, &reconciled, &identities, &overrides);
+                if let Err(error) = tree::write_manifest(&root, &manifest) {
+                    tracing::warn!(%error, "playlist folders: users manifest not written");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "playlist folders: users manifest not read"),
+        }
         let root_changes = &reconciled.root;
         let mut rescan: BTreeSet<&str> = reconciled.gone.iter().map(String::as_str).collect();
         for (id, (folder, changes)) in &reconciled.users {
@@ -342,6 +361,16 @@ impl PlaylistFolderJob {
         Ok(ok)
     }
 
+    fn read_identities(&self) -> Result<Vec<sql::IdentityRow>, DbError> {
+        self.db
+            .read_blocking("playlist-folders.identities", |conn| {
+                conn.prepare_cached(sql::USER_IDENTITIES.text())?
+                    .query_map([], sql::IdentityRow::read)?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+                    .map_err(DbError::from)
+            })
+    }
+
     fn read_users(&self) -> Result<Vec<WantedUser>, DbError> {
         let rows = self.db.read_blocking("playlist-folders.entries", |conn| {
             conn.prepare_cached(sql::FOLDER_ENTRIES.text())?
@@ -351,6 +380,76 @@ impl PlaylistFolderJob {
         })?;
         Ok(group(rows))
     }
+}
+
+/// One user in `.users.json`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ManifestUser {
+    /// DroppedNeedle user id.
+    pub user_id: String,
+    /// DroppedNeedle username, when set.
+    pub username: Option<String>,
+    /// Display name the folder is named from.
+    pub display_name: String,
+    /// The user's folder under the root.
+    pub folder: String,
+    /// Email, when known.
+    pub email: Option<String>,
+    /// SSO identities (provider and subject).
+    pub sso: Vec<ManifestIdentity>,
+    /// The Nextcloud user set for this username in the setting, if any.
+    pub nextcloud_user: Option<String>,
+}
+
+/// One SSO identity in `.users.json`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ManifestIdentity {
+    /// Provider name (`oidc`, ...).
+    pub provider: String,
+    /// The provider's subject for the user.
+    pub subject: String,
+}
+
+/// The manifest of every user with a folder, by user id.
+fn manifest(
+    users: &[WantedUser],
+    reconciled: &tree::Reconciled,
+    identities: &[sql::IdentityRow],
+    overrides: &BTreeMap<String, String>,
+) -> Vec<ManifestUser> {
+    reconciled
+        .users
+        .iter()
+        .map(|(id, (folder, _))| {
+            let mine: Vec<&sql::IdentityRow> =
+                identities.iter().filter(|row| &row.user_id == id).collect();
+            let username = mine.iter().find_map(|row| row.username.clone());
+            ManifestUser {
+                user_id: id.clone(),
+                display_name: users
+                    .iter()
+                    .find(|user| &user.user_id == id)
+                    .map(|user| user.name.clone())
+                    .unwrap_or_default(),
+                folder: folder.clone(),
+                email: mine.iter().find_map(|row| row.email.clone()),
+                sso: mine
+                    .iter()
+                    .filter_map(|row| {
+                        Some(ManifestIdentity {
+                            provider: row.provider.clone()?,
+                            subject: row.subject.clone()?,
+                        })
+                    })
+                    .collect(),
+                nextcloud_user: username
+                    .as_ref()
+                    .and_then(|name| overrides.get(name))
+                    .map(|to| to.trim().to_owned()),
+                username,
+            }
+        })
+        .collect()
 }
 
 /// Rows (ordered by user, playlist, position) into users.

@@ -538,3 +538,21 @@ pub fn request_rescan(root: &Path, folder: &str, stamp: i64) -> io::Result<()> {
     fs::write(&temp, format!("{stamp}\n"))?;
     fs::rename(&temp, dir.join(folder))
 }
+
+/// The users manifest's name under the root.
+pub const MANIFEST: &str = ".users.json";
+
+/// Write `<root>/.users.json` via a temporary name, only when its bytes
+/// change. Returns whether it was written.
+pub fn write_manifest<T: serde::Serialize>(root: &Path, manifest: &T) -> io::Result<bool> {
+    let mut text = serde_json::to_vec_pretty(manifest).map_err(io::Error::other)?;
+    text.push(b'\n');
+    let path = root.join(MANIFEST);
+    if fs::read(&path).is_ok_and(|old| old == text) {
+        return Ok(false);
+    }
+    let temp = root.join(format!("{TEMP_PREFIX}{MANIFEST}"));
+    fs::write(&temp, &text)?;
+    fs::rename(&temp, &path)?;
+    Ok(true)
+}
