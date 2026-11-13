@@ -26,6 +26,7 @@ const stored: AdvancedSettings = {
 	discover_queue_size: 10,
 	discover_queue_warm_cycle_build: true,
 	discover_queue_wildcard_slots: 2,
+	deezer_search_enabled: true,
 	ignored_releases_retention_days: 365,
 	prefer_local_cover_art: true,
 	request_history_retention_days: 180,

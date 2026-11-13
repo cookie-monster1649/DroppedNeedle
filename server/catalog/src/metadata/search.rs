@@ -140,7 +140,10 @@ impl Catalog {
                 .collect();
             Ok(found_hits(items))
         };
-        self.remote_bucket(key, deadline, fetch).await
+        // Fork: Deezer's artists MusicBrainz lacks, beside it.
+        let musicbrainz = self.remote_bucket(key, deadline, fetch);
+        self.merge_source_hits(RemoteKind::Artist, query, offset, deadline, musicbrainz)
+            .await
     }
 
     /// Search MusicBrainz release groups, filtered by
@@ -227,7 +230,10 @@ impl Catalog {
                 .collect();
             Ok(found_hits(items))
         };
-        self.remote_bucket(key, deadline, fetch).await
+        // Fork: Deezer's albums MusicBrainz lacks, beside it.
+        let musicbrainz = self.remote_bucket(key, deadline, fetch);
+        self.merge_source_hits(RemoteKind::Album, query, offset, deadline, musicbrainz)
+            .await
     }
 
     /// Run one bucket under its deadline. A failed search falls back to

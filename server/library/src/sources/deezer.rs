@@ -87,6 +87,18 @@ impl MetadataSource for DeezerSource {
         entity: &str,
         identity: &SourceIdentity,
     ) -> rusqlite::Result<Option<Value>> {
+        // Fork: an artist found by search or listed in the catalogue, with
+        // no album match to read it from.
+        if entity == "artist" && identity.kind == Kind::Artist {
+            let matched = match identity.provider_album_id.as_deref() {
+                Some(album) => stored_match(conn, album)?,
+                None => None,
+            };
+            if matched.is_none() {
+                return Ok(super::catalogue::artist_name(conn, &identity.provider_id)?
+                    .map(|name| json!({"id": identity.uuid, "name": name, "sort-name": name})));
+            }
+        }
         let Some(album) = identity.provider_album_id.as_deref() else {
             return Ok(None);
         };

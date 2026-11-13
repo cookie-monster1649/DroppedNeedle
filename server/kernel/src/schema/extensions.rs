@@ -51,6 +51,7 @@ pub static CATALOG: ExtensionChain = ExtensionChain {
         extension!(10, "catalog/0010_source_identities.sql"),
         extension!(11, "catalog/0011_source_editions.sql"),
         extension!(12, "catalog/0012_source_catalogue.sql"),
+        extension!(13, "catalog/0013_source_artists.sql"),
     ],
 };
 

@@ -4,6 +4,8 @@
 	fetched, and the discography download over the picture.
 -->
 <script lang="ts">
+	// Fork: a small badge on results from Deezer.
+	import { sourceBadge } from '../source/sourceBadge';
 	import type { Artist } from '$lib/features/search/queries/types';
 	import type { EnrichmentSource } from '$lib/features/album/queries/types';
 	import { artistHref } from '$lib/utils/entityRoutes';
@@ -49,7 +51,12 @@
 		/>
 	{/snippet}
 	{#snippet meta()}
-		{#if artistLine}{artistLine}{:else}&nbsp;{/if}
+		{#if artistLine}{artistLine}{:else if !sourceBadge(artist.musicbrainz_id)}&nbsp;{/if}
+		{#if sourceBadge(artist.musicbrainz_id)}
+			<span class="badge badge-xs badge-ghost ml-1 align-middle"
+				>{sourceBadge(artist.musicbrainz_id)}</span
+			>
+		{/if}
 	{/snippet}
 	<!-- Both lines are kept while empty, so enrichment fills them in place. -->
 	{#snippet footer()}

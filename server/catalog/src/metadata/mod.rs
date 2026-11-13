@@ -32,6 +32,7 @@ pub mod precache;
 pub mod search;
 // Fork: artist pages on stand-in ids.
 pub mod source_artist;
+pub mod source_search;
 pub mod upstream;
 
 use std::collections::HashSet;

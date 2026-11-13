@@ -36361,6 +36361,11 @@
             "description": "AudioDB name-search fallback.",
             "default": false
           },
+          "deezer_search_enabled": {
+            "type": "boolean",
+            "description": "Fork: search Deezer beside MusicBrainz, adding the albums and\nartists MusicBrainz does not have.",
+            "default": true
+          },
           "direct_remote_images_enabled": {
             "type": "boolean",
             "description": "Direct remote images.",
