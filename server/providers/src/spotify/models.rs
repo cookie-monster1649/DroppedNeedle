@@ -123,6 +123,20 @@ pub struct Image {
     pub width: Option<i64>,
 }
 
+/// Fork: a playlist's id, name and version,
+/// `GET /playlists/{id}?fields=id,name,snapshot_id`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlaylistHead {
+    /// Spotify playlist id.
+    pub id: String,
+    /// Playlist name.
+    #[serde(default)]
+    pub name: String,
+    /// The playlist's version.
+    #[serde(default)]
+    pub snapshot_id: Option<String>,
+}
+
 /// One playlist's metadata, `GET /playlists/{id}?fields=id,name,images,tracks.total,snapshot_id`.
 ///
 /// Checked against the Spotify mock's `spotify_playlist`.

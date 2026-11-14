@@ -22,7 +22,7 @@ use crate::executor::{Answer, Backoff, Executor, Request, Spec, Url, standard_cl
 
 pub mod models;
 
-use models::{EntryPage, PlaylistInfo, PlaylistPage, Profile, TokenAnswer};
+use models::{EntryPage, PlaylistHead, PlaylistInfo, PlaylistPage, Profile, TokenAnswer};
 
 /// The provider name errors carry, and its rate row.
 pub const SOURCE: &str = "spotify";
@@ -61,6 +61,12 @@ const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
 pub const ITEM_FIELDS: &str = "next,items(is_local,\
 track(id,type,name,artists(name),album(id,name,images),external_ids(isrc),track_number,disc_number,duration_ms),\
 item(id,type,name,artists(name),album(id,name,images),external_ids(isrc),track_number,disc_number,duration_ms))";
+
+/// Fork: the narrower entry fields the playlist-folder import matches
+/// files against: title, artists, album name and id, length, ISRC, id.
+pub const MATCH_ITEM_FIELDS: &str = "next,items(is_local,\
+track(id,type,name,artists(name),album(id,name),external_ids(isrc),duration_ms),\
+item(id,type,name,artists(name),album(id,name),external_ids(isrc),duration_ms))";
 
 /// Fork: why Spotify last refused a call (429), as its body said.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -387,15 +393,74 @@ impl SpotifyClient {
         offset: i64,
         priority: RequestPriority,
     ) -> Result<EntryPage, ProviderError> {
+        self.playlist_items_page_with(access_token, playlist_id, offset, ITEM_FIELDS, priority)
+            .await
+    }
+
+    /// Fork: [`Self::playlist_items_page`] with the entry `fields` given.
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`].
+    pub async fn playlist_items_page_with(
+        &self,
+        access_token: &str,
+        playlist_id: &str,
+        offset: i64,
+        fields: &str,
+        priority: RequestPriority,
+    ) -> Result<EntryPage, ProviderError> {
         let (limit, offset) = (ITEMS_PAGE.to_string(), offset.to_string());
         self.get(
             access_token,
             &["playlists", playlist_id, "items"],
-            &[
-                ("limit", &limit),
-                ("offset", &offset),
-                ("fields", ITEM_FIELDS),
-            ],
+            &[("limit", &limit), ("offset", &offset), ("fields", fields)],
+            priority,
+        )
+        .await
+    }
+
+    /// Fork: one page of another user's public playlists
+    /// (`GET /users/{id}/playlists`), from `offset`, [`PLAYLISTS_PAGE`] at a
+    /// time.
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`]; a development-mode app may be refused
+    /// (403) or told there is no such list (404).
+    pub async fn user_playlists_page(
+        &self,
+        access_token: &str,
+        user_id: &str,
+        offset: i64,
+        priority: RequestPriority,
+    ) -> Result<PlaylistPage, ProviderError> {
+        let (limit, offset) = (PLAYLISTS_PAGE.to_string(), offset.to_string());
+        self.get(
+            access_token,
+            &["users", user_id, "playlists"],
+            &[("limit", &limit), ("offset", &offset)],
+            priority,
+        )
+        .await
+    }
+
+    /// Fork: one playlist's id, name and version
+    /// (`GET /playlists/{id}?fields=id,name,snapshot_id`).
+    ///
+    /// # Errors
+    ///
+    /// As [`SpotifyClient::me`].
+    pub async fn playlist_head(
+        &self,
+        access_token: &str,
+        playlist_id: &str,
+        priority: RequestPriority,
+    ) -> Result<PlaylistHead, ProviderError> {
+        self.get(
+            access_token,
+            &["playlists", playlist_id],
+            &[("fields", "id,name,snapshot_id")],
             priority,
         )
         .await

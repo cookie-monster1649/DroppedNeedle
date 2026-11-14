@@ -1299,6 +1299,34 @@
         ]
       }
     },
+    "/api/v3/admin/playlist-import/release-hold": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Fork: release the download hold now: synced playlists the import\ncovers ask for their songs again, and the songs held back are asked for.\n`POST /api/v3/admin/playlist-import/release-hold`.",
+        "operationId": "playlist_import_release_hold_handler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/admin/playlist-import/run": {
       "post": {
         "tags": [
@@ -1334,6 +1362,34 @@
         ],
         "summary": "What the playlist import is doing, and how its last run ended.\n`GET /api/v3/admin/playlist-import/status`.",
         "operationId": "playlist_import_status_handler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/admin/playlist-import/stop": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Fork: stop a running import gracefully: it ends after the file it is\non, and what it did is kept for the next run.\n`POST /api/v3/admin/playlist-import/stop`.",
+        "operationId": "playlist_import_stop_handler",
         "responses": {
           "200": {
             "description": "",
@@ -48991,6 +49047,31 @@
           }
         }
       },
+      "HoldStatus": {
+        "type": "object",
+        "description": "The hold's state, for the status.",
+        "required": [
+          "state",
+          "playlists",
+          "deferred_songs"
+        ],
+        "properties": {
+          "deferred_songs": {
+            "type": "integer",
+            "description": "Songs held back, waiting to be asked for.",
+            "minimum": 0
+          },
+          "playlists": {
+            "type": "integer",
+            "description": "Spotify playlists the hold covers.",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "description": "`off` (no playlists known), `holding`, `released` or `finished`."
+          }
+        }
+      },
       "HomeResponse": {
         "type": "object",
         "description": "Home: its sections, in page order, plus the page-level fields. A\nsection with no rows is left out.",
@@ -59991,7 +60072,9 @@
           "done",
           "total",
           "reports",
-          "configured"
+          "configured",
+          "spotify_match",
+          "hold"
         ],
         "properties": {
           "configured": {
@@ -60001,6 +60084,10 @@
           "done": {
             "type": "integer",
             "minimum": 0
+          },
+          "hold": {
+            "$ref": "#/components/schemas/HoldStatus",
+            "description": "Fork: the download hold on synced playlists the import covers."
           },
           "last": {
             "type": [
@@ -60019,6 +60106,13 @@
               }
             ]
           },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fork: what the step is waiting on, when it waits (Spotify's rate\nlimit)."
+          },
           "reports": {
             "type": "string",
             "description": "Where the reports are written."
@@ -60027,9 +60121,13 @@
             "type": "boolean",
             "description": "A run is going."
           },
+          "spotify_match": {
+            "type": "boolean",
+            "description": "Fork: whether the public Spotify playlist match is set."
+          },
           "step": {
             "type": "string",
-            "description": "`walking`, `reading`, `resolving`, `importing`, `done`, `failed`."
+            "description": "`walking`, `reading`, `resolving`, `spotify`, `matching`,\n`importing`, `done`, `stopped`, `failed`."
           },
           "total": {
             "type": "integer",

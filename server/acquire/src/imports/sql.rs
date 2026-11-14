@@ -210,4 +210,10 @@ droppedneedle_kernel::sql! {
     /// Fork: how many albums user `?1` saved at Spotify, as last read.
     pub(crate) SAVED_COUNT = "SELECT COUNT(*) FROM acquire_spotify_saved_albums \
          WHERE user_id = ?1";
+    /// Fork: the first admin with an enabled Spotify link, for the
+    /// playlist-folder import's public-playlist match.
+    pub(crate) ADMIN_WITH_SPOTIFY = "SELECT u.id FROM auth_users u \
+         JOIN user_connections c ON c.user_id = u.id \
+         WHERE u.role = 'admin' AND c.service = 'spotify' AND c.enabled = 1 \
+         ORDER BY u.created_at, u.id LIMIT 1";
 }
