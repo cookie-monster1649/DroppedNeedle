@@ -480,17 +480,13 @@ pub async fn resolve_item(
     file_isrc: Option<&str>,
     lookups: &dyn Lookups,
     check: &dyn StandInCheck,
-) -> Result<Option<Resolved>, String> {
+) -> Result<Option<Resolved>, resolve::LookupFailure> {
     let facts = item_facts(item);
     let tried = |code: &str| {
         file_isrc.is_some_and(|known| known.replace('-', "").eq_ignore_ascii_case(code))
     };
     if facts.isrc.as_deref().is_some_and(|code| !tried(code)) {
-        if let Some((album, recording)) = lookups
-            .mb_track_by_isrc(&facts)
-            .await
-            .map_err(|error| error.to_string())?
-        {
+        if let Some((album, recording)) = lookups.mb_track_by_isrc(&facts).await? {
             return Ok(Some(Resolved {
                 via: Via::SpotifyPlaylist,
                 album,
@@ -498,20 +494,14 @@ pub async fn resolve_item(
                 recording,
             }));
         }
-        if let Some((stand_in, recording)) = lookups
-            .deezer_track_by_isrc(&facts)
-            .await
-            .map_err(|error| error.to_string())?
-        {
+        if let Some((stand_in, recording)) = lookups.deezer_track_by_isrc(&facts).await? {
             let mut found =
                 resolve::from_deezer(Via::SpotifyPlaylist, stand_in, recording, check).await?;
             found.via = Via::SpotifyPlaylist;
             return Ok(Some(found));
         }
     }
-    let album = crate::imports::spotify_resolve::resolve_album(&facts.album, lookups)
-        .await
-        .map_err(|error| error.to_string())?;
+    let album = crate::imports::spotify_resolve::resolve_album(&facts.album, lookups).await?;
     match album {
         None => Ok(None),
         Some(found) if found.source == FoundSource::Deezer => Ok(Some(
@@ -798,6 +788,7 @@ impl PlaylistImport {
             .map(|(rel, _)| rel.clone())
             .collect();
         let total = todo.len();
+        let mut guard = super::Guard::default();
         for (index, rel) in todo.iter().enumerate() {
             if self.stop.load(Ordering::SeqCst) {
                 return Ok(StepEnd::Stopped);
@@ -826,21 +817,40 @@ impl PlaylistImport {
                 looked_up: already,
             };
             if !already {
-                let answer = resolve_item(
-                    item,
-                    tags.isrc.as_deref(),
-                    self.lookups.as_ref(),
-                    self.lookups.as_ref(),
-                )
-                .await
-                .map_err(|error| format!("a lookup failed (run again to go on): {error}"))?;
+                let answer = loop {
+                    match resolve_item(
+                        item,
+                        tags.isrc.as_deref(),
+                        self.lookups.as_ref(),
+                        self.lookups.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(answer) => {
+                            guard.answered();
+                            break Ok(answer);
+                        }
+                        Err(failure) => {
+                            if let Some(reason) =
+                                self.after_failure(&mut guard, rel, failure).await?
+                            {
+                                break Err(reason);
+                            }
+                        }
+                    }
+                };
                 matched.looked_up = true;
                 if let Some(file) = state.files.get_mut(rel) {
                     match answer {
-                        Some(found) => file.resolved = Some(Resolution::Found(found)),
-                        None => {
+                        Ok(Some(found)) => file.resolved = Some(Resolution::Found(found)),
+                        Ok(None) => {
                             if file.resolved.is_none() {
                                 file.resolved = Some(Resolution::NotFound);
+                            }
+                        }
+                        Err(reason) => {
+                            if file.resolved.is_none() {
+                                file.resolved = Some(super::refused(None, reason));
                             }
                         }
                     }

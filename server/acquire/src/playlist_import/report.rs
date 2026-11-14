@@ -181,6 +181,10 @@ impl Report {
                         unresolved.push(listed("no confident match"));
                     }
                 }
+                Some(Resolution::Refused { reason, .. }) => {
+                    counts.unresolved += 1;
+                    unresolved.push(listed(&format!("lookup refused: {reason}")));
+                }
                 Some(Resolution::Found(found)) => {
                     albums.insert(found.album.clone());
                     match found.via {

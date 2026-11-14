@@ -192,3 +192,131 @@ fn the_report_counts_each_playlist() {
     assert_eq!(report.albums, 1);
     assert!(report.text().contains("TOTAL"));
 }
+
+fn forbidden() -> resolve::LookupFailure {
+    crate::imports::spotify_resolve::ResolveError::Provider(
+        droppedneedle_providers::ProviderError::Forbidden { provider: "deezer" },
+    )
+    .into()
+}
+
+#[test]
+fn a_refused_request_is_per_song_and_an_outage_stops() {
+    use crate::imports::spotify_resolve::ResolveError;
+    use droppedneedle_providers::ProviderError;
+    assert_eq!(
+        forbidden(),
+        resolve::LookupFailure::Refused("deezer refused the request (403)".to_owned())
+    );
+    let limited: resolve::LookupFailure = ResolveError::Provider(ProviderError::RateLimited {
+        provider: "deezer",
+        retry_after: Some(Duration::from_secs(7)),
+    })
+    .into();
+    assert!(matches!(
+        limited,
+        resolve::LookupFailure::Limited { wait: Some(w), .. } if w == Duration::from_secs(7)
+    ));
+    let down: resolve::LookupFailure = ResolveError::Provider(ProviderError::Server {
+        provider: "musicbrainz",
+        status: 502,
+    })
+    .into();
+    assert!(matches!(down, resolve::LookupFailure::Down(_)));
+    assert!(matches!(
+        resolve::LookupFailure::from("check failed".to_owned()),
+        resolve::LookupFailure::Down(_)
+    ));
+}
+
+#[test]
+fn one_refusal_sets_the_song_aside_and_twenty_in_a_row_stop() {
+    let mut guard = Guard::default();
+    for _ in 0..REFUSED_IN_A_ROW - 1 {
+        assert!(matches!(guard.failed(forbidden()), Next::SetAside(_)));
+    }
+    guard.answered();
+    for _ in 0..REFUSED_IN_A_ROW - 1 {
+        assert!(matches!(guard.failed(forbidden()), Next::SetAside(_)));
+    }
+    match guard.failed(forbidden()) {
+        Next::Stop(line) => assert!(line.contains("20 lookups in a row were refused")),
+        other => panic!("{other:?}"),
+    }
+    let mut guard = Guard::default();
+    assert!(matches!(
+        guard.failed(resolve::LookupFailure::Down("x".to_owned())),
+        Next::Stop(line) if line.starts_with("a lookup failed")
+    ));
+}
+
+#[test]
+fn a_rate_limit_waits_longer_each_time_then_stops() {
+    let limited = |wait| resolve::LookupFailure::Limited {
+        message: "deezer is rate limited (429)".to_owned(),
+        wait,
+    };
+    let mut guard = Guard::default();
+    assert_eq!(guard.failed(limited(None)), Next::Wait(LIMITED_WAIT_BASE));
+    assert_eq!(
+        guard.failed(limited(None)),
+        Next::Wait(LIMITED_WAIT_BASE * 2)
+    );
+    assert_eq!(
+        guard.failed(limited(Some(Duration::from_secs(900)))),
+        Next::Wait(Duration::from_secs(900))
+    );
+    for _ in 3..LIMITED_WAITS {
+        assert!(matches!(guard.failed(limited(None)), Next::Wait(w) if w <= LIMITED_WAIT_MAX));
+    }
+    assert!(matches!(guard.failed(limited(None)), Next::Stop(_)));
+    guard.answered();
+    assert_eq!(guard.failed(limited(None)), Next::Wait(LIMITED_WAIT_BASE));
+}
+
+#[test]
+fn a_refused_song_is_tried_once_more_on_a_re_run() {
+    assert!(wants_lookup(None));
+    assert!(!wants_lookup(Some(&Resolution::NotFound)));
+    let first = refused(None, "deezer refused the request (403)".to_owned());
+    assert_eq!(
+        first,
+        Resolution::Refused {
+            reason: "deezer refused the request (403)".to_owned(),
+            tries: 1
+        }
+    );
+    assert!(wants_lookup(Some(&first)));
+    let second = refused(Some(&first), "again".to_owned());
+    assert!(matches!(second, Resolution::Refused { tries: 2, .. }));
+    assert!(!wants_lookup(Some(&second)));
+    // The state file keeps it.
+    let json = serde_json::to_string(&second).unwrap();
+    assert_eq!(serde_json::from_str::<Resolution>(&json).unwrap(), second);
+}
+
+#[test]
+fn the_report_lists_a_refused_lookup_with_its_reason() {
+    let mut state = State::default();
+    state.files.insert(
+        "p1/x.mp3".to_owned(),
+        FileState {
+            playlist: "p1".to_owned(),
+            tags: Some(Tags {
+                title: "No Sleep (001)".to_owned(),
+                artist: "Van Damn".to_owned(),
+                album: "No Sleep (001)".to_owned(),
+                ..Tags::default()
+            }),
+            resolved: Some(refused(None, "deezer refused the request (403)".to_owned())),
+            ..FileState::default()
+        },
+    );
+    let report = Report::of(&state, Mode::DryRun, None, 0);
+    assert_eq!(report.total.unresolved, 1);
+    assert_eq!(report.total.pending, 0);
+    assert_eq!(
+        report.unresolved[0].why,
+        "lookup refused: deezer refused the request (403)"
+    );
+}

@@ -16,6 +16,18 @@ use crate::RequestPriority;
 use crate::client::decode;
 use crate::error::ProviderError;
 
+/// Fork: search text Deezer's edge will take. Its firewall answers a 403
+/// "Access Denied" page to a search holding a number in brackets, such as
+/// `No Sleep (001)` or `(1)` (seen 2026-11-15; `(abc)` and `001)` pass), so
+/// brackets become spaces, as quotes do; the search is fuzzy either way.
+#[must_use]
+pub fn search_safe(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if matches!(c, '"' | '(' | ')') { ' ' } else { c })
+        .collect()
+}
+
 /// One album hit of `/search/album`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeezerAlbumHit {
@@ -239,7 +251,7 @@ impl PreviewClient {
         limit: u32,
         priority: RequestPriority,
     ) -> Result<Vec<DeezerAlbumHit>, ProviderError> {
-        let clean = |value: &str| value.replace('"', " ");
+        let clean = search_safe;
         let query = if artist.trim().is_empty() {
             format!(r#"album:"{}""#, clean(title))
         } else {
@@ -504,6 +516,7 @@ impl PreviewClient {
         limit: u32,
         priority: RequestPriority,
     ) -> Result<Vec<DeezerSearchHit>, ProviderError> {
+        let text = search_safe(text);
         let text = text.trim();
         if text.is_empty() {
             return Ok(Vec::new());

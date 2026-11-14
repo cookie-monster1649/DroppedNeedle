@@ -110,6 +110,102 @@ pub struct FileState {
 pub enum Resolution {
     Found(Resolved),
     NotFound,
+    /// Fork: the lookup itself was refused (one request a service will not
+    /// answer); `tries` counts the runs that tried, and a re-run tries once
+    /// more.
+    Refused {
+        reason: String,
+        tries: u8,
+    },
+}
+
+/// Fork: the runs that try a refused song before it is left as refused.
+const REFUSED_TRIES: u8 = 2;
+/// Fork: refused lookups in a row that stop the run: the service is
+/// refusing everything, not one song.
+const REFUSED_IN_A_ROW: usize = 20;
+/// Fork: waits for a rate limit in a row before the run stops.
+const LIMITED_WAITS: u32 = 6;
+/// Fork: the first wait for a rate limit with no wait named; doubled with
+/// each limit in a row, up to [`LIMITED_WAIT_MAX`].
+const LIMITED_WAIT_BASE: Duration = Duration::from_secs(30);
+const LIMITED_WAIT_MAX: Duration = Duration::from_secs(600);
+
+/// Whether a file still wants a lookup: never looked up, or refused by
+/// fewer runs than [`REFUSED_TRIES`].
+fn wants_lookup(resolved: Option<&Resolution>) -> bool {
+    match resolved {
+        None => true,
+        Some(Resolution::Refused { tries, .. }) => *tries < REFUSED_TRIES,
+        Some(_) => false,
+    }
+}
+
+/// The refusal a file records after `previous`.
+fn refused(previous: Option<&Resolution>, reason: String) -> Resolution {
+    let tries = match previous {
+        Some(Resolution::Refused { tries, .. }) => tries.saturating_add(1),
+        _ => 1,
+    };
+    Resolution::Refused { reason, tries }
+}
+
+/// Fork: what the run does after a lookup failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Next {
+    /// Record the song as refused, with this reason, and go on.
+    SetAside(String),
+    /// Wait this long, then ask for the same song again.
+    Wait(Duration),
+    /// Stop the run with this line.
+    Stop(String),
+}
+
+/// Fork: the failures in a row a run has seen, so one refused song is set
+/// aside while a service refusing or limiting everything stops the run.
+#[derive(Debug, Default)]
+struct Guard {
+    refused: usize,
+    limited: u32,
+}
+
+impl Guard {
+    fn answered(&mut self) {
+        self.refused = 0;
+        self.limited = 0;
+    }
+
+    fn failed(&mut self, failure: resolve::LookupFailure) -> Next {
+        use resolve::LookupFailure as F;
+        match failure {
+            F::Refused(message) => {
+                self.limited = 0;
+                self.refused += 1;
+                if self.refused >= REFUSED_IN_A_ROW {
+                    Next::Stop(format!(
+                        "{REFUSED_IN_A_ROW} lookups in a row were refused (run again to go on): {message}"
+                    ))
+                } else {
+                    Next::SetAside(message)
+                }
+            }
+            F::Limited { message, wait } => {
+                self.limited += 1;
+                if self.limited > LIMITED_WAITS {
+                    return Next::Stop(format!(
+                        "still rate limited after {LIMITED_WAITS} waits (run again to go on): {message}"
+                    ));
+                }
+                let doubled = LIMITED_WAIT_BASE
+                    .saturating_mul(1 << (self.limited - 1).min(10))
+                    .min(LIMITED_WAIT_MAX);
+                Next::Wait(wait.map_or(doubled, |asked| asked.max(doubled)))
+            }
+            F::Down(message) => {
+                Next::Stop(format!("a lookup failed (run again to go on): {message}"))
+            }
+        }
+    }
 }
 
 /// The run state, kept in `state.json`.
@@ -503,11 +599,12 @@ impl PlaylistImport {
                     && !file.in_library
                     && file.outcome.is_none()
                     && file.tags.is_some()
-                    && file.resolved.is_none()
+                    && wants_lookup(file.resolved.as_ref())
             })
             .map(|(rel, _)| rel.clone())
             .collect();
         let total = todo.len();
+        let mut guard = Guard::default();
         for (index, rel) in todo.iter().enumerate() {
             if self.stop.load(Ordering::SeqCst) {
                 return Err(STOPPED_BY_ADMIN.to_owned());
@@ -525,13 +622,24 @@ impl PlaylistImport {
                 tags.barcode.as_deref(),
                 tags.seconds,
             );
-            let answer = resolve::resolve(&facts, self.lookups.as_ref(), self.lookups.as_ref())
-                .await
-                .map_err(|error| format!("a lookup failed (run again to go on): {error}"))?;
+            let answer = loop {
+                match resolve::resolve(&facts, self.lookups.as_ref(), self.lookups.as_ref()).await {
+                    Ok(answer) => {
+                        guard.answered();
+                        break Ok(answer);
+                    }
+                    Err(failure) => {
+                        if let Some(reason) = self.after_failure(&mut guard, rel, failure).await? {
+                            break Err(reason);
+                        }
+                    }
+                }
+            };
             if let Some(file) = state.files.get_mut(rel) {
                 file.resolved = Some(match answer {
-                    Some(found) => Resolution::Found(found),
-                    None => Resolution::NotFound,
+                    Ok(Some(found)) => Resolution::Found(found),
+                    Ok(None) => Resolution::NotFound,
+                    Err(reason) => refused(file.resolved.as_ref(), reason),
                 });
             }
             if (index + 1) % SAVE_EVERY == 0 {
@@ -540,6 +648,34 @@ impl PlaylistImport {
             tokio::time::sleep(LOOKUP_GAP).await;
         }
         Ok(())
+    }
+
+    /// Fork: act on a failed lookup for `rel`. `Ok(Some(reason))` sets the
+    /// song aside, `Ok(None)` asks again after a wait, `Err` stops the run.
+    async fn after_failure(
+        &self,
+        guard: &mut Guard,
+        rel: &str,
+        failure: resolve::LookupFailure,
+    ) -> Result<Option<String>, String> {
+        match guard.failed(failure) {
+            Next::SetAside(reason) => {
+                tracing::warn!(file = rel, %reason, "playlist import: lookup refused; song set aside");
+                Ok(Some(reason))
+            }
+            Next::Wait(wait) => {
+                tracing::warn!(file = rel, ?wait, "playlist import: rate limited; waiting");
+                let until = tokio::time::Instant::now() + wait;
+                while tokio::time::Instant::now() < until {
+                    if self.stop.load(Ordering::SeqCst) {
+                        return Err(STOPPED_BY_ADMIN.to_owned());
+                    }
+                    tokio::time::sleep(Duration::from_secs(1).min(wait)).await;
+                }
+                Ok(None)
+            }
+            Next::Stop(line) => Err(line),
+        }
     }
 
     /// Link each Deezer album found to be a MusicBrainz group, so its page,
