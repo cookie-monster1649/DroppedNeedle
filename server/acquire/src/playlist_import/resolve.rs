@@ -9,10 +9,13 @@
 //! artist and length at MusicBrainz; the Deezer album the file names
 //! (again checked at MusicBrainz).
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::imports::spotify_resolve::{AlbumFacts, Lookups, ResolveError, TrackFacts};
 use crate::stand_ins::StandInCheck;
+use droppedneedle_providers::ProviderError;
 use droppedneedle_providers::virtual_ids::is_virtual;
 
 /// What resolved a file.
@@ -41,6 +44,60 @@ pub struct Resolved {
     /// The recording (MusicBrainz, or Deezer's stand-in); empty when only
     /// the album was proved (by barcode).
     pub recording: String,
+}
+
+/// Fork: why one song's lookup failed, sorted by what the run does next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LookupFailure {
+    /// This one request was refused (a 403, another 4xx, an unreadable
+    /// answer): the song is set aside and the run goes on.
+    Refused(String),
+    /// A rate limit or quota: wait, then ask again.
+    Limited {
+        message: String,
+        wait: Option<Duration>,
+    },
+    /// A service is down or the catalogue failed: the run stops.
+    Down(String),
+}
+
+impl std::fmt::Display for LookupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(message) | Self::Limited { message, .. } | Self::Down(message) => {
+                f.write_str(message)
+            }
+        }
+    }
+}
+
+impl From<ResolveError> for LookupFailure {
+    fn from(error: ResolveError) -> Self {
+        let message = error.to_string();
+        match error {
+            ResolveError::Provider(provider) => match provider {
+                ProviderError::RateLimited { retry_after, .. } => Self::Limited {
+                    message,
+                    wait: retry_after,
+                },
+                ProviderError::Forbidden { .. }
+                | ProviderError::NotFound { .. }
+                | ProviderError::BadRequest { .. }
+                | ProviderError::Redirect { .. }
+                | ProviderError::Payload { .. }
+                | ProviderError::Invalid { .. } => Self::Refused(message),
+                _ => Self::Down(message),
+            },
+            ResolveError::Store(_) => Self::Down(message),
+        }
+    }
+}
+
+/// A failure only known by its wording (the stand-in check): the run stops.
+impl From<String> for LookupFailure {
+    fn from(message: String) -> Self {
+        Self::Down(message)
+    }
 }
 
 /// The facts a file's tags give, as the resolver reads a Spotify song.
@@ -115,26 +172,22 @@ pub(super) async fn from_deezer(
 ///
 /// # Errors
 ///
-/// A service failed: the file is tried again on a later run.
+/// A lookup failed; [`LookupFailure`] says whether the run goes on.
 pub async fn resolve(
     track: &TrackFacts,
     lookups: &dyn Lookups,
     check: &dyn StandInCheck,
-) -> Result<Option<Resolved>, String> {
+) -> Result<Option<Resolved>, LookupFailure> {
     resolve_in_order(track, lookups, check).await
-}
-
-fn failed(error: ResolveError) -> String {
-    error.to_string()
 }
 
 async fn resolve_in_order(
     track: &TrackFacts,
     lookups: &dyn Lookups,
     check: &dyn StandInCheck,
-) -> Result<Option<Resolved>, String> {
+) -> Result<Option<Resolved>, LookupFailure> {
     if track.isrc.is_some() {
-        if let Some((album, recording)) = lookups.mb_track_by_isrc(track).await.map_err(failed)? {
+        if let Some((album, recording)) = lookups.mb_track_by_isrc(track).await? {
             return Ok(Some(Resolved {
                 via: Via::IsrcMusicbrainz,
                 album,
@@ -142,19 +195,14 @@ async fn resolve_in_order(
                 recording,
             }));
         }
-        if let Some((stand_in, recording)) =
-            lookups.deezer_track_by_isrc(track).await.map_err(failed)?
-        {
-            return from_deezer(Via::IsrcDeezer, stand_in, recording, check)
-                .await
-                .map(Some);
+        if let Some((stand_in, recording)) = lookups.deezer_track_by_isrc(track).await? {
+            return Ok(Some(
+                from_deezer(Via::IsrcDeezer, stand_in, recording, check).await?,
+            ));
         }
     }
     if track.album.upc.is_some()
-        && let Some(album) = lookups
-            .mb_album_by_barcode(&track.album)
-            .await
-            .map_err(failed)?
+        && let Some(album) = lookups.mb_album_by_barcode(&track.album).await?
     {
         return Ok(Some(Resolved {
             via: Via::BarcodeMusicbrainz,
@@ -166,7 +214,7 @@ async fn resolve_in_order(
     if track.title.is_empty() || track.artists.is_empty() || track.seconds.is_none() {
         return Ok(None);
     }
-    if let Some((album, recording)) = lookups.mb_track_by_name(track).await.map_err(failed)? {
+    if let Some((album, recording)) = lookups.mb_track_by_name(track).await? {
         return Ok(Some(Resolved {
             via: Via::NameMusicbrainz,
             album,
@@ -174,10 +222,10 @@ async fn resolve_in_order(
             recording,
         }));
     }
-    match lookups.deezer_track_by_name(track).await.map_err(failed)? {
-        Some((stand_in, recording)) => from_deezer(Via::NameDeezer, stand_in, recording, check)
-            .await
-            .map(Some),
+    match lookups.deezer_track_by_name(track).await? {
+        Some((stand_in, recording)) => Ok(Some(
+            from_deezer(Via::NameDeezer, stand_in, recording, check).await?,
+        )),
         None => Ok(None),
     }
 }

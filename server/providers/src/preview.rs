@@ -68,6 +68,7 @@ pub static DEEZER_SPEC: Spec = Spec {
 ///
 /// - 800, no data: [`ProviderError::NotFound`], which the lookups read as
 ///   absence. Seen for an unknown album id on 2026-10-20.
+/// - Fork: 4 (quota): [`ProviderError::RateLimited`].
 /// - any other code: [`ProviderError::BadRequest`] with the status, never
 ///   retried. Only 800 has been seen on the wire, so the other codes are
 ///   refused rather than mapped to a guessed meaning.
@@ -86,6 +87,12 @@ fn classify(answer: &Answer<'_>) -> Result<(), ProviderError> {
     };
     Err(match error.code {
         800 => ProviderError::NotFound { provider: DEEZER },
+        // Fork: 4 "Quota limit exceeded" is a limit, not a refusal: waited
+        // out and asked again.
+        4 => ProviderError::RateLimited {
+            provider: DEEZER,
+            retry_after: None,
+        },
         _ => ProviderError::BadRequest {
             provider: DEEZER,
             status,
@@ -208,7 +215,26 @@ impl PreviewClient {
         match self.deezer.send(request, priority).await {
             Ok(reply) => Ok(Some(reply)),
             Err(ProviderError::NotFound { .. }) => Ok(None),
-            Err(error) => Err(error),
+            Err(error) => {
+                if matches!(
+                    error,
+                    ProviderError::Forbidden { .. } | ProviderError::BadRequest { .. }
+                ) {
+                    // Fork: the path and the search text, never a secret
+                    // (Deezer's API is keyless).
+                    let q = query
+                        .iter()
+                        .find(|(key, _)| *key == "q")
+                        .map_or("", |(_, value)| *value);
+                    tracing::warn!(
+                        path = %format!("/{}", segments.join("/")),
+                        q,
+                        %error,
+                        "deezer refused a request"
+                    );
+                }
+                Err(error)
+            }
         }
     }
 
@@ -553,5 +579,48 @@ impl PreviewClient {
             Ok(tracks) if !tracks.is_empty() => (tracks, Some("itunes")),
             _ => (Vec::new(), None),
         }
+    }
+}
+
+#[cfg(test)]
+mod fork_deezer_tests {
+    use super::*;
+    use crate::preview::catalog::search_safe;
+
+    fn classified(status: u16, body: &str) -> Result<(), ProviderError> {
+        let reply = Reply::for_test(DEEZER, status, body);
+        classify(&Answer {
+            reply: &reply,
+            now_unix: 0,
+        })
+    }
+
+    #[test]
+    fn deezer_error_codes_are_sorted() {
+        let quota = r#"{"error":{"code":4,"type":"Exception","message":"Quota limit exceeded"}}"#;
+        assert!(matches!(
+            classified(200, quota),
+            Err(ProviderError::RateLimited { .. })
+        ));
+        assert!(matches!(
+            classified(200, r#"{"error":{"code":800,"message":"no data"}}"#),
+            Err(ProviderError::NotFound { .. })
+        ));
+        assert!(matches!(
+            classified(200, r#"{"error":{"code":600,"message":"Invalid query"}}"#),
+            Err(ProviderError::BadRequest { status: 200, .. })
+        ));
+        assert!(matches!(
+            classified(403, "<HTML>Access Denied</HTML>"),
+            Err(ProviderError::Forbidden { .. })
+        ));
+        assert!(classified(200, r#"{"data":[]}"#).is_ok());
+    }
+
+    /// Deezer's edge refuses `(001)` in a search; brackets go.
+    #[test]
+    fn search_text_drops_brackets_and_quotes() {
+        assert_eq!(search_safe(r#"No Sleep (001) "x""#), "No Sleep  001   x ");
+        assert!(!search_safe("Bailando (1)").contains(['(', ')']));
     }
 }
