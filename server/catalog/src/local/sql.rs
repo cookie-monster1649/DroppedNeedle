@@ -58,8 +58,8 @@ use super::player::{
 use super::stores::{AlbumSort, ArtistScope, ArtistSort, TrackSort};
 use droppedneedle_library::identity::asked_groups;
 use droppedneedle_library::{
-    all_owners, best_guess_listed, copy_of_group, named_group_guess,
-    not_found_listed, not_yet_identified, owns_group, recording_mbid,
+    all_owners, best_guess_listed, copy_of_group, named_group_guess, not_found_listed,
+    not_yet_identified, owns_group, recording_mbid,
 };
 
 /// An album that has not been merged into another, over an album alias.

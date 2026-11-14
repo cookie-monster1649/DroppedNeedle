@@ -309,6 +309,8 @@ mod tests {
             "app_connect",
             "library_import_folder",
             "appearance",
+            // Fork: live playlist folders, v3 only.
+            "fork_playlist_folders",
             // This install's own id.
             "instance_id",
         ];

@@ -320,6 +320,15 @@ describe('finished downloads on the Downloads queue', () => {
 
 	it('shows the failure box only where a source failed or found nothing', async () => {
 		fakeApi({
+			// Fork: the queue reads its counts from the activity summary.
+			'GET /api/v3/downloads/activity-summary': {
+				revision: 1,
+				active_count: 0,
+				held_count: 0,
+				failed_count: 0,
+				queued_count: 0,
+				landed_release_group_mbids: []
+			},
 			'GET /api/v3/downloads/tasks': {
 				items: [
 					task('upgrade', {
@@ -374,6 +383,15 @@ describe('finished downloads on the Downloads queue', () => {
 
 	it('shows the held box for a format the settings do not list', async () => {
 		fakeApi({
+			// Fork: the queue reads its counts from the activity summary.
+			'GET /api/v3/downloads/activity-summary': {
+				revision: 1,
+				active_count: 0,
+				held_count: 0,
+				failed_count: 0,
+				queued_count: 0,
+				landed_release_group_mbids: []
+			},
 			'GET /api/v3/downloads/tasks': {
 				items: [
 					task('unlisted', {

@@ -4834,18 +4834,19 @@ fn scan_and_editor_agree_on_writable_fields() {
     );
 }
 
-/// Fork: an imported MP3 whose ID3 frame carries flags the wrapper cannot
-/// keep is refused by the strict staged write, and written with a fresh
-/// tag by the import's write.
+/// Fork: an imported MP3 whose ID3 frame carries flag bits the wrapper
+/// cannot keep (a reserved bit) is refused by the strict staged write, and
+/// written with a fresh tag by the import's write. Plain status flags no
+/// longer refuse upstream, so the test sets a reserved bit.
 #[test]
 fn an_imported_mp3_with_a_flagged_frame_gets_a_fresh_tag() {
     use droppedneedle_library::publish::staging::{stage_tags, stage_tags_import};
     use droppedneedle_library::publish::{TagTarget, TagUpdates};
     let (_dir, source) = temp_copy("mp3_full_01.mp3", "fresh-tag");
-    // Set a status flag on the first frame's header.
+    // Set a reserved status bit on the first frame's header.
     let mut bytes = std::fs::read(&source).unwrap();
     assert_eq!(&bytes[..3], b"ID3");
-    bytes[10 + 8] = 0x40;
+    bytes[10 + 8] = 0x01;
     std::fs::write(&source, &bytes).unwrap();
     let temp = source.with_file_name(".staged.mp3");
     let mut updates = TagUpdates::new();
