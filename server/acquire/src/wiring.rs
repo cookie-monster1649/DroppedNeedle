@@ -249,6 +249,8 @@ pub struct AcquireSetup {
     /// Fork: the MusicBrainz, Deezer and catalogue lookups at background
     /// priority: the stand-in backfill's check.
     pub background_lookups: Arc<crate::imports::spotify_resolve::Live>,
+    /// Fork: the admin-run import of a folder of playlist folders.
+    pub playlist_import: Arc<crate::playlist_import::PlaylistImport>,
 }
 
 /// The drop-import service over the landing's library port, a staging
@@ -792,6 +794,12 @@ impl AcquireSetup {
             landing.library().clone(),
         ));
 
+        let playlist_import = Arc::new(crate::playlist_import::PlaylistImport::new(
+            db.clone(),
+            background_lookups.clone(),
+            landing.library().clone(),
+        ));
+
         Ok(Self {
             db,
             requests: core.requests,
@@ -817,6 +825,7 @@ impl AcquireSetup {
             spotify_import_jobs,
             spotify_sync,
             background_lookups,
+            playlist_import,
         })
     }
 

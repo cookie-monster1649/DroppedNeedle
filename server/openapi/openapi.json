@@ -1271,6 +1271,90 @@
         ]
       }
     },
+    "/api/v3/admin/playlist-import/dry-run": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Start a dry run: tags read, songs resolved, a report written; the\nlibrary is left as it is.\n`POST /api/v3/admin/playlist-import/dry-run`.",
+        "operationId": "playlist_import_dry_run_handler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/admin/playlist-import/run": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Start the import itself; a run stopped early goes on where it was.\n`POST /api/v3/admin/playlist-import/run`.",
+        "operationId": "playlist_import_run_handler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/admin/playlist-import/status": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "What the playlist import is doing, and how its last run ended.\n`GET /api/v3/admin/playlist-import/status`.",
+        "operationId": "playlist_import_status_handler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/admin/precache/run": {
       "post": {
         "tags": [
@@ -54673,6 +54757,14 @@
           "already_running"
         ]
       },
+      "Mode": {
+        "type": "string",
+        "description": "Which run.",
+        "enum": [
+          "dry_run",
+          "import"
+        ]
+      },
       "MoreByArtistResponse": {
         "type": "object",
         "description": "`GET /albums/{album_id}/more-by-artist`.",
@@ -59889,6 +59981,61 @@
           }
         ],
         "description": "Own profile. Identity only; connected services and library stats belong\nto the connections and library routes."
+      },
+      "Progress": {
+        "type": "object",
+        "description": "What the import is doing.",
+        "required": [
+          "running",
+          "step",
+          "done",
+          "total",
+          "reports",
+          "configured"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Whether a source folder is set."
+          },
+          "done": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the last run ended."
+          },
+          "mode": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Mode"
+              }
+            ]
+          },
+          "reports": {
+            "type": "string",
+            "description": "Where the reports are written."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "A run is going."
+          },
+          "step": {
+            "type": "string",
+            "description": "`walking`, `reading`, `resolving`, `importing`, `done`, `failed`."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "PromptService": {
         "type": "string",

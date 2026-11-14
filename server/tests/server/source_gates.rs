@@ -302,6 +302,10 @@ const IDENTITY_RULES: &[Rule] = &[
                 "the read benchmarks seed their own database",
             ),
             place(
+                "acquire/src/stand_ins/tests.rs",
+                "a fork unit test seeds a library album the stand-in settle reads as owned",
+            ),
+            place(
                 "library/src/identify/sqlite/tests.rs",
                 "a unit test seeds two chosen matches that disagree, which the module refuses to write",
             ),
@@ -842,6 +846,8 @@ const SPOTIFY_LIBRARY_PAUSED: &str =
 const SPOTIFY_SYNC_ALL: &str =
     "a fork \"Sync all now\" a user starts; one per user, it logs its own end";
 const SEARCH: &str = "an acquire search a request starts; it logs its own end";
+const PLAYLIST_IMPORT: &str =
+    "a fork playlist-folder import an admin starts; one at a time, it records its own end";
 const LIBRARY_CHECK: &str = "the library folder check, bounded by a timeout; one that hangs is left to end and none starts beside it";
 const WORKER_CHILD: &str = "a landing or review the download worker waits for";
 const REQUEST: &str = "blocking file or store work, awaited by the request that runs it";
@@ -897,6 +903,8 @@ const SPAWN_SITES: &[(&str, usize, &str)] = &[
         SPOTIFY_LIBRARY_PAUSED,
     ),
     ("acquire/src/imports/spotify_sync.rs", 1, SPOTIFY_SYNC_ALL),
+    ("acquire/src/playlist_import/mod.rs", 6, AWAITED),
+    ("acquire/src/playlist_import/mod.rs", 1, PLAYLIST_IMPORT),
     ("acquire/src/requests/service/edition.rs", 1, AWAITED),
     ("acquire/src/search_jobs/mod.rs", 1, SEARCH),
     ("acquire/src/slskd/repository.rs", 3, AWAITED),
