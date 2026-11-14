@@ -11,8 +11,11 @@
 //!   links the Spotify album, else its barcode at Deezer (`/album/upc:`),
 //!   else title, artist and track count, MusicBrainz then Deezer;
 //! - an artist: the MusicBrainz artist that links the Spotify artist, else
-//!   one whose name agrees and whose albums overlap Spotify's, else the
-//!   Deezer artist of that name.
+//!   the one credited by that name on a saved album already proved (by
+//!   barcode or link), else one whose name agrees and whose albums overlap
+//!   the titles known, else the Deezer artist of that name. None of these
+//!   calls Spotify; the library sync reads an artist's albums there only
+//!   for what is still unmatched ([`resolve_artist_named`]).
 //!
 //! A Deezer answer is kept in the source catalogue under its stand-in id
 //! (`library::sources`), so it opens the normal album or artist page and
@@ -186,6 +189,9 @@ pub struct ArtistFacts {
     /// Titles of its albums and singles at Spotify, for the overlap check;
     /// empty when unknown.
     pub album_titles: Vec<String>,
+    /// MusicBrainz release groups of albums by this name the user saved
+    /// and that matched by proof; empty when none.
+    pub album_groups: Vec<String>,
 }
 
 /// Where a match came from.
@@ -215,6 +221,8 @@ pub enum Via {
     Barcode,
     /// A confident name match.
     Name,
+    /// The artist credited on an album already matched by proof.
+    Album,
 }
 
 impl Via {
@@ -224,6 +232,7 @@ impl Via {
             Self::Link => "link",
             Self::Barcode => "barcode",
             Self::Name => "name",
+            Self::Album => "album",
         }
     }
 }
@@ -298,6 +307,10 @@ pub trait Lookups: Send + Sync {
         album: &'a AlbumFacts,
     ) -> BoxFuture<'a, Result<Option<String>, ResolveError>>;
     fn mb_artist_by_link<'a>(
+        &'a self,
+        artist: &'a ArtistFacts,
+    ) -> BoxFuture<'a, Result<Option<String>, ResolveError>>;
+    fn mb_artist_by_album<'a>(
         &'a self,
         artist: &'a ArtistFacts,
     ) -> BoxFuture<'a, Result<Option<String>, ResolveError>>;
@@ -442,6 +455,32 @@ pub async fn resolve_artist(
     if artist.name.trim().is_empty() {
         return Ok(None);
     }
+    if !artist.album_groups.is_empty()
+        && let Some(hit) = found(
+            lookups.mb_artist_by_album(artist).await?,
+            Source::MusicBrainz,
+            Via::Album,
+        )
+    {
+        return Ok(Some(hit));
+    }
+    resolve_artist_named(artist, lookups).await
+}
+
+/// The name steps of [`resolve_artist`] alone: MusicBrainz by name and
+/// album overlap, then Deezer by name. For an artist whose link and
+/// albums proved nothing, once its album titles are known.
+///
+/// # Errors
+///
+/// The first lookup whose service failed.
+pub async fn resolve_artist_named(
+    artist: &ArtistFacts,
+    lookups: &dyn Lookups,
+) -> Result<Option<Found>, ResolveError> {
+    if artist.name.trim().is_empty() {
+        return Ok(None);
+    }
     if !artist.album_titles.is_empty()
         && let Some(hit) = found(
             lookups.mb_artist_by_name(artist).await?,
@@ -543,6 +582,8 @@ pub struct Live {
 const NAME_HITS: u32 = 10;
 /// Artist candidates whose albums are read for the overlap check.
 const ARTIST_CANDIDATES: usize = 3;
+/// Saved albums whose credits are read to name an artist.
+const ALBUM_GROUPS: usize = 3;
 
 impl Live {
     /// Lookups at `priority`.
@@ -890,6 +931,36 @@ impl Lookups for Live {
         })
     }
 
+    fn mb_artist_by_album<'a>(
+        &'a self,
+        artist: &'a ArtistFacts,
+    ) -> BoxFuture<'a, Result<Option<String>, ResolveError>> {
+        Box::pin(async move {
+            let view = self.albums.view(self.priority)?;
+            let mut ids = Vec::new();
+            for group in artist.album_groups.iter().take(ALBUM_GROUPS) {
+                let Some(lookup) = view
+                    .lookup_release_group(group, &["artist-credits"], Criticality::IdentityCritical)
+                    .await?
+                else {
+                    continue;
+                };
+                ids.extend(
+                    lookup
+                        .entity
+                        .artist_credit
+                        .iter()
+                        .filter(|credit| {
+                            same_name(&credit.artist.name, &artist.name)
+                                || same_name(&credit.name, &artist.name)
+                        })
+                        .map(|credit| normalize_mb_id(&credit.artist.id)),
+                );
+            }
+            Ok(only(&ids))
+        })
+    }
+
     fn mb_artist_by_name<'a>(
         &'a self,
         artist: &'a ArtistFacts,
@@ -1151,6 +1222,7 @@ mod tests {
             mb_album_by_name: AlbumFacts => answer -> String,
             deezer_album_by_name: AlbumFacts => answer -> String,
             mb_artist_by_link: ArtistFacts => answer -> String,
+            mb_artist_by_album: ArtistFacts => answer -> String,
             mb_artist_by_name: ArtistFacts => answer -> String,
             deezer_artist_by_name: ArtistFacts => answer -> String,
         }
@@ -1185,6 +1257,7 @@ mod tests {
             spotify_id: ID.into(),
             name: "Radiohead".into(),
             album_titles: vec!["Kid A".into(), "OK Computer".into()],
+            album_groups: Vec::new(),
         }
     }
 
@@ -1337,6 +1410,30 @@ mod tests {
         assert_eq!(
             fake.asked(),
             vec!["mb_artist_by_link", "deezer_artist_by_name"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_saved_album_names_an_artist_before_its_name_does() {
+        let saved = ArtistFacts {
+            album_groups: vec!["rg".into()],
+            ..artist()
+        };
+        let fake = Fake::with(&[("mb_artist_by_album", "a3"), ("mb_artist_by_name", "a2")]);
+        let hit = resolve_artist(&saved, &fake).await.unwrap().unwrap();
+        assert_eq!((hit.id.as_str(), hit.via), ("a3", Via::Album));
+        assert_eq!(
+            fake.asked(),
+            vec!["mb_artist_by_link", "mb_artist_by_album"]
+        );
+
+        // The name steps alone never ask for the link or the albums.
+        let fake = Fake::with(&[("mb_artist_by_link", "a1"), ("deezer_artist_by_name", "dz")]);
+        let hit = resolve_artist_named(&saved, &fake).await.unwrap().unwrap();
+        assert_eq!(hit.source, Source::Deezer);
+        assert_eq!(
+            fake.asked(),
+            vec!["mb_artist_by_name", "deezer_artist_by_name"]
         );
     }
 

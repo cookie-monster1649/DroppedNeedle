@@ -9,8 +9,10 @@
 //! alias with `is_local` skips, and the cover fetch that never fails an
 //! import.
 
+use std::collections::HashSet;
 use std::future::Future;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use super::spotify_oauth::SpotifyConnection;
 use super::spotify_store::SqliteSpotifyLinks;
@@ -21,7 +23,7 @@ use droppedneedle_providers::spotify::models::{
     SimplifiedPlaylist, SpotifyArtist, TrackCount,
 };
 use droppedneedle_providers::spotify::{self, TokenGrant};
-use droppedneedle_providers::{ProviderError, Providers, RequestPriority};
+use droppedneedle_providers::{ProviderError, Providers, RateLimiter, RequestPriority};
 
 /// Fork: the Spotify "playlist" id the caller's Liked Songs import under
 /// (`spotify:liked`). Spotify's own ids are 22 base-62 characters, so it
@@ -87,6 +89,36 @@ pub enum SpotifyError {
     Busy,
 }
 
+/// Fork: the line a sync shows when Spotify limits it: when its wait ends
+/// (UTC) and that the sync resumes by itself. `wait` is what is left of
+/// the wait on the rate row; zero when it is not known.
+pub fn rate_limited_message(wait: Duration, now_ms: i64) -> String {
+    if wait.is_zero() {
+        return "Spotify rate limit: asked to wait; the sync tries again later by itself"
+            .to_owned();
+    }
+    let wait_ms = i64::try_from(wait.as_millis()).unwrap_or(i64::MAX / 2);
+    let until = time::OffsetDateTime::from_unix_timestamp(now_ms.saturating_add(wait_ms) / 1000)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    format!(
+        "Spotify rate limit: asked to wait until {:02}:{:02} UTC (about {} min); the sync resumes by itself",
+        until.hour(),
+        until.minute(),
+        wait.as_secs().div_ceil(60)
+    )
+}
+
+/// Fork: the line a sync shows for [`SpotifyError::Unavailable`]: "could
+/// not be reached" only when no answer came, else that Spotify answered
+/// with an error.
+pub fn unavailable_message(detail: &str) -> String {
+    if detail.contains("could not be reached") || detail.contains("(503)") {
+        "Spotify could not be reached".to_owned()
+    } else {
+        "Spotify answered with an error".to_owned()
+    }
+}
+
 /// A provider failure as the import sees it.
 fn unavailable(what: &str, error: &ProviderError) -> SpotifyError {
     match error {
@@ -103,6 +135,8 @@ fn unavailable(what: &str, error: &ProviderError) -> SpotifyError {
 pub struct SpotifyClient {
     api: spotify::SpotifyClient,
     images: ImageClient,
+    /// Fork: the `spotify` rate row, for the wait Spotify asked for.
+    limiter: Arc<RateLimiter>,
 }
 
 impl SpotifyClient {
@@ -111,7 +145,20 @@ impl SpotifyClient {
         Self {
             api: providers.spotify.clone(),
             images: providers.images.clone(),
+            limiter: providers.limiters.for_executor(spotify::SOURCE),
         }
+    }
+
+    /// Fork: how much of the wait Spotify asked for is left; zero when
+    /// none runs.
+    pub fn cooling_for(&self) -> Duration {
+        self.limiter.cooling_for()
+    }
+
+    /// Fork: wait `delay` before the next call (a wait kept from before a
+    /// restart). A longer wait already running is kept.
+    pub fn cool_down(&self, delay: Duration) {
+        self.limiter.cool_down(delay);
     }
 
     /// True when the token is missing or inside the refresh buffer
@@ -386,10 +433,14 @@ impl SpotifyClient {
         })
     }
 
-    /// Fork: every album the caller saved, newest first.
+    /// Fork: the albums the caller saved, newest first. With `known`, the
+    /// paging stops after the first page whose albums are all known (the
+    /// list is newest first, so the rest are too); without it every page
+    /// is read.
     pub async fn saved_albums(
         &self,
         refresher: &TokenRefresher<'_>,
+        known: Option<&HashSet<String>>,
     ) -> Result<Vec<SavedAlbum>, SpotifyError> {
         let priority = refresher.priority;
         let mut albums = Vec::new();
@@ -401,8 +452,16 @@ impl SpotifyClient {
                 })
                 .await?;
             let page_len = page.items.len();
+            let all_known = known.is_some_and(|known| {
+                page.items.iter().all(|item| {
+                    item.album
+                        .id
+                        .as_ref()
+                        .is_none_or(|id| id.is_empty() || known.contains(id))
+                })
+            });
             albums.extend(page.items);
-            if page_len == 0 || page.next.is_none() {
+            if page_len == 0 || page.next.is_none() || all_known {
                 break;
             }
             offset += spotify::LIBRARY_PAGE;

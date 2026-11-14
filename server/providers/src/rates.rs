@@ -227,13 +227,14 @@ pub const RATES: &[RateRow] = &[
     },
     RateRow {
         source: "spotify",
-        per_second: Rate::Fixed(2.0),
-        burst: 5,
+        per_second: Rate::Fixed(1.0),
+        burst: 3,
         max_in_flight: None,
-        verified_on: "2026-10-30",
+        verified_on: "2026-11-14",
         basis: "Counted per app in a rolling 30-second window, with no number published; \
-                past it 429 with Retry-After in seconds. Held at 2 per second, so a \
-                playlist import of a few dozen pages stays well under it.",
+                past it 429 with Retry-After in seconds. An app in development mode is held \
+                much lower: about 100 artist-album reads in 90 seconds drew a one-hour \
+                Retry-After. Held at 1 per second with a burst of 3.",
         url: "https://developer.spotify.com/documentation/web-api/concepts/rate-limits",
     },
     RateRow {
