@@ -88,6 +88,8 @@ pub struct ImportsDeps {
     /// Fork: followed artists and saved albums kept in step, and pasted
     /// Spotify links resolved.
     pub spotify_library: Arc<SpotifyLibrary>,
+    /// Fork: the playlist sync, which "Sync all now" runs for one user.
+    pub spotify_sync: Arc<super::spotify_sync::SpotifySync>,
     /// Probes behind the download client status reads.
     pub probes: Arc<HealthProbes>,
     /// Fresh ids, the OAuth state fallback when the OS RNG fails.
@@ -142,6 +144,7 @@ pub fn routes() -> Routes<ImportsDeps> {
         // Fork: the Spotify library and pasted links.
         .user(routes!(get_spotify_library, put_spotify_library))
         .user(routes!(sync_spotify_artists))
+        .user(routes!(sync_all_spotify))
         .user(routes!(list_spotify_saved_albums))
         .user(routes!(scan_spotify_saved_albums))
         .user(routes!(review_spotify_saved_albums))
@@ -859,6 +862,24 @@ pub async fn sync_spotify_artists(
 ) -> StatusCode {
     deps.spotify_library.spawn(principal.user_id(), false);
     StatusCode::ACCEPTED
+}
+
+/// Fork: "Sync all now": check the user's synced playlists and Liked Songs
+/// now, in the background. At most once per five minutes, and never while
+/// Spotify's wait runs; the 409 carries the sentence to show.
+#[utoipa::path(post, tag = "imports", path = "/api/v3/acquire/spotify/sync",
+    responses(
+        (status = 202, description = "Started"),
+        (status = 409, description = "Refused: too soon, or Spotify asked to wait"),
+    ))]
+pub async fn sync_all_spotify(
+    State(deps): State<ImportsDeps>,
+    User(principal): User,
+) -> Result<StatusCode, ApiError> {
+    deps.spotify_sync
+        .sync_now(principal.user_id())
+        .map_err(ApiError::conflict)?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Fork: the albums saved at Spotify, matched here, for the review.

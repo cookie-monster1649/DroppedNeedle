@@ -27,6 +27,17 @@ export const createRefreshSpotifyPlaylistsMutation = () =>
 		effects: () => [spotifyPlaylistsChanged(authStore.user?.id)]
 	}));
 
+/**
+ * Fork: "Sync all now": the server checks every synced playlist and Liked
+ * Songs in the background (each imported only when its snapshot changed).
+ * A 409 carries the sentence to show.
+ */
+export const createSyncAllSpotifyMutation = () =>
+	createAppMutation(() => ({
+		mutationFn: () => api.v3.POST(v3('/api/v3/acquire/spotify/sync')),
+		effects: () => [spotifyPlaylistsChanged(authStore.user?.id)]
+	}));
+
 interface ImportSpotifyPlaylistInput {
 	id: string;
 	name: string;

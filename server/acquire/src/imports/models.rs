@@ -180,7 +180,7 @@ pub struct SpotifyImportRequest {
 /// Fork: a Spotify playlist's sync with Spotify.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct SpotifySyncState {
-    /// The playlist is checked against Spotify every 15 minutes and
+    /// The playlist is checked against Spotify every 2 hours and
     /// imported again when it changed there.
     pub enabled: bool,
     /// Songs added at Spotify are requested (as the owner, under their
@@ -286,7 +286,7 @@ pub struct SpotifyLibraryState {
     pub needs_reconnect: bool,
     /// Followed artists at Spotify are followed here (never auto-download).
     pub follow_sync: bool,
-    /// Saved albums are read again every 15 minutes; new ones are flagged
+    /// Saved albums are read again every 2 hours; new ones are flagged
     /// for review, never requested by themselves.
     pub album_sync: bool,
     /// Artists the caller follows at Spotify, when Spotify answered.

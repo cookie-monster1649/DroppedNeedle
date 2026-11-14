@@ -2,7 +2,7 @@
 	Fork: "Your Spotify library" on the Profile Spotify card. Followed artists
 	are followed here (never auto-download, nothing downloaded); saved albums
 	are reviewed and requested in the modal. Both can follow Spotify every
-	15 minutes, with the playlist sync.
+	2 hours, with the playlist sync.
 -->
 <script lang="ts">
 	import { RefreshCw, TriangleAlert, Users, Disc3 } from 'lucide-svelte';
