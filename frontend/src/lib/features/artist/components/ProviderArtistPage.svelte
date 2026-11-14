@@ -69,6 +69,7 @@
 		SCROBBLING_PLACE,
 		listeningSourceNotice
 	} from '$lib/features/artist/components/listeningSourceNotice';
+	import { listenSourceHealth } from '$lib/stores/listenSourceHealth.svelte';
 	import { mergeArtistReleasePages } from '$lib/features/artist/queries/artistReleasePages';
 	import { mergeArtistImages } from '$lib/features/album/queries/catalogAdapters';
 	import type { ReleaseGroup } from '$lib/features/album/queries/types';
@@ -223,6 +224,11 @@
 	}));
 	const topAlbums = $derived(discoveryEnabled ? topAlbumsQuery.data : undefined);
 	const sourceNotice = $derived(listeningSourceNotice([topSongs, topAlbums, similarArtists]));
+	// Fork: what the lists heard of ListenBrainz greys out its tab everywhere,
+	// and the switcher moves to Last.fm by itself.
+	$effect(() => {
+		for (const answer of [topSongs, topAlbums, similarArtists]) listenSourceHealth.observe(answer);
+	});
 	// The notice around the profile section it names, which shows as a link.
 	const sourceNoticeParts = $derived(sourceNotice?.split(SCROBBLING_PLACE) ?? []);
 	const loadingTopAlbums = $derived(!discoveryEnabled || topAlbumsQuery.isLoading);

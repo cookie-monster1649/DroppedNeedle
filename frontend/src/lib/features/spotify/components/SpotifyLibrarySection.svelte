@@ -24,6 +24,11 @@
 	const lib = $derived(libraryQuery.data);
 	let reviewOpen = $state(false);
 	let saving = $state(false);
+	// Fork: one "Sync now" a minute from here; the server also runs a part
+	// at most once in five minutes and never during a Spotify rate limit.
+	const SYNC_NOW_HOLD_MS = 60_000;
+	let syncHeld = $state(false);
+	const rateLimited = $derived(Boolean(lib?.last_error?.includes('rate limit')));
 
 	const count = (value: number | null | undefined) =>
 		value === null || value === undefined ? '' : ` (${value})`;
@@ -40,6 +45,9 @@
 	}
 
 	async function syncArtists() {
+		if (syncHeld) return;
+		syncHeld = true;
+		setTimeout(() => (syncHeld = false), SYNC_NOW_HOLD_MS);
 		try {
 			await actions.syncArtists();
 			toastStore.show({
@@ -94,6 +102,7 @@
 					variant="outline"
 					icon={RefreshCw}
 					loading={lib.artists_syncing}
+					disabled={syncHeld}
 					onclick={() => void syncArtists()}
 				>
 					Sync now
@@ -132,7 +141,9 @@
 				</Button>
 			</div>
 		</div>
-		{#if lib.last_error}
+		{#if lib.last_error && rateLimited}
+			<p class="mt-2 text-sm text-warning">Sync paused. {lib.last_error}.</p>
+		{:else if lib.last_error}
 			<p class="mt-2 text-sm text-error">Last sync failed: {lib.last_error}</p>
 		{/if}
 	{:else if libraryQuery.isError}

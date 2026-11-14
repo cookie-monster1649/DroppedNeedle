@@ -31,6 +31,9 @@ export function listeningSourceNotice(
 	if (down.has('listenbrainz') && down.has('lastfm')) {
 		return 'ListenBrainz and Last.fm are off or unavailable.';
 	}
+	// Fork: an unavailable ListenBrainz is greyed out in the source switcher,
+	// which moves to Last.fm by itself; no line is needed.
+	if (asked === 'listenbrainz' && down.has('listenbrainz')) return null;
 	const standIn = known.find((answer) => answer.source !== answer.asked_source);
 	if (standIn) {
 		const why = down.has(asked)

@@ -4289,6 +4289,11 @@ mod extension_chains {
                 "catalog/0014_spotify_library.sql",
                 "a55ce785503ed1231aebc261186f42e53ff6e524d530876d0dd7ab6f404b06cb",
             ),
+            (
+                "catalog",
+                "catalog/0015_spotify_rate_limits.sql",
+                "43d2ed3d031b353c281442b3cfed59cc2947768e97664d0e7cca5ce5ef03310c",
+            ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {

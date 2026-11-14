@@ -84,8 +84,12 @@ droppedneedle_kernel::sql! {
 
     // Fork: the Spotify library (spotify_library.rs).
 
-    /// Users with a library sync on.
-    pub(crate) LIBRARY_USERS = "SELECT user_id, follow_sync, album_sync FROM acquire_spotify_library \
+    /// Users with a library sync on, when their artists were last checked,
+    /// and whether a followed artist was never looked up (a sync cut short).
+    pub(crate) LIBRARY_USERS = "SELECT user_id, follow_sync, album_sync, artists_checked_at, \
+         EXISTS (SELECT 1 FROM acquire_spotify_followed_artists AS a \
+         WHERE a.user_id = acquire_spotify_library.user_id AND a.matched_at IS NULL) \
+         FROM acquire_spotify_library \
          WHERE follow_sync = 1 OR album_sync = 1";
     /// One user's library settings.
     pub(crate) LIBRARY_ROW = "SELECT follow_sync, album_sync, artists_checked_at, albums_checked_at, \
@@ -138,8 +142,8 @@ droppedneedle_kernel::sql! {
          AND status NOT IN ('cancelled', 'failed', 'rejected')";
 
     /// One user's followed artists, as last read.
-    pub(crate) FOLLOWED = "SELECT spotify_artist_id, name, artist_mbid, matched_at, followed_by_sync \
-         FROM acquire_spotify_followed_artists WHERE user_id = ?1";
+    pub(crate) FOLLOWED = "SELECT spotify_artist_id, name, artist_mbid, matched_at, followed_by_sync, \
+         attempts, fetched_at FROM acquire_spotify_followed_artists WHERE user_id = ?1";
     /// Save one artist as read.
     pub(crate) UPSERT_ARTIST = "INSERT INTO acquire_spotify_followed_artists (user_id, spotify_artist_id, \
          name, first_seen_at) VALUES (?1, ?2, ?3, ?4) \
@@ -148,7 +152,20 @@ droppedneedle_kernel::sql! {
     pub(crate) MATCH_ARTIST = "UPDATE acquire_spotify_followed_artists SET artist_mbid = ?3, \
          matched_by = ?4, matched_at = ?5, followed_by_sync = ?6 \
          WHERE user_id = ?1 AND spotify_artist_id = ?2";
+    /// Record one artist's lookup that matched nothing yet, before any call
+    /// it makes to Spotify (`?4`, when it reads the artist's albums there),
+    /// so a lookup cut short waits its turn like any other.
+    pub(crate) ATTEMPT_ARTIST = "UPDATE acquire_spotify_followed_artists SET matched_at = ?3, \
+         attempts = attempts + 1, fetched_at = COALESCE(?4, fetched_at) \
+         WHERE user_id = ?1 AND spotify_artist_id = ?2";
     /// Forget one unfollowed artist.
     pub(crate) DROP_ARTIST = "DELETE FROM acquire_spotify_followed_artists \
          WHERE user_id = ?1 AND spotify_artist_id = ?2";
+
+    /// The end of the wait Spotify last asked for on rate row `?1`.
+    pub(crate) COOLDOWN_UNTIL = "SELECT until_at FROM acquire_spotify_cooldowns WHERE scope = ?1";
+    /// Keep the end of the wait Spotify asked for on rate row `?1`.
+    pub(crate) KEEP_COOLDOWN = "INSERT INTO acquire_spotify_cooldowns (scope, until_at, updated_at) \
+         VALUES (?1, ?2, ?3) ON CONFLICT (scope) DO UPDATE SET until_at = excluded.until_at, \
+         updated_at = excluded.updated_at";
 }
