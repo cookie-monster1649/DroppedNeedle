@@ -7,7 +7,7 @@ import { authStore } from '$lib/stores/authStore.svelte';
 import type { components } from '$lib/api/v3/openapi';
 
 import { DownloadQueryKeyFactory } from './DownloadQueryKeyFactory';
-import { hasActiveTask } from './downloadStatus';
+import { hasActiveTask, withQueuedTasks } from './downloadStatus';
 import { STALE_LIVE } from '$lib/queries/staleTime';
 
 type DownloadListResponse = components['schemas']['DownloadListResponse'];
@@ -44,18 +44,24 @@ export const getDownloadActivitySummaryQuery = () =>
 export const getDownloadsQueryOptions = () =>
 	queryOptions({
 		queryKey: DownloadQueryKeyFactory.tasks(authStore.user?.id),
-		queryFn: ({ signal }) =>
-			api.v3.GET(
-				v3('/api/v3/downloads/tasks', {
-					query: {
-						page: 1,
-						page_size: 100
-					}
-				}),
-				{
+		// Fork: the newest 100 tasks, plus every queued one however old. The
+		// activity summary counts all queued tasks; without the second page a
+		// batch that newer tasks pushed past the first 100 was counted but
+		// never listed.
+		queryFn: async ({ signal }) => {
+			const [recent, queued] = await Promise.all([
+				api.v3.GET(v3('/api/v3/downloads/tasks', { query: { page: 1, page_size: 100 } }), {
 					signal
-				}
-			)
+				}),
+				api.v3.GET(
+					v3('/api/v3/downloads/tasks', {
+						query: { status: 'queued', page: 1, page_size: 100 }
+					}),
+					{ signal }
+				)
+			]);
+			return withQueuedTasks(recent, queued);
+		}
 	});
 
 export const getDownloadsQuery = () => createQuery(() => getDownloadsQueryOptions());

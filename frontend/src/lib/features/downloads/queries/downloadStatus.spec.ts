@@ -11,7 +11,8 @@ import {
 	isWanted,
 	retryDisplay,
 	retryLadderState,
-	sectionForTask
+	sectionForTask,
+	withQueuedTasks
 } from './downloadStatus';
 
 function task(overrides: Partial<DownloadTask> = {}): DownloadTask {
@@ -238,5 +239,31 @@ describe('collapseRetryChains', () => {
 		]);
 		expect(collapsed).toHaveLength(1);
 		expect(collapsed[0].id).toBe('new');
+	});
+});
+
+describe('withQueuedTasks', () => {
+	it('adds queued tasks older than the recent page, once each, newest first', () => {
+		const recent = {
+			items: [task({ id: 'new', created_at: 30 }), task({ id: 'q1', created_at: 20 })],
+			page: 1
+		};
+		const queued = {
+			items: [
+				task({ id: 'q1', created_at: 20 }),
+				task({ id: 'old', created_at: 5, search_job_id: 'j' })
+			],
+			page: 1
+		};
+		const merged = withQueuedTasks(recent, queued);
+		expect(merged.items.map((t) => t.id)).toEqual(['new', 'q1', 'old']);
+		expect(merged.page).toBe(1);
+		// A parked task pushed off the recent page shows under "Needs you".
+		expect(sectionForTask(merged.items[2], NOW)).toBe('needs_you');
+	});
+
+	it('keeps the recent page as is when it already holds every queued task', () => {
+		const recent = { items: [task({ id: 'q1' })] };
+		expect(withQueuedTasks(recent, { items: [task({ id: 'q1' })] })).toBe(recent);
 	});
 });
