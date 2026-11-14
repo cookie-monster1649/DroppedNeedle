@@ -781,9 +781,24 @@ fn remote_hits(bucket: Option<RemoteBucket>) -> Vec<RemoteHit> {
 /// "see all" page ends where the next one starts, so ranking past the cut
 /// would drop hits no page shows, and suggest keeps its shares.
 fn first_hits(bucket: Option<RemoteBucket>, limit: u32) -> Vec<RemoteHit> {
-    let mut hits = remote_hits(bucket);
-    hits.truncate(limit as usize);
-    hits
+    keep_first(remote_hits(bucket), limit)
+}
+
+/// The first `limit` MusicBrainz hits, and every hit another source added
+/// (stand-in ids, merged in only for what MusicBrainz lacks): MusicBrainz
+/// answers a wide page, so cutting the lot at `limit` would drop them all.
+fn keep_first(hits: Vec<RemoteHit>, limit: u32) -> Vec<RemoteHit> {
+    let mut kept = 0usize;
+    hits.into_iter()
+        .filter(|hit| {
+            // Fork: Deezer hits ride past the MusicBrainz cut.
+            if droppedneedle_providers::virtual_ids::is_virtual(&hit.mbid) {
+                return true;
+            }
+            kept += 1;
+            kept <= limit as usize
+        })
+        .collect()
 }
 
 /// One MusicBrainz hit as an unflagged search row.
@@ -1095,6 +1110,38 @@ mod tests {
             art_missing: false,
             track: None,
         }
+    }
+
+    fn hit(mbid: String) -> RemoteHit {
+        RemoteHit {
+            kind: RemoteKind::Album,
+            mbid,
+            title: "Typewritten".to_owned(),
+            artist: None,
+            year: None,
+            disambiguation: None,
+            type_info: None,
+            score: 90,
+            releases: None,
+        }
+    }
+
+    #[test]
+    fn deezer_hits_ride_past_the_musicbrainz_cut() {
+        use droppedneedle_providers::virtual_ids::{Kind, mint};
+        let mut hits: Vec<RemoteHit> = (0..25)
+            .map(|n| hit(format!("00000000-0000-4000-8000-{n:012}")))
+            .collect();
+        hits.push(hit(mint("deezer", Kind::ReleaseGroup, "1")));
+        hits.push(hit(mint("deezer", Kind::ReleaseGroup, "2")));
+        let kept = keep_first(hits, 20);
+        assert_eq!(kept.len(), 22);
+        assert_eq!(
+            kept.iter()
+                .filter(|hit| droppedneedle_providers::virtual_ids::is_virtual(&hit.mbid))
+                .count(),
+            2
+        );
     }
 
     #[test]

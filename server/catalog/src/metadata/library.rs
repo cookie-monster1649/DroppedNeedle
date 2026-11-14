@@ -322,6 +322,15 @@ impl LocalCatalog {
         .await
     }
 
+    /// Fork: the MusicBrainz group stand-in group `stand_in` is linked to.
+    pub async fn linked_group(&self, stand_in: &str) -> Result<Option<String>, StoreError> {
+        let stand_in = stand_in.to_owned();
+        self.read("catalog.library.linked_group", move |conn| {
+            droppedneedle_library::sources::links::linked(conn, &stand_in)
+        })
+        .await
+    }
+
     /// The library copy's edition (who chose it) and file count for one
     /// release group. Several copies read as one with files first, then a
     /// chosen one, then the oldest. A copy without files holds no edition:

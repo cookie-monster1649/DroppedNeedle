@@ -157,10 +157,12 @@ droppedneedle_kernel::sql! {
          ORDER BY c.release_date IS NULL, c.release_date DESC, c.title";
 
     /// Whether a live album holds provider `?1`'s album `?2`: by release
-    /// group `?3`, or by a confirmed match.
+    /// group `?3` or the group it is linked to, or by a confirmed match.
     pub(super) CATALOGUE_HELD = "SELECT EXISTS (SELECT 1 FROM local_album_external_identities i \
              JOIN local_albums b ON b.id = i.local_album_id \
-           WHERE i.provider = 'musicbrainz' AND lower(i.release_group_mbid) = ?3 \
+           WHERE i.provider = 'musicbrainz' AND (lower(i.release_group_mbid) = ?3 \
+               OR lower(i.release_group_mbid) = \
+                 (SELECT musicbrainz_id FROM source_links WHERE stand_in = ?3)) \
              AND b.retired_into_album_id IS NULL AND b.has_indexed_track = 1) \
          OR EXISTS (SELECT 1 FROM library_album_provider_matches m \
              JOIN local_albums b ON b.id = m.local_album_id \
@@ -184,4 +186,91 @@ droppedneedle_kernel::sql! {
            UNION ALL SELECT artist_name, 2 FROM source_catalogue \
             WHERE provider = ?1 AND provider_artist_id = ?2 AND artist_name <> '') \
          ORDER BY rank LIMIT 1";
+
+    // Fork: stand-in groups linked to the MusicBrainz group they are.
+
+    /// Link stand-in `?1` to MusicBrainz group `?2`, shown by `?3`; a
+    /// stand-in keeps its first link.
+    pub(super) KEEP_LINK = "INSERT INTO source_links (stand_in, musicbrainz_id, via, linked_at) \
+         VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING";
+
+    /// The MusicBrainz group stand-in `?1` is linked to.
+    pub(super) LINKED = "SELECT musicbrainz_id FROM source_links WHERE stand_in = ?1";
+
+    /// Every linked stand-in.
+    pub(super) ALL_LINKED = "SELECT stand_in FROM source_links";
+
+    /// Each stand-in album download with files in the library: the
+    /// stand-in, the title asked for, the files' album's title and group
+    /// (if any), the group the files carry.
+    pub(super) TASK_FILE_GROUPS = "SELECT DISTINCT lower(t.release_group_mbid), t.album_title, \
+           a.title, i.release_group_mbid, lt.embedded_release_group_mbid \
+         FROM download_tasks t \
+         JOIN local_tracks lt ON lt.download_task_id = t.id AND lt.download_task_id IS NOT NULL \
+           AND +lt.availability = 'indexed' \
+         JOIN local_albums a ON a.id = lt.local_album_id AND a.retired_into_album_id IS NULL \
+         LEFT JOIN local_album_external_identities i \
+           ON i.local_album_id = a.id AND i.provider = 'musicbrainz' \
+         WHERE t.download_type = 'album' \
+           AND substr(lower(t.release_group_mbid), 1, 15) = 'd0ab1e00-50c3-8' \
+           AND NOT EXISTS (SELECT 1 FROM source_links l WHERE l.stand_in = lower(t.release_group_mbid))";
+
+    /// Each album held entry on a stand-in whose downloaded files went in,
+    /// the same way.
+    pub(super) HELD_FILE_GROUPS = "SELECT DISTINCT lower(e.release_group_mbid), e.album_title, \
+           a.title, i.release_group_mbid, lt.embedded_release_group_mbid \
+         FROM acquire_held_entries e \
+         JOIN acquire_held_files f ON f.entry_id = e.id AND f.source_task_id IS NOT NULL \
+         JOIN local_tracks lt ON lt.download_task_id = f.source_task_id \
+           AND lt.download_task_id IS NOT NULL AND +lt.availability = 'indexed' \
+         JOIN local_albums a ON a.id = lt.local_album_id AND a.retired_into_album_id IS NULL \
+         LEFT JOIN local_album_external_identities i \
+           ON i.local_album_id = a.id AND i.provider = 'musicbrainz' \
+         WHERE e.recording_mbid IS NULL \
+           AND substr(lower(e.release_group_mbid), 1, 15) = 'd0ab1e00-50c3-8' \
+           AND NOT EXISTS (SELECT 1 FROM source_links l WHERE l.stand_in = lower(e.release_group_mbid))";
+
+    /// Provider `?1`'s confirmed album matches whose live album has a
+    /// MusicBrainz group: the provider album, the group.
+    pub(super) MATCHED_GROUPS = "SELECT m.provider_album_id, i.release_group_mbid \
+         FROM library_album_provider_matches m \
+         JOIN local_albums a ON a.id = m.local_album_id AND a.retired_into_album_id IS NULL \
+         JOIN local_album_external_identities i \
+           ON i.local_album_id = m.local_album_id AND i.provider = 'musicbrainz' \
+         WHERE m.provider = ?1 AND m.match_state = 'confirmed' \
+           AND substr(lower(i.release_group_mbid), 1, 15) <> 'd0ab1e00-50c3-8'";
+
+    /// Stand-in groups still asked for and not linked: open album
+    /// requests, wanted watches, album downloads, open held entries.
+    pub(super) ASKED_STAND_INS = "SELECT DISTINCT id FROM ( \
+           SELECT lower(musicbrainz_id) AS id FROM request_history \
+             WHERE request_kind = 'album' AND status NOT IN ('imported', 'cancelled', 'rejected') \
+           UNION ALL SELECT release_group_mbid_lower FROM wanted_watches WHERE state = 'watching' \
+           UNION ALL SELECT lower(release_group_mbid) FROM download_tasks WHERE download_type = 'album' \
+           UNION ALL SELECT lower(release_group_mbid) FROM acquire_held_entries \
+             WHERE state IN ('held', 'placing') AND recording_mbid IS NULL \
+             AND release_group_mbid IS NOT NULL) \
+         WHERE substr(id, 1, 15) = 'd0ab1e00-50c3-8' \
+           AND NOT EXISTS (SELECT 1 FROM source_links l WHERE l.stand_in = id) \
+         ORDER BY id";
+
+    /// The live albums holding files by the artist folded `?1` that have a
+    /// MusicBrainz group: title, group.
+    pub(super) ARTIST_ALBUM_GROUPS = "SELECT a.title, i.release_group_mbid \
+         FROM local_albums a \
+         JOIN local_artists r ON r.id = a.album_artist_id \
+         JOIN local_album_external_identities i \
+           ON i.local_album_id = a.id AND i.provider = 'musicbrainz' \
+         WHERE (r.folded_name = ?1 OR a.album_artist_name_folded = ?1) \
+           AND a.retired_into_album_id IS NULL AND a.has_indexed_track = 1 \
+           AND substr(lower(i.release_group_mbid), 1, 15) <> 'd0ab1e00-50c3-8'";
+
+    /// Linked stand-ins with an open album request or a wanted watch.
+    pub(super) LINKED_OPEN = "SELECT l.stand_in FROM source_links l \
+         WHERE EXISTS (SELECT 1 FROM request_history r \
+             WHERE r.musicbrainz_id_lower = l.stand_in AND r.request_kind = 'album' \
+               AND r.status NOT IN ('imported', 'cancelled', 'rejected', 'cancelling')) \
+            OR EXISTS (SELECT 1 FROM wanted_watches w \
+             WHERE w.release_group_mbid_lower = l.stand_in AND w.state = 'watching') \
+         ORDER BY l.stand_in";
 }

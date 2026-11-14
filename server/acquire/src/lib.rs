@@ -63,6 +63,8 @@ pub mod search_jobs;
 pub mod settings;
 pub mod slskd;
 pub mod sources;
+// Fork: stand-in albums linked to their MusicBrainz group.
+pub mod stand_ins;
 pub mod target;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

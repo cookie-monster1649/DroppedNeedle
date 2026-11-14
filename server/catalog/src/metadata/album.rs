@@ -373,6 +373,18 @@ impl Catalog {
     /// else that is not an MBID is rejected.
     async fn album_id(&self, raw_id: &str) -> Result<String, CatalogError> {
         if let Ok(id) = checked_mbid(raw_id, "album") {
+            // Fork: a stand-in linked to the MusicBrainz group it turned out
+            // to be opens that group's page.
+            if droppedneedle_providers::virtual_ids::is_virtual(&id) {
+                let linked = self
+                    .local()
+                    .linked_group(&id)
+                    .await
+                    .map_err(CatalogError::database)?;
+                if let Some(group) = linked {
+                    return Ok(group);
+                }
+            }
             return Ok(id);
         }
         let local = raw_id.trim();

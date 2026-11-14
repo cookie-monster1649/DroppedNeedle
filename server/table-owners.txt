@@ -287,4 +287,5 @@ source_catalogue
 source_edition_checks
 source_editions
 source_identities
+source_links
 source_promotion_checks

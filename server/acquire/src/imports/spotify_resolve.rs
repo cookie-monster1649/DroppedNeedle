@@ -30,6 +30,7 @@ use droppedneedle_kernel::jobs::BoxFuture;
 use droppedneedle_library::sources::catalogue;
 use droppedneedle_library::sources::deezer::recording_id;
 use droppedneedle_library::sources::editions::base_title;
+use droppedneedle_library::sources::links::LinkVia;
 use droppedneedle_providers::musicbrainz::{Criticality, normalize_mb_id};
 use droppedneedle_providers::preview::{DeezerAlbum, DeezerArtistAlbum, PreviewClient, norm};
 use droppedneedle_providers::virtual_ids::{self, Kind};
@@ -434,6 +435,36 @@ pub async fn resolve_album(
     ))
 }
 
+/// Fork: the MusicBrainz album a Deezer album is, checked before a
+/// stand-in album is requested: its barcode first, then a confident
+/// artist, title and track count match. `Ok(None)` when neither is sure.
+///
+/// # Errors
+///
+/// The first lookup whose service failed.
+pub async fn musicbrainz_album(
+    album: &AlbumFacts,
+    lookups: &dyn Lookups,
+) -> Result<Option<Found>, ResolveError> {
+    if album.upc.is_some()
+        && let Some(hit) = found(
+            lookups.mb_album_by_barcode(album).await?,
+            Source::MusicBrainz,
+            Via::Barcode,
+        )
+    {
+        return Ok(Some(hit));
+    }
+    if album.title.trim().is_empty() || album.artists.is_empty() {
+        return Ok(None);
+    }
+    Ok(found(
+        lookups.mb_album_by_name(album).await?,
+        Source::MusicBrainz,
+        Via::Name,
+    ))
+}
+
 /// The artist a Spotify artist is, in the order the module names.
 ///
 /// # Errors
@@ -719,6 +750,87 @@ impl Live {
             return Ok(None);
         }
         Ok(self.deezer.deezer_album(first.id, self.priority).await?)
+    }
+}
+
+impl Live {
+    /// Fork: what Deezer says of the album stand-in group `stand_in`
+    /// names, read from the catalogue; an album kept without its barcode
+    /// or track list is read from Deezer (and kept) first.
+    async fn stand_in_facts(&self, stand_in: &str) -> Result<Option<AlbumFacts>, ResolveError> {
+        let read = stand_in.to_owned();
+        let stored = self
+            .db
+            .db()
+            .read("stand_ins.facts", move |conn| {
+                let identity = droppedneedle_library::sources::identity_of(conn, &read)?;
+                let album = droppedneedle_library::sources::links::album(conn, &read)?;
+                Ok::<_, droppedneedle_kernel::db::DbError>((
+                    identity.and_then(|identity| identity.provider_album_id),
+                    album,
+                ))
+            })
+            .await?;
+        let (album_id, stored) = stored;
+        let Some(album_id) = album_id else {
+            return Ok(None);
+        };
+        let complete = stored
+            .as_ref()
+            .is_some_and(|found| found.upc.is_some() && !found.tracks.is_empty());
+        if complete {
+            return Ok(stored.map(|found| AlbumFacts {
+                spotify_id: String::new(),
+                title: found.title,
+                artists: vec![found.artist_name],
+                upc: found.upc,
+                total_tracks: i64::try_from(found.tracks.len()).ok(),
+            }));
+        }
+        let Ok(id) = album_id.parse::<i64>() else {
+            return Ok(None);
+        };
+        let Some(fetched) = self.deezer.deezer_album(id, self.priority).await? else {
+            return Ok(None);
+        };
+        let facts = AlbumFacts {
+            spotify_id: String::new(),
+            title: fetched.title.clone(),
+            artists: vec![fetched.artist_name.clone()],
+            upc: fetched.upc.clone(),
+            total_tracks: (!fetched.tracks.is_empty())
+                .then(|| i64::try_from(fetched.tracks.len()).ok())
+                .flatten(),
+        };
+        self.keep_deezer_album(fetched).await?;
+        Ok(Some(facts))
+    }
+}
+
+impl crate::stand_ins::StandInCheck for Live {
+    fn musicbrainz_of<'a>(
+        &'a self,
+        stand_in: &'a str,
+    ) -> BoxFuture<'a, Result<Option<(String, LinkVia)>, String>> {
+        Box::pin(async move {
+            let Some(facts) = self
+                .stand_in_facts(stand_in)
+                .await
+                .map_err(|error| error.to_string())?
+            else {
+                return Ok(None);
+            };
+            let found = musicbrainz_album(&facts, self)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(found.map(|found| {
+                let via = match found.via {
+                    Via::Barcode => LinkVia::Barcode,
+                    _ => LinkVia::Name,
+                };
+                (found.id, via)
+            }))
+        })
     }
 }
 
