@@ -233,3 +233,14 @@ function _retryChainKey(task: DownloadTask): string | null {
 	const identity = task.download_type === 'track' ? task.recording_mbid : task.release_group_mbid;
 	return identity ? `${task.download_type}:${identity}:${task.user_id}` : null;
 }
+
+// Fork: the recent page with every queued task from the queued page added,
+// once each, newest first. What the activity summary counts as queued is
+// then what the list holds.
+export function withQueuedTasks<T extends { items: DownloadTask[] }>(recent: T, queued: T): T {
+	const seen = new Set(recent.items.map((task) => task.id));
+	const extra = queued.items.filter((task) => !seen.has(task.id));
+	if (extra.length === 0) return recent;
+	const items = [...recent.items, ...extra].sort((a, b) => b.created_at - a.created_at);
+	return { ...recent, items };
+}
