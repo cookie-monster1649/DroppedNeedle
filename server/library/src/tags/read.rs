@@ -389,6 +389,33 @@ fn id3v23_tag_bytes(file: &mut impl std::io::Read) -> std::io::Result<Option<Vec
     Ok(Some(bytes))
 }
 
+/// Fork: the song's ISRC and the release's barcode, as the file's own
+/// tag carries them (ID3 `TSRC` and `TXXX:BARCODE`, Vorbis `ISRC` and
+/// `BARCODE`, MP4 freeform). Read apart from [`AudioTag`], whose `Debug`
+/// text a file's tag revision hashes. `(None, None)` for a file that does
+/// not read or carries neither.
+pub fn read_identifiers(at: TrackFile<'_>) -> (Option<String>, Option<String>) {
+    let Ok(format) = format_for_path(at.path()) else {
+        return (None, None);
+    };
+    if format == AudioFormat::Aac {
+        return (None, None);
+    }
+    let Ok(tagged) = read_lenient(at) else {
+        return (None, None);
+    };
+    let Some(tag) = select_tag(&tagged, format) else {
+        return (None, None);
+    };
+    let first = |key: ItemKey| {
+        values_for(tag, key)
+            .into_iter()
+            .map(|value| value.trim().to_owned())
+            .find(|value| !value.is_empty())
+    };
+    (first(ItemKey::Isrc), first(ItemKey::Barcode))
+}
+
 /// Preferred tag for the format, else the first tag lofty parsed.
 fn select_tag(tagged: &TaggedFile, format: AudioFormat) -> Option<&Tag> {
     let preferred = match format {

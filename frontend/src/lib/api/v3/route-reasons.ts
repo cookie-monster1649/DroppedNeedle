@@ -74,5 +74,21 @@ export const ROUTE_REASONS: readonly { method: string; path: string; reason: str
 		method: 'PUT',
 		path: '/api/v3/settings/library/playlist-folders',
 		reason: 'fork setting saved by scripts; no settings page yet'
+	},
+	// Fork: the one-off playlist-folder import, run by an admin through the API.
+	{
+		method: 'POST',
+		path: '/api/v3/admin/playlist-import/dry-run',
+		reason: 'fork admin tool run by scripts; no page'
+	},
+	{
+		method: 'POST',
+		path: '/api/v3/admin/playlist-import/run',
+		reason: 'fork admin tool run by scripts; no page'
+	},
+	{
+		method: 'GET',
+		path: '/api/v3/admin/playlist-import/status',
+		reason: 'fork admin tool read by scripts; no page'
 	}
 ];
