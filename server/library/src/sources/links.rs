@@ -218,6 +218,29 @@ pub fn linked_open(conn: &Connection) -> rusqlite::Result<Vec<String>> {
         .collect()
 }
 
+/// Fork: stand-ins still asked for (an open request, a wanted watch, a
+/// queued album download, an open held album entry) that no link names.
+///
+/// # Errors
+///
+/// A store fault.
+pub fn open_unlinked(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    conn.prepare_cached(sql::OPEN_UNLINKED.text())?
+        .query_map([], |row| row.get(0))?
+        .collect()
+}
+
+/// Fork: every link, as `(stand_in, musicbrainz_id)`.
+///
+/// # Errors
+///
+/// A store fault.
+pub fn every_link(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    conn.prepare_cached(sql::EVERY_LINK.text())?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
+}
+
 /// Every stand-in with exactly one group in `found`, not yet linked.
 fn single(
     found: BTreeMap<String, BTreeSet<String>>,
