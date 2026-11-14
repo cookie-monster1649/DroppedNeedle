@@ -4,8 +4,10 @@
 //! Imported playlists persist through the collections playlist store (see
 //! [`super::spotify_store`]).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+
+use rusqlite::params;
 
 use super::error::ImportsError;
 use super::models::{SpotifyAuthUrlResponse, SpotifyPlaylistItem, SpotifyPlaylistListResponse};
@@ -16,10 +18,12 @@ use super::spotify_client::{
 };
 use super::spotify_oauth::SpotifyConnection;
 use super::spotify_store::{CollectionsPlaylistBridge, SqliteSpotifyLinks};
+use super::sql;
 use crate::settings::{ConfigSpotifySettings, settings_failed};
+use droppedneedle_catalog::collections::models::PlaylistTrack;
 use droppedneedle_kernel::runtime_config::ConfigError;
 use droppedneedle_providers::RequestPriority;
-use droppedneedle_providers::spotify::models::{EntryTrack, PlaylistInfo};
+use droppedneedle_providers::spotify::models::{EntryTrack, Image, PlaylistInfo};
 
 /// One imported track row.
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +64,29 @@ pub struct Populated {
     pub snapshot_id: Option<String>,
     /// The rows written, in playlist order.
     pub tracks: Vec<ImportedTrack>,
+}
+
+/// Fork: one listed playlist as the cache keeps it.
+#[derive(Debug, Clone, PartialEq)]
+struct ListedRow {
+    id: String,
+    name: String,
+    description: String,
+    owner_name: String,
+    owned: bool,
+    track_count: i64,
+    cover_url: Option<String>,
+    snapshot_id: Option<String>,
+    listed_at: i64,
+}
+
+/// Fork: what a Liked Songs sync did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LikedSynced {
+    /// The rows written and the version they came from.
+    pub populated: Populated,
+    /// Every page was read.
+    pub complete: bool,
 }
 
 /// What a Spotify import step fails with.
@@ -194,20 +221,193 @@ impl SpotifyImportService {
     /// Owned playlists annotated with the imported mapping. Only playlists
     /// whose owner id matches the caller's Spotify id are listed; the id is
     /// fetched from `/me` when the link row does not carry it yet.
+    ///
+    /// Fork: the list is served from what was last listed (by this page or
+    /// the sync), so a page view never calls Spotify. Spotify is read only
+    /// with `refresh`, or when nothing was listed yet.
     pub async fn list_playlists(
         &self,
         user_id: &str,
+        refresh: bool,
     ) -> Result<SpotifyPlaylistListResponse, ImportFailure> {
         let stored = self.link(user_id).await?;
         let library = stored.has_library_scopes();
+        if !refresh && let Some(listing) = self.cached_listing(user_id, library).await? {
+            return Ok(listing);
+        }
         let mut spotify_user_id = stored.spotify_user_id.clone();
         // The listing answers a person waiting on the page.
         let refresher = self.refresher(user_id, stored, RequestPriority::UserInitiated)?;
         if spotify_user_id.is_empty() {
             spotify_user_id = self.client.current_user(&refresher).await?.id;
         }
-        let listed = self.client.user_playlists(&refresher).await?;
+        self.refresh_listing(user_id, &refresher, Some(&spotify_user_id))
+            .await?;
+        // Fork: Liked Songs, listed first by the page.
+        if library {
+            match self.client.liked_songs_count(&refresher).await {
+                Ok(count) => self.keep_liked_count(user_id, count).await,
+                Err(error) => tracing::info!(?error, "spotify liked songs unreadable"),
+            }
+        }
+        Ok(self
+            .cached_listing(user_id, library)
+            .await?
+            .unwrap_or(SpotifyPlaylistListResponse {
+                playlists: Vec::new(),
+                liked_songs: None,
+                needs_reconnect: !library,
+                listed_at: None,
+            }))
+    }
 
+    /// Fork: read the caller's playlists at Spotify (`/me/playlists`, paged)
+    /// and keep them for the page, answering each one's version and cover
+    /// by Spotify id. With no `spotify_user_id` nothing is kept (ownership
+    /// is unknown) but the versions still come back.
+    pub async fn refresh_listing(
+        &self,
+        user_id: &str,
+        refresher: &TokenRefresher<'_>,
+        spotify_user_id: Option<&str>,
+    ) -> Result<HashMap<String, PlaylistInfo>, SpotifyError> {
+        let listed = self.client.user_playlists(refresher).await?;
+        let now = self.now_ms();
+        let mut infos = HashMap::new();
+        let mut rows = Vec::new();
+        for playlist in listed {
+            let snapshot_id = playlist.snapshot_id.clone().filter(|id| !id.is_empty());
+            rows.push(ListedRow {
+                track_count: playlist_track_count(&playlist),
+                cover_url: best_image_url(playlist.images.as_deref(), 250),
+                owned: spotify_user_id.is_some_and(|me| me == playlist.owner.id),
+                owner_name: playlist.owner.display_name.clone().unwrap_or_default(),
+                description: playlist.description.clone().unwrap_or_default(),
+                name: playlist.name.clone(),
+                id: playlist.id.clone(),
+                snapshot_id: snapshot_id.clone(),
+                listed_at: now,
+            });
+            infos.insert(
+                playlist.id.clone(),
+                PlaylistInfo {
+                    id: playlist.id,
+                    images: playlist.images,
+                    snapshot_id,
+                },
+            );
+        }
+        if spotify_user_id.is_some_and(|me| !me.is_empty()) {
+            let user = user_id.to_owned();
+            self.connections
+                .db()
+                .write("spotify.listed.keep", move |tx| {
+                    tx.execute(sql::FORGET_LISTED.text(), params![user])?;
+                    for (position, row) in rows.iter().enumerate() {
+                        tx.execute(
+                            sql::KEEP_LISTED.text(),
+                            params![
+                                user,
+                                row.id,
+                                i64::try_from(position).unwrap_or(i64::MAX),
+                                row.name,
+                                row.description,
+                                row.owner_name,
+                                i64::from(row.owned),
+                                row.track_count,
+                                row.cover_url,
+                                row.snapshot_id,
+                                row.listed_at
+                            ],
+                        )?;
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|error| SpotifyError::Store(format!("keep listed playlists: {error}")))?;
+        }
+        Ok(infos)
+    }
+
+    /// Fork: keep the Liked Songs count for the page.
+    pub async fn keep_liked_count(&self, user_id: &str, count: i64) {
+        let (user, now) = (user_id.to_owned(), self.now_ms());
+        let done = self
+            .connections
+            .db()
+            .write("spotify.listed.liked", move |tx| {
+                tx.execute(
+                    sql::KEEP_LISTED.text(),
+                    params![
+                        user,
+                        LIKED_SONGS,
+                        -1_i64,
+                        LIKED_SONGS_NAME,
+                        "",
+                        "",
+                        0_i64,
+                        count,
+                        Option::<String>::None,
+                        Option::<String>::None,
+                        now
+                    ],
+                )?;
+                Ok(())
+            })
+            .await;
+        if let Err(error) = done {
+            tracing::warn!(%error, "spotify liked songs count not kept");
+        }
+    }
+
+    async fn listed_rows(&self, user_id: &str) -> Result<Vec<ListedRow>, SpotifyError> {
+        let user = user_id.to_owned();
+        self.connections
+            .db()
+            .db()
+            .read("spotify.listed.rows", move |conn| {
+                let mut statement = conn.prepare_cached(sql::LISTED_PLAYLISTS.text())?;
+                let rows = statement
+                    .query_map(params![user], |row| {
+                        Ok(ListedRow {
+                            id: row.get(0)?,
+                            name: row.get(1)?,
+                            description: row.get(2)?,
+                            owner_name: row.get(3)?,
+                            owned: row.get::<_, i64>(4)? == 1,
+                            track_count: row.get(5)?,
+                            cover_url: row.get(6)?,
+                            snapshot_id: row.get(7)?,
+                            listed_at: row.get(8)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<ListedRow>>>()?;
+                Ok::<_, droppedneedle_kernel::db::DbError>(rows)
+            })
+            .await
+            .map_err(|error| SpotifyError::Store(format!("listed playlists: {error}")))
+    }
+
+    /// Fork: the page's list from what was last listed; `None` when nothing
+    /// was (or Liked Songs was never counted for a link that may read it).
+    async fn cached_listing(
+        &self,
+        user_id: &str,
+        library: bool,
+    ) -> Result<Option<SpotifyPlaylistListResponse>, SpotifyError> {
+        let rows = self.listed_rows(user_id).await?;
+        let liked = rows.iter().find(|row| row.id == LIKED_SONGS);
+        let listed_at = rows
+            .iter()
+            .filter(|row| row.id != LIKED_SONGS)
+            .map(|row| row.listed_at)
+            .max();
+        if listed_at.is_none() && rows.is_empty() {
+            return Ok(None);
+        }
+        if library && liked.is_none() {
+            return Ok(None);
+        }
         let mut imported: HashMap<String, String> = HashMap::new();
         let refs = self
             .playlists
@@ -219,44 +419,47 @@ impl SpotifyImportService {
                 imported.insert(pid.to_owned(), id);
             }
         }
-
-        // Fork: Liked Songs, listed first by the page.
-        let liked_songs = if library {
-            match self.client.liked_songs_count(&refresher).await {
-                Ok(count) => Some(SpotifyPlaylistItem {
-                    id: LIKED_SONGS.to_owned(),
-                    name: LIKED_SONGS_NAME.to_owned(),
-                    description: String::new(),
-                    track_count: count,
-                    cover_url: None,
-                    owner: String::new(),
-                    imported_playlist_id: imported.get(LIKED_SONGS).cloned(),
-                }),
-                Err(error) => {
-                    tracing::info!(?error, "spotify liked songs unreadable");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-        let playlists = listed
+        let liked_songs = liked.filter(|_| library).map(|row| SpotifyPlaylistItem {
+            id: LIKED_SONGS.to_owned(),
+            name: LIKED_SONGS_NAME.to_owned(),
+            description: String::new(),
+            track_count: row.track_count,
+            cover_url: None,
+            owner: String::new(),
+            imported_playlist_id: imported.get(LIKED_SONGS).cloned(),
+        });
+        let playlists = rows
             .into_iter()
-            .filter(|playlist| playlist.owner.id == spotify_user_id)
-            .map(|playlist| SpotifyPlaylistItem {
-                track_count: playlist_track_count(&playlist),
-                cover_url: best_image_url(playlist.images.as_deref(), 250),
-                imported_playlist_id: imported.get(&playlist.id).cloned(),
-                owner: playlist.owner.display_name.unwrap_or_default(),
-                description: playlist.description.unwrap_or_default(),
-                name: playlist.name,
-                id: playlist.id,
+            .filter(|row| row.id != LIKED_SONGS && row.owned)
+            .map(|row| SpotifyPlaylistItem {
+                imported_playlist_id: imported.get(&row.id).cloned(),
+                track_count: row.track_count,
+                cover_url: row.cover_url,
+                owner: row.owner_name,
+                description: row.description,
+                name: row.name,
+                id: row.id,
             })
             .collect();
-        Ok(SpotifyPlaylistListResponse {
+        Ok(Some(SpotifyPlaylistListResponse {
             playlists,
             liked_songs,
             needs_reconnect: !library,
+            listed_at,
+        }))
+    }
+
+    /// Fork: a playlist's version and cover as last listed, `None` when it
+    /// was not (or carried no version).
+    async fn listed_info(&self, user_id: &str, spotify_playlist_id: &str) -> Option<PlaylistInfo> {
+        let rows = self.listed_rows(user_id).await.ok()?;
+        let row = rows
+            .into_iter()
+            .find(|row| row.id == spotify_playlist_id && row.snapshot_id.is_some())?;
+        Some(PlaylistInfo {
+            id: row.id,
+            images: row.cover_url.map(|url| vec![Image { url, width: None }]),
+            snapshot_id: row.snapshot_id,
         })
     }
 
@@ -303,25 +506,6 @@ impl SpotifyImportService {
             .map(|populated| populated.tracks.len())
     }
 
-    /// Fork: the playlist's Spotify snapshot id (its version), read at
-    /// background priority. `None` when Spotify sent none.
-    pub async fn snapshot(
-        &self,
-        user_id: &str,
-        spotify_playlist_id: &str,
-    ) -> Result<Option<String>, ImportFailure> {
-        let refresher = self.refresher(
-            user_id,
-            self.link(user_id).await?,
-            RequestPriority::BackgroundSync,
-        )?;
-        let info = self
-            .client
-            .playlist(&refresher, spotify_playlist_id)
-            .await?;
-        Ok(info.snapshot_id.filter(|id| !id.is_empty()))
-    }
-
     /// [`Self::populate_playlist`], answering the rows written and the
     /// snapshot they came from (fork: what the playlist sync diffs).
     pub async fn populate(
@@ -338,15 +522,154 @@ impl SpotifyImportService {
             self.link(user_id).await?,
             RequestPriority::BackgroundSync,
         )?;
-        let (info, tracks) = tokio::join!(
-            self.client.playlist(&refresher, spotify_playlist_id),
-            self.client.playlist_tracks(&refresher, spotify_playlist_id)
-        );
-        let info = info?;
-        let tracks = tracks?;
+        // Fork: the cover and the version come from the listing the page
+        // was built from, when it has them: only the items are read.
+        let info = match self.listed_info(user_id, spotify_playlist_id).await {
+            Some(info) if spotify_playlist_id != LIKED_SONGS => info,
+            _ => {
+                self.client
+                    .playlist(&refresher, spotify_playlist_id)
+                    .await?
+            }
+        };
+        let tracks = self
+            .client
+            .playlist_tracks(&refresher, spotify_playlist_id)
+            .await?;
+        self.write_rows(
+            user_id,
+            spotify_playlist_id,
+            playlist_id,
+            &info,
+            &tracks,
+            Vec::new(),
+        )
+        .await
+    }
 
-        let album_mbid = self.resolve_albums(&refresher, &tracks).await;
-        let songs = self.resolve_tracks(&tracks, &album_mbid).await;
+    /// Fork: populate a synced playlist whose version the listing gave
+    /// (`info`): only its items are read.
+    pub async fn populate_listed(
+        &self,
+        user_id: &str,
+        spotify_playlist_id: &str,
+        playlist_id: &str,
+        info: &PlaylistInfo,
+    ) -> Result<Populated, ImportFailure> {
+        let refresher = self.refresher(
+            user_id,
+            self.link(user_id).await?,
+            RequestPriority::BackgroundSync,
+        )?;
+        let tracks = self
+            .client
+            .playlist_tracks(&refresher, spotify_playlist_id)
+            .await?;
+        self.write_rows(
+            user_id,
+            spotify_playlist_id,
+            playlist_id,
+            info,
+            &tracks,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// Fork: sync a Liked Songs playlist. The newest page is read first;
+    /// when its version is `snapshot` nothing else is read and `None` comes
+    /// back. Else, unless `full`, the read stops at the first page whose
+    /// songs are all on the playlist already, and the older rows are kept
+    /// as they are; with `full` (once a day) every page is read, so songs
+    /// unliked further down go too.
+    pub async fn sync_liked(
+        &self,
+        user_id: &str,
+        playlist_id: &str,
+        snapshot: Option<&str>,
+        full: bool,
+    ) -> Result<Option<LikedSynced>, ImportFailure> {
+        let refresher = self.refresher(
+            user_id,
+            self.link(user_id).await?,
+            RequestPriority::BackgroundSync,
+        )?;
+        let stored = self.playlists.entries(user_id, playlist_id).await?;
+        let full = full || stored.is_empty();
+        let known: HashSet<String> = stored
+            .iter()
+            .filter_map(|entry| entry.spotify_track_id.clone())
+            .collect();
+        let Some(read) = self
+            .client
+            .liked_changes(&refresher, snapshot, (!full).then_some(&known))
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.keep_liked_count(user_id, read.total).await;
+        // The rows older than the last song read stay as they are.
+        let tail = if read.complete {
+            Vec::new()
+        } else {
+            let boundary = read
+                .tracks
+                .last()
+                .and_then(|track| track.id.as_deref())
+                .and_then(|id| {
+                    stored
+                        .iter()
+                        .position(|entry| entry.spotify_track_id.as_deref() == Some(id))
+                });
+            match boundary {
+                Some(at) => {
+                    let albums = self.playlists.entry_spotify_albums(playlist_id).await?;
+                    let read_ids: HashSet<&str> = read
+                        .tracks
+                        .iter()
+                        .filter_map(|track| track.id.as_deref())
+                        .collect();
+                    stored[at + 1..]
+                        .iter()
+                        .filter(|entry| {
+                            entry
+                                .spotify_track_id
+                                .as_deref()
+                                .is_none_or(|id| !read_ids.contains(id))
+                        })
+                        .map(|entry| imported_from_entry(entry, albums.get(&entry.id)))
+                        .collect()
+                }
+                None => Vec::new(),
+            }
+        };
+        let info = PlaylistInfo {
+            id: LIKED_SONGS.to_owned(),
+            images: None,
+            snapshot_id: Some(read.snapshot.clone()),
+        };
+        let populated = self
+            .write_rows(user_id, LIKED_SONGS, playlist_id, &info, &read.tracks, tail)
+            .await?;
+        Ok(Some(LikedSynced {
+            populated,
+            complete: read.complete,
+        }))
+    }
+
+    /// Resolve `tracks`, write them (then `tail`, kept as they were) as the
+    /// playlist's rows, and keep the cover best-effort.
+    async fn write_rows(
+        &self,
+        user_id: &str,
+        spotify_playlist_id: &str,
+        playlist_id: &str,
+        info: &PlaylistInfo,
+        tracks: &[EntryTrack],
+        tail: Vec<ImportedTrack>,
+    ) -> Result<Populated, ImportFailure> {
+        let album_mbid = self.resolve_albums(tracks).await;
+        let songs = self.resolve_tracks(tracks, &album_mbid).await;
 
         let rows: Vec<ImportedTrack> = tracks
             .iter()
@@ -411,11 +734,13 @@ impl SpotifyImportService {
                 }
             })
             .collect();
+        let mut rows = rows;
+        rows.extend(tail);
         self.playlists
             .replace_tracks(user_id, playlist_id, &rows)
             .await?;
         if let CoverOutcome::Skipped(reason) = self
-            .persist_cover(user_id, spotify_playlist_id, playlist_id, &info)
+            .persist_cover(user_id, spotify_playlist_id, playlist_id, info)
             .await
         {
             tracing::debug!(%reason, "spotify playlist imported without a cover");
@@ -432,11 +757,7 @@ impl SpotifyImportService {
     /// MusicBrainz failure stops the lookups for this import: the albums
     /// left are imported unresolved rather than waiting on a service that
     /// is down.
-    async fn resolve_albums(
-        &self,
-        refresher: &TokenRefresher<'_>,
-        tracks: &[EntryTrack],
-    ) -> HashMap<String, ProvenAlbum> {
+    async fn resolve_albums(&self, tracks: &[EntryTrack]) -> HashMap<String, ProvenAlbum> {
         let mut albums: Vec<(String, SpotifyAlbum)> = Vec::new();
         for track in tracks {
             let Some(album) = &track.album else { continue };
@@ -473,20 +794,10 @@ impl SpotifyImportService {
                     resolved.insert(album_id.clone(), group);
                 }
                 Ok(None) => {
-                    // Fork: last, the album's barcode as Spotify gives it.
-                    let code = match self.resolver.kept_barcode(album_id).await {
-                        Some(code) => code,
-                        None => match self.client.album_barcode(refresher, album_id).await {
-                            Ok(code) => {
-                                self.resolver.keep_barcode(album_id, code.as_deref());
-                                code
-                            }
-                            Err(error) => {
-                                tracing::debug!(?error, "spotify album barcode unavailable");
-                                None
-                            }
-                        },
-                    };
+                    // Fork: last, the album's barcode, when the saved-album
+                    // scan kept it from its bulk pages. Spotify is never
+                    // asked for one album: it costs a call per album.
+                    let code = self.resolver.kept_barcode(album_id).await.flatten();
                     if let Some(code) = code {
                         match self.resolver.resolve_barcode(album, &code).await {
                             Ok(Some(group)) => {
@@ -619,6 +930,26 @@ impl SpotifyImportService {
             Ok(false) => CoverOutcome::KeptExisting,
             Err(cause) => CoverOutcome::Skipped(format!("cover write failed: {cause}")),
         }
+    }
+}
+
+/// Fork: a stored playlist row as an import row again, for the Liked
+/// Songs rows a sync keeps without reading them.
+fn imported_from_entry(entry: &PlaylistTrack, spotify_album_id: Option<&String>) -> ImportedTrack {
+    ImportedTrack {
+        track_name: entry.track_name.clone(),
+        artist_name: entry.artist_name.clone(),
+        album_name: entry.album_name.clone(),
+        album_id: entry.album_id.clone().unwrap_or_default(),
+        source_type: entry.source_type.clone(),
+        track_number: entry.track_number.map(i64::from),
+        disc_number: entry.disc_number.map(i64::from),
+        duration: entry.duration.map(|secs| secs.round() as i64),
+        cover_url: entry.cover_url.clone(),
+        recording_mbid: entry.recording_mbid.clone(),
+        spotify_track_id: entry.spotify_track_id.clone(),
+        isrc: entry.isrc.clone(),
+        spotify_album_id: spotify_album_id.cloned(),
     }
 }
 

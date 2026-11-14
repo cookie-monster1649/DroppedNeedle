@@ -16,6 +16,17 @@ export const getSpotifyPlaylistsQuery = () =>
 		retry: false
 	}));
 
+/**
+ * Fork: the page shows the list as last read; this reads it at Spotify again
+ * (one `/me/playlists` read) and refreshes the page from it.
+ */
+export const createRefreshSpotifyPlaylistsMutation = () =>
+	createAppMutation(() => ({
+		mutationFn: () =>
+			api.v3.GET(v3('/api/v3/acquire/spotify/playlists', { query: { refresh: true } })),
+		effects: () => [spotifyPlaylistsChanged(authStore.user?.id)]
+	}));
+
 interface ImportSpotifyPlaylistInput {
 	id: string;
 	name: string;

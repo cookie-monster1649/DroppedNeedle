@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use super::spotify_oauth::SpotifyConnection;
 use super::spotify_store::SqliteSpotifyLinks;
+use super::spotify_usage::{RefusalKind, SpotifyUsage};
 use droppedneedle_kernel::clock::Clock;
 use droppedneedle_providers::images::ImageClient;
 use droppedneedle_providers::spotify::models::{
@@ -82,6 +83,9 @@ pub enum SpotifyError {
     RateLimited {
         /// Whole seconds Spotify asked for, when it said.
         retry_after: Option<u64>,
+        /// Fork: the app's allowance is used up (`QUOTA_EXCEEDED`), not
+        /// just paced.
+        quota: bool,
     },
     /// A local store read or write failed. The detail reaches the log only.
     Store(String),
@@ -92,19 +96,24 @@ pub enum SpotifyError {
 /// Fork: the line a sync shows when Spotify limits it: when its wait ends
 /// (UTC) and that the sync resumes by itself. `wait` is what is left of
 /// the wait on the rate row; zero when it is not known.
-pub fn rate_limited_message(wait: Duration, now_ms: i64) -> String {
+pub fn rate_limited_message(kind: RefusalKind, wait: Duration, now_ms: i64) -> String {
+    let label = kind.label();
     if wait.is_zero() {
-        return "Spotify rate limit: asked to wait; the sync tries again later by itself"
-            .to_owned();
+        return format!("{label}: asked to wait; the sync tries again later by itself");
     }
     let wait_ms = i64::try_from(wait.as_millis()).unwrap_or(i64::MAX / 2);
     let until = time::OffsetDateTime::from_unix_timestamp(now_ms.saturating_add(wait_ms) / 1000)
         .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let minutes = wait.as_secs().div_ceil(60);
+    let about = if minutes >= 120 {
+        format!("about {} h", minutes.div_ceil(60))
+    } else {
+        format!("about {minutes} min")
+    };
     format!(
-        "Spotify rate limit: asked to wait until {:02}:{:02} UTC (about {} min); the sync resumes by itself",
+        "{label}: asked to wait until {:02}:{:02} UTC ({about}); the sync resumes by itself",
         until.hour(),
         until.minute(),
-        wait.as_secs().div_ceil(60)
     )
 }
 
@@ -124,6 +133,7 @@ fn unavailable(what: &str, error: &ProviderError) -> SpotifyError {
     match error {
         ProviderError::RateLimited { .. } => SpotifyError::RateLimited {
             retry_after: error.retry_after_secs(),
+            quota: false,
         },
         _ => SpotifyError::Unavailable(format!("{what}: {error}")),
     }
@@ -137,6 +147,8 @@ pub struct SpotifyClient {
     images: ImageClient,
     /// Fork: the `spotify` rate row, for the wait Spotify asked for.
     limiter: Arc<RateLimiter>,
+    /// Fork: the calls counted and the growing wait.
+    usage: Arc<SpotifyUsage>,
 }
 
 impl SpotifyClient {
@@ -146,7 +158,20 @@ impl SpotifyClient {
             api: providers.spotify.clone(),
             images: providers.images.clone(),
             limiter: providers.limiters.for_executor(spotify::SOURCE),
+            usage: Arc::new(SpotifyUsage::default()),
         }
+    }
+
+    /// Fork: the calls counted and the last refusal.
+    pub fn usage(&self) -> &SpotifyUsage {
+        &self.usage
+    }
+
+    /// Fork: whether the last refusal was the quota or the rate limit.
+    pub fn refusal_kind(&self) -> RefusalKind {
+        self.usage
+            .last_refusal()
+            .map_or(RefusalKind::RateLimit, |note| note.kind)
     }
 
     /// Fork: how much of the wait Spotify asked for is left; zero when
@@ -222,10 +247,12 @@ impl SpotifyClient {
     }
 
     /// One call with the refresher's token: refresh-then-once on a 401.
+    /// Fork: `what` is the endpoint group the call is counted under; a
+    /// refusal (429) is classified and sets the growing wait.
     async fn authed<T, F, Fut>(
         &self,
         refresher: &TokenRefresher<'_>,
-        what: &str,
+        what: &'static str,
         call: F,
     ) -> Result<T, SpotifyError>
     where
@@ -233,14 +260,44 @@ impl SpotifyClient {
         Fut: Future<Output = Result<T, ProviderError>>,
     {
         let token = refresher.valid_token().await?;
+        self.usage.count(what);
         let answer = match call(token).await {
             Err(ProviderError::Unauthorized { .. }) => {
                 let token = refresher.refresh_now().await?;
+                self.usage.count(what);
                 call(token).await
             }
             answer => answer,
         };
-        answer.map_err(|error| unavailable(what, &error))
+        let mut quota = false;
+        match &answer {
+            Ok(_) => self.usage.succeeded(),
+            Err(error @ ProviderError::RateLimited { .. }) => {
+                // Only an answer Spotify sent carries a refusal; a call
+                // the rate row turned down before sending carries none and
+                // is no refusal of Spotify's.
+                if let Some(refusal) = spotify::take_refusal() {
+                    quota = refusal.is_quota();
+                    let wait = self.usage.refused(
+                        what,
+                        Some(refusal),
+                        error.retry_after_secs().map(Duration::from_secs),
+                    );
+                    if !wait.is_zero() {
+                        self.limiter.cool_down(wait);
+                    }
+                } else {
+                    quota = self.refusal_kind() == RefusalKind::Quota;
+                }
+            }
+            Err(_) => {}
+        }
+        answer.map_err(|error| match unavailable(what, &error) {
+            SpotifyError::RateLimited { retry_after, .. } => {
+                SpotifyError::RateLimited { retry_after, quota }
+            }
+            other => other,
+        })
     }
 
     /// Current user (`GET /me`).
@@ -260,6 +317,7 @@ impl SpotifyClient {
     /// refusal, a body that does not decode) is logged and reads as none,
     /// so the link still lands and the listing asks again later.
     pub async fn profile(&self, access_token: &str) -> Result<Option<Profile>, SpotifyError> {
+        self.usage.count("/me");
         match self
             .api
             .me(access_token, RequestPriority::UserInitiated)
@@ -311,29 +369,10 @@ impl SpotifyClient {
             return self.liked_songs_info(refresher).await;
         }
         let priority = refresher.priority;
-        self.authed(refresher, "playlist", |token| async move {
+        self.authed(refresher, "/playlists/{id}", |token| async move {
             self.api.playlist(&token, playlist_id, priority).await
         })
         .await
-    }
-
-    /// Fork: one album's barcode (UPC, else EAN), `None` when Spotify has
-    /// none.
-    pub async fn album_barcode(
-        &self,
-        refresher: &TokenRefresher<'_>,
-        album_id: &str,
-    ) -> Result<Option<String>, SpotifyError> {
-        let priority = refresher.priority;
-        let album = self
-            .authed(refresher, "album", |token| async move {
-                self.api.album(&token, album_id, priority).await
-            })
-            .await?;
-        Ok(album
-            .external_ids
-            .and_then(|ids| ids.upc.or(ids.ean))
-            .filter(|code| !code.trim().is_empty()))
     }
 
     /// Playlist tracks, page by page. Each entry carries the track under
@@ -353,7 +392,7 @@ impl SpotifyClient {
         let mut offset: i64 = 0;
         loop {
             let page = self
-                .authed(refresher, "playlist items", |token| async move {
+                .authed(refresher, "/playlists/{id}/items", |token| async move {
                     self.api
                         .playlist_items_page(&token, playlist_id, offset, priority)
                         .await
@@ -394,6 +433,59 @@ impl SpotifyClient {
             offset += spotify::LIBRARY_PAGE;
         }
         Ok(tracks)
+    }
+
+    /// Fork: Liked Songs read newest first for the sync. The first page
+    /// is read always; when its version ([`liked_snapshot`]) is
+    /// `unchanged_if`, nothing else is read and `None` comes back. Else the
+    /// pages are read on: every page without `known`, or with it down to
+    /// the first page whose songs are all known (the rest are older, and
+    /// known too).
+    pub async fn liked_changes(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        unchanged_if: Option<&str>,
+        known: Option<&HashSet<String>>,
+    ) -> Result<Option<LikedRead>, SpotifyError> {
+        let priority = refresher.priority;
+        let mut tracks = Vec::new();
+        let mut offset: i64 = 0;
+        let mut snapshot = String::new();
+        let mut total = 0;
+        loop {
+            let page = self
+                .authed(refresher, "/me/tracks", |token| async move {
+                    self.api
+                        .saved_tracks_page(&token, offset, spotify::LIBRARY_PAGE, priority)
+                        .await
+                })
+                .await?;
+            if offset == 0 {
+                total = page.total;
+                snapshot = liked_snapshot(page.total, &page.items);
+                if unchanged_if == Some(snapshot.as_str()) {
+                    return Ok(None);
+                }
+            }
+            let page_len = page.items.len();
+            let complete = page_len == 0 || page.next.is_none();
+            let mut kept = Vec::new();
+            keep_tracks(page.items, &mut kept);
+            let all_known = known.is_some_and(|known| {
+                kept.iter()
+                    .all(|track| track.id.as_ref().is_some_and(|id| known.contains(id)))
+            });
+            tracks.extend(kept);
+            if complete || all_known {
+                return Ok(Some(LikedRead {
+                    tracks,
+                    snapshot,
+                    total,
+                    complete,
+                }));
+            }
+            offset += spotify::LIBRARY_PAGE;
+        }
     }
 
     /// Fork: how many songs the caller liked, from one small page.
@@ -469,34 +561,6 @@ impl SpotifyClient {
         Ok(albums)
     }
 
-    /// Fork: how many albums the caller saved, from one page.
-    pub async fn saved_albums_total(
-        &self,
-        refresher: &TokenRefresher<'_>,
-    ) -> Result<i64, SpotifyError> {
-        let priority = refresher.priority;
-        let page = self
-            .authed(refresher, "/me/albums", |token| async move {
-                self.api.saved_albums_page(&token, 0, priority).await
-            })
-            .await?;
-        Ok(page.total)
-    }
-
-    /// Fork: how many artists the caller follows, from one page.
-    pub async fn followed_artists_total(
-        &self,
-        refresher: &TokenRefresher<'_>,
-    ) -> Result<i64, SpotifyError> {
-        let priority = refresher.priority;
-        let page = self
-            .authed(refresher, "/me/following", |token| async move {
-                self.api.followed_artists_page(&token, None, priority).await
-            })
-            .await?;
-        Ok(page.artists.total)
-    }
-
     /// Fork: every artist the caller follows.
     pub async fn followed_artists(
         &self,
@@ -539,7 +603,7 @@ impl SpotifyClient {
         track_id: &str,
     ) -> Result<EntryTrack, SpotifyError> {
         let priority = refresher.priority;
-        self.authed(refresher, "track", |token| async move {
+        self.authed(refresher, "/tracks/{id}", |token| async move {
             self.api.track(&token, track_id, priority).await
         })
         .await
@@ -552,7 +616,7 @@ impl SpotifyClient {
         album_id: &str,
     ) -> Result<AlbumDetail, SpotifyError> {
         let priority = refresher.priority;
-        self.authed(refresher, "album", |token| async move {
+        self.authed(refresher, "/albums/{id}", |token| async move {
             self.api.album(&token, album_id, priority).await
         })
         .await
@@ -565,7 +629,7 @@ impl SpotifyClient {
         artist_id: &str,
     ) -> Result<SpotifyArtist, SpotifyError> {
         let priority = refresher.priority;
-        self.authed(refresher, "artist", |token| async move {
+        self.authed(refresher, "/artists/{id}", |token| async move {
             self.api.artist(&token, artist_id, priority).await
         })
         .await
@@ -579,7 +643,7 @@ impl SpotifyClient {
     ) -> Result<Vec<String>, SpotifyError> {
         let priority = refresher.priority;
         let page = self
-            .authed(refresher, "artist albums", |token| async move {
+            .authed(refresher, "/artists/{id}/albums", |token| async move {
                 self.api
                     .artist_albums_page(&token, artist_id, priority)
                     .await
@@ -611,6 +675,19 @@ impl SpotifyClient {
             .await
             .map_err(|error| unavailable("cover fetch", &error))
     }
+}
+
+/// Fork: what [`SpotifyClient::liked_changes`] read.
+#[derive(Debug, Clone)]
+pub struct LikedRead {
+    /// The songs read, newest first.
+    pub tracks: Vec<EntryTrack>,
+    /// The list's version now.
+    pub snapshot: String,
+    /// Liked songs at Spotify.
+    pub total: i64,
+    /// Every page was read (else the read stopped at a known page).
+    pub complete: bool,
 }
 
 /// The tracks among playlist (or Liked Songs) entries: locals, id-less
@@ -692,6 +769,16 @@ impl<'a> TokenRefresher<'a> {
             priority,
             cached: Mutex::new(connection),
         }
+    }
+
+    /// Fork: the Spotify user id the link carries, empty when it was never
+    /// read.
+    pub fn spotify_user_id(&self) -> String {
+        self.cached
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .spotify_user_id
+            .clone()
     }
 
     /// Current usable token, refreshing first when expired.

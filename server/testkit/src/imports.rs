@@ -385,8 +385,9 @@ async fn spotify_playlists(
                 {"url": format!("{}/covers/neon.jpg", state.cover_base), "width": 640},
             ],
             "owner": {"id": SPOTIFY_USER_ID, "display_name": "Mock Listener"},
-            "items": {"href": "https://api.spotify.com/v1/x", "total": 2},
+            "items": {"href": "https://api.spotify.com/v1/x", "total": if state.recorder.is_grown() { 3 } else { 2 }},
             "tracks": null,
+            "snapshot_id": if state.recorder.is_grown() { "snap-2" } else { "snap-1" },
         }),
         json!({
             "id": "sp-playlist-2",
@@ -395,6 +396,7 @@ async fn spotify_playlists(
             "images": [],
             "owner": {"id": SPOTIFY_USER_ID, "display_name": "Mock Listener"},
             "tracks": {"href": "https://api.spotify.com/v1/y", "total": 0},
+            "snapshot_id": "snap-p2",
         }),
         json!({
             "id": "sp-foreign",

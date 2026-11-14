@@ -59,11 +59,12 @@ use super::spotify_resolve::{
     AlbumFacts, ArtistFacts, Found, LinkKind, Live, ResolveError, TrackFacts, parse_link,
     resolve_album, resolve_artist, resolve_artist_named, resolve_track, same_name,
 };
+use super::spotify_usage::{RefusalKind, RefusalNote};
 use super::sql::{
     ALBUMS_CHECKED, ARTISTS_CHECKED, ATTEMPT_ARTIST, COOLDOWN_UNTIL, DROP_ALBUM, DROP_ARTIST,
-    ENSURE_LIBRARY, FAVORITED_ALBUM, FOLLOWED, KEEP_COOLDOWN, LIBRARY_FAILED, LIBRARY_ROW,
-    LIBRARY_USERS, MATCH_ALBUM, MATCH_ARTIST, NEW_ALBUMS, REQUESTED, REVIEW_ALBUMS, SAVED_ALBUMS,
-    SET_LIBRARY, UPSERT_ALBUM, UPSERT_ARTIST,
+    ENSURE_LIBRARY, FAVORITED_ALBUM, FOLLOWED, FOLLOWED_COUNT, KEEP_COOLDOWN, LIBRARY_FAILED,
+    LIBRARY_ROW, LIBRARY_USERS, MATCH_ALBUM, MATCH_ARTIST, NEW_ALBUMS, REQUESTED, REVIEW_ALBUMS,
+    SAVED_ALBUMS, SAVED_COUNT, SET_LIBRARY, UPSERT_ALBUM, UPSERT_ARTIST,
 };
 use crate::db::AcquireDb;
 use crate::follows::Follows;
@@ -148,14 +149,20 @@ impl LibraryError {
             Self::Import(ImportFailure::Spotify(SpotifyError::NotLinked)) => {
                 "Spotify account not linked".to_owned()
             }
-            Self::Import(ImportFailure::Spotify(SpotifyError::RateLimited { retry_after })) => {
-                rate_limited_message(
-                    Duration::from_secs(retry_after.unwrap_or(0)),
-                    droppedneedle_kernel::clock::Clock::now_ms(
-                        &droppedneedle_kernel::clock::SystemClock,
-                    ),
-                )
-            }
+            Self::Import(ImportFailure::Spotify(SpotifyError::RateLimited {
+                retry_after,
+                quota,
+            })) => rate_limited_message(
+                if *quota {
+                    RefusalKind::Quota
+                } else {
+                    RefusalKind::RateLimit
+                },
+                Duration::from_secs(retry_after.unwrap_or(0)),
+                droppedneedle_kernel::clock::Clock::now_ms(
+                    &droppedneedle_kernel::clock::SystemClock,
+                ),
+            ),
             Self::Import(ImportFailure::Spotify(SpotifyError::Unavailable(detail))) => {
                 unavailable_message(detail)
             }
@@ -405,7 +412,16 @@ impl SpotifyLibrary {
 
     /// The card's line for the wait left now.
     fn cooling_message(&self) -> String {
-        rate_limited_message(self.cooling_for(), self.now())
+        rate_limited_message(
+            self.service.client().refusal_kind(),
+            self.cooling_for(),
+            self.now(),
+        )
+    }
+
+    /// Fork: log the hourly count of Spotify calls when it is due.
+    pub fn log_usage(&self) {
+        self.service.client().usage().log_summary_if_due();
     }
 
     /// Keep the wait Spotify asked for, so a restart honours it. The first
@@ -415,18 +431,48 @@ impl SpotifyLibrary {
     pub async fn keep_cooldown(&self) {
         let now = self.now();
         if !self.restored.swap(true, Ordering::SeqCst) {
-            let kept: Result<Option<i64>, DbError> = self
+            type Kept = (
+                i64,
+                Option<String>,
+                Option<String>,
+                Option<i64>,
+                Option<i64>,
+            );
+            let kept: Result<Option<Kept>, DbError> = self
                 .db
                 .db()
                 .read("spotify.cooldown.read", |conn| {
                     Ok(conn
                         .query_row(COOLDOWN_UNTIL.text(), params![COOLDOWN_SCOPE], |row| {
-                            row.get(0)
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
                         })
                         .optional()?)
                 })
                 .await;
-            match kept {
+            // Fork: why, and the wait it set, so the card names it and a
+            // refusal right after the wait doubles it.
+            if let Ok(Some((until, Some(reason), endpoint, retry_after, wait_ms))) = &kept {
+                self.service.client().usage().restore(
+                    RefusalNote {
+                        kind: RefusalKind::from_stored(reason),
+                        endpoint: endpoint.clone().unwrap_or_default(),
+                        retry_after: retry_after
+                            .and_then(|secs| u64::try_from(secs).ok())
+                            .map(Duration::from_secs),
+                        wait: Duration::from_millis(
+                            wait_ms.and_then(|ms| u64::try_from(ms).ok()).unwrap_or(0),
+                        ),
+                    },
+                    Duration::from_millis(u64::try_from(until - now).unwrap_or(0)),
+                );
+            }
+            match kept.map(|kept| kept.map(|kept| kept.0)) {
                 Ok(Some(until)) if until > now => {
                     let wait = Duration::from_millis(u64::try_from(until - now).unwrap_or(0));
                     self.service.client().cool_down(wait);
@@ -453,10 +499,31 @@ impl SpotifyLibrary {
             }
             *kept = until;
         }
+        let note = self.service.client().usage().last_refusal();
+        let reason = note.as_ref().map(|note| note.kind.as_str());
+        let endpoint = note.as_ref().map(|note| note.endpoint.clone());
+        let retry_after = note
+            .as_ref()
+            .and_then(|note| note.retry_after)
+            .map(|wait| i64::try_from(wait.as_secs()).unwrap_or(i64::MAX));
+        let wait_ms = note
+            .as_ref()
+            .map(|note| i64::try_from(note.wait.as_millis()).unwrap_or(i64::MAX));
         let done = self
             .db
             .write("spotify.cooldown.keep", move |tx| {
-                tx.execute(KEEP_COOLDOWN.text(), params![COOLDOWN_SCOPE, until, now])?;
+                tx.execute(
+                    KEEP_COOLDOWN.text(),
+                    params![
+                        COOLDOWN_SCOPE,
+                        until,
+                        now,
+                        reason,
+                        endpoint,
+                        retry_after,
+                        wait_ms
+                    ],
+                )?;
                 Ok(())
             })
             .await;
@@ -491,8 +558,9 @@ impl SpotifyLibrary {
             .await
     }
 
-    /// The card's view of one user's library. Spotify's totals are read
-    /// live; when Spotify does not answer they are left out.
+    /// The card's view of one user's library. Fork: the totals are what the
+    /// sync last read, so the card never calls Spotify; a part never read
+    /// leaves its total out.
     pub async fn state(&self, user_id: &str) -> Result<SpotifyLibraryState, LibraryError> {
         let settings = self.settings(user_id).await?;
         let user = user_id.to_owned();
@@ -505,16 +573,25 @@ impl SpotifyLibrary {
                 )
             })
             .await?;
-        let (refresher, library) = self
+        let (_, library) = self
             .service
             .access(user_id, RequestPriority::UserInitiated)
             .await?;
-        let (mut followed, mut saved) = (None, None);
-        if library {
-            let client = self.service.client();
-            followed = client.followed_artists_total(&refresher).await.ok();
-            saved = client.saved_albums_total(&refresher).await.ok();
-        }
+        let user = user_id.to_owned();
+        let (followed_count, saved_count): (i64, i64) = self
+            .db
+            .db()
+            .read("spotify.library.counts", move |conn| {
+                Ok::<_, DbError>((
+                    conn.query_row(FOLLOWED_COUNT.text(), params![user], |row| row.get(0))?,
+                    conn.query_row(SAVED_COUNT.text(), params![user], |row| row.get(0))?,
+                ))
+            })
+            .await?;
+        let followed =
+            (followed_count > 0 || settings.artists_checked_at.is_some()).then_some(followed_count);
+        let saved =
+            (saved_count > 0 || settings.albums_checked_at.is_some()).then_some(saved_count);
         let running = self.running.lock().unwrap_or_else(|p| p.into_inner());
         Ok(SpotifyLibraryState {
             needs_reconnect: !library,
@@ -1048,6 +1125,12 @@ impl SpotifyLibrary {
             };
             listed.insert(id.clone());
             let facts = album_facts(album);
+            // Fork: the barcode the page carries is kept for the playlist
+            // import, which would otherwise ask Spotify for it album by
+            // album.
+            if let Some(upc) = facts.upc.as_deref() {
+                self.service.resolver().keep_barcode(&id, Some(upc));
+            }
             let now = self.now();
             let row = stored.get(&id);
             if row.is_none() && !baseline {

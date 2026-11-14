@@ -156,6 +156,11 @@ impl SqliteSpotifyLinks {
         self.db.clock()
     }
 
+    /// Fork: the database the links live in, for the listing cache.
+    pub fn db(&self) -> &AcquireDb {
+        &self.db
+    }
+
     fn seal(&self, link: &SpotifyConnection) -> Result<String, String> {
         let document = serde_json::to_string(&LinkDocument::from(link))
             .map_err(|error| format!("spotify link encode: {error}"))?;
@@ -240,11 +245,23 @@ impl SqliteSpotifyLinks {
     }
 
     /// Drop one user's link. Answers whether a link was there.
+    /// Fork: the playlists listed for it are forgotten too, so another
+    /// account linked next never shows them.
     pub async fn remove(&self, user_id: &str) -> Result<bool, String> {
-        self.writes
+        let removed = self
+            .writes
             .delete(user_id, SERVICE)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        let user = user_id.to_owned();
+        self.db
+            .write("spotify.listed.forget_all", move |tx| {
+                tx.execute(sql::FORGET_ALL_LISTED.text(), params![user])?;
+                Ok(())
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(removed)
     }
 }
 
@@ -366,6 +383,26 @@ impl CollectionsPlaylistBridge {
                 StoreError::Busy(_) => SpotifyError::Busy,
                 other => SpotifyError::Store(other.to_string()),
             })
+    }
+
+    /// Fork: the Spotify album id of each entry of `playlist_id` that has
+    /// one, by entry id.
+    pub async fn entry_spotify_albums(
+        &self,
+        playlist_id: &str,
+    ) -> Result<std::collections::HashMap<String, String>, SpotifyError> {
+        let playlist_id = playlist_id.to_owned();
+        self.db
+            .db()
+            .read("spotify.entry_albums", move |conn| {
+                let mut statement = conn.prepare_cached(sql::ENTRY_SPOTIFY_ALBUMS.text())?;
+                let rows = statement
+                    .query_map(params![playlist_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<rusqlite::Result<std::collections::HashMap<String, String>>>()?;
+                Ok::<_, DbError>(rows)
+            })
+            .await
+            .map_err(|error| SpotifyError::Store(format!("entry albums: {error}")))
     }
 
     /// Store the picked provider image as the local cover. Answers false

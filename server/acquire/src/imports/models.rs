@@ -154,6 +154,20 @@ pub struct SpotifyPlaylistListResponse {
     /// playlists stay.
     #[serde(default)]
     pub needs_reconnect: bool,
+    /// Fork: when the list was read at Spotify (epoch milliseconds). The
+    /// page shows what was last read; it reads Spotify again only when
+    /// asked to refresh.
+    #[serde(default)]
+    pub listed_at: Option<i64>,
+}
+
+/// Fork: the playlist list's query.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SpotifyPlaylistListQuery {
+    /// Read the list at Spotify now instead of showing the last one.
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// Import start.

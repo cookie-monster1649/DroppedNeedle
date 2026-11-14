@@ -1209,14 +1209,33 @@ async fn a_synced_spotify_playlist_follows_spotify_and_asks_for_new_songs() {
         asked.0.lock().unwrap().is_empty(),
         "nothing new on the first check"
     );
+    // Fork: an unchanged playlist makes no call of its own: the pass reads
+    // only the owner's playlist list, whose snapshot ids say nothing changed.
+    let before = recorder.snapshot().spotify_paths.len();
     assert_eq!(
         sync.run_once().await,
         0,
         "an unchanged snapshot imports nothing"
     );
+    let unchanged_pass: Vec<String> = recorder.snapshot().spotify_paths[before..].to_vec();
+    assert_eq!(
+        unchanged_pass,
+        vec!["/me/playlists".to_owned()],
+        "an unchanged pass reads only the playlist list"
+    );
 
     recorder.grow_playlist();
+    let before = recorder.snapshot().spotify_paths.len();
     assert_eq!(sync.run_once().await, 1, "a new snapshot imports");
+    let changed_pass: Vec<String> = recorder.snapshot().spotify_paths[before..].to_vec();
+    assert_eq!(
+        changed_pass,
+        vec![
+            "/me/playlists".to_owned(),
+            "/playlists/sp-playlist-1/items".to_owned()
+        ],
+        "a changed playlist reads only its items, never its metadata"
+    );
     let names: Vec<String> = playlist_rows(&bundle.playlists, &user_id, &playlist_id)
         .await
         .into_iter()
@@ -2408,8 +2427,10 @@ async fn saved_albums_are_matched_flagged_new_and_never_requested() {
         (body["follow_sync"].clone(), body["album_sync"].clone()),
         (json!(true), json!(false))
     );
+    // Fork: the card's totals are what the sync last read, never a live
+    // Spotify call; followed artists were never read here.
     assert_eq!(body["saved_albums"], json!(2));
-    assert_eq!(body["followed_artists"], json!(2));
+    assert_eq!(body["followed_artists"], Value::Null);
 }
 
 async fn resolve(deps: &ImportsDeps, user_id: &str, link: &str) -> (StatusCode, Value) {
