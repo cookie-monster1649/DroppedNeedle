@@ -160,6 +160,22 @@ fn stored_match(conn: &Connection, album: &str) -> rusqlite::Result<Option<Provi
     }
 }
 
+/// Fork: Deezer album `album` as the library knows it: its match, its
+/// edition of a matched album, or its catalogue entry.
+///
+/// # Errors
+///
+/// A store fault.
+pub fn album_of(conn: &Connection, album: &str) -> rusqlite::Result<Option<ProviderMatch>> {
+    if let Some(found) = stored_match(conn, album)? {
+        return Ok(Some(found));
+    }
+    if let Some((edition, _)) = stored_edition(conn, album)? {
+        return Ok(Some(edition));
+    }
+    super::catalogue::stored(conn, album)
+}
+
 /// Deezer's date, unless it is blank or all zeros.
 fn date(found: &ProviderMatch) -> Option<String> {
     found

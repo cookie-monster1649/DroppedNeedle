@@ -27,6 +27,7 @@ pub mod adopt;
 pub mod catalogue;
 pub mod deezer;
 pub mod editions;
+pub mod links;
 pub mod promote;
 pub(crate) mod sql;
 

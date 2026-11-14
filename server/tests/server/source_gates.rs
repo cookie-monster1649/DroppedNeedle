@@ -415,6 +415,10 @@ const IDENTITY_USES: &[(&str, &str)] = &[
         "offers the album to identification and reads its input revision",
     ),
     ("identify::models", "the identity rows' data types"),
+    (
+        "sources::links::linked",
+        "fork: follows a Deezer stand-in to the MusicBrainz group its files landed under; one read",
+    ),
     ("catalog_actions::ActionKind", "the audit row's kind"),
     ("catalog_actions::CatalogAction", "the audit row"),
     ("catalog_actions::record_action", "the audit row"),

@@ -171,7 +171,8 @@
 		"queries/SearchV3Adapters.ts",
 		"queries/SearchV3Queries.svelte.ts",
 		"queries/enrichment.ts",
-		"queries/unifiedSearchQuery.ts"
+		"queries/unifiedSearchQuery.ts",
+		"source/sourceBadge.ts"
 	],
 	"settings": [
 		"components/qualityTiers.ts",

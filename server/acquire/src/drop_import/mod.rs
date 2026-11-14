@@ -553,6 +553,11 @@ impl DropImports {
         Ok(matched)
     }
 
+    /// Fork: where import events and fulfilled requests are announced.
+    pub(crate) fn ticks(&self) -> &Arc<dyn TickSink> {
+        &self.ticks
+    }
+
     /// The import folder's real path for an import-folder job, checked now;
     /// `None` for an upload. Refused while the job's folder is no longer the
     /// import folder, or cannot be used.

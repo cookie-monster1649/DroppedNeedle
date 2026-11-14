@@ -1785,3 +1785,135 @@ async fn an_upload_of_the_missing_tracks_joins_the_album() {
     );
     assert_eq!(albums, 1, "no second album");
 }
+
+/// Fork: MusicBrainz's release index, which never lists a stand-in group:
+/// its releases are found only by their own ids.
+struct StandInBlind(LargeGroups);
+
+impl ReleaseSource for StandInBlind {
+    fn search<'a>(
+        &'a self,
+        title: &'a str,
+        artist: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<ReleaseHit>, SourceError>> {
+        self.0.search(title, artist)
+    }
+
+    fn release<'a>(&'a self, mbid: &'a str) -> BoxFuture<'a, Result<Option<Release>, SourceError>> {
+        self.0.release(mbid)
+    }
+
+    fn canonical_recording<'a>(
+        &'a self,
+        mbid: &'a str,
+    ) -> BoxFuture<'a, Result<Option<String>, SourceError>> {
+        self.0.canonical_recording(mbid)
+    }
+
+    fn search_editions<'a>(
+        &'a self,
+        query: &'a EditionQuery,
+    ) -> BoxFuture<'a, Result<EditionPage, SourceError>> {
+        if query
+            .release_group_mbid
+            .as_deref()
+            .is_some_and(droppedneedle_providers::virtual_ids::is_virtual)
+        {
+            return Box::pin(async {
+                Ok(EditionPage {
+                    items: Vec::new(),
+                    total: 0,
+                    offset: 0,
+                })
+            });
+        }
+        self.0.search_editions(query)
+    }
+}
+
+/// Fork: held files matched by hand to a Deezer-only album (a stand-in
+/// group) go in under it, paired against the Deezer track list; a stand-in
+/// whose track list cannot be read refuses with a reason, never silently.
+#[tokio::test]
+async fn a_hand_match_to_a_deezer_album_places_the_files_under_it() {
+    use droppedneedle_providers::virtual_ids::{Kind, mint};
+    const TITLES: [&str; 3] = ["Wandering Star", "It's a Fire", "Numb"];
+    let stand_in = mint("deezer", Kind::ReleaseGroup, "777");
+    let stand_in_release = mint("deezer", Kind::Release, "777");
+    let unread = mint("deezer", Kind::ReleaseGroup, "778");
+    let mut deezer = release(&TITLES, &[None; 3]);
+    deezer.id = stand_in_release.clone();
+    deezer.release_group_id = stand_in.clone();
+    deezer.title = "Rough Mixes".to_owned();
+    let (db, library, dir, auth) = bundles().await;
+    let group = stand_in.clone();
+    db.write("test.stand_in", move |tx| {
+        tx.execute(
+            "INSERT INTO source_identities (uuid, provider, kind, provider_id, \
+             provider_album_id, created_at) VALUES (?1, 'deezer', 'release_group', '777', '777', 1)",
+            rusqlite::params![group],
+        )?;
+        Ok(())
+    })
+    .await
+    .expect("stand-in minted");
+    let acquire = acquire_over(
+        &auth,
+        &library,
+        Arc::new(LibraryLanding::new(
+            &library,
+            every_priority(Arc::new(StandInBlind(LargeGroups(vec![deezer])))),
+        )),
+    );
+    let curator = Viewer {
+        user_id: "u-curator".to_owned(),
+        admin: false,
+    };
+    let work = dir.join("work");
+    std::fs::create_dir_all(&work).expect("work dir");
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for (index, title) in TITLES.iter().enumerate() {
+        let track = index as u32 + 1;
+        let bytes = tagged(&work, "flac_full_01.flac", "Rough Mixes", title, track);
+        files.push((format!("Rough Mixes/{track:02} {title}.flac"), bytes));
+    }
+    let entries: Vec<(&str, &Vec<u8>)> = files
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), bytes))
+        .collect();
+    let job = drop_zip(&acquire, &curator, "deezer-only", &entries).await;
+    let item = &job.items[0];
+    assert_eq!(
+        item.status,
+        DropItemStatus::NeedsReview,
+        "{:?}",
+        item.detail
+    );
+    let (entry, _) = entry_of(&acquire, &curator.user_id, item.id).await;
+    let held_viewer = HeldViewer {
+        user_id: curator.user_id.clone(),
+        admin: false,
+    };
+
+    let refused = acquire
+        .held
+        .match_album(&held_viewer, entry.id, &unread, None, &curator.user_id)
+        .await
+        .expect_err("a stand-in with no track list refuses");
+    assert!(
+        refused.to_string().contains("track list"),
+        "the refusal says why: {refused}"
+    );
+
+    let matched = acquire
+        .held
+        .match_album(&held_viewer, entry.id, &stand_in, None, &curator.user_id)
+        .await
+        .expect("matched by hand");
+    assert_eq!(matched.imported, 3, "{matched:?}");
+    let placed: Vec<String> = acquire.db.db().column(
+        "SELECT DISTINCT release_group_mbid FROM local_album_external_identities",
+        rusqlite::params![],
+    );
+    assert_eq!(placed, vec![stand_in]);
+}

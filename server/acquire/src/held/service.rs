@@ -501,7 +501,10 @@ impl HeldService {
         }
         let entry = self.claim(viewer, entry_id).await?;
         let result = match Self::chosen(&entry, file_ids.as_deref()) {
-            Ok(files) if files.is_empty() => Ok(Acted::default()),
+            // Fork: a match that would do nothing says so.
+            Ok(files) if files.is_empty() => Err(HeldError::Invalid(
+                "None of the chosen files are held any more, so nothing was matched.".to_owned(),
+            )),
             Ok(files) => match entry.origin {
                 EntryOrigin::Upload | EntryOrigin::ImportFolder => self
                     .drops
@@ -1694,6 +1697,7 @@ impl HeldService {
             }
         }
         let mut acted = Acted::default();
+        let mut gone = 0usize;
         for files in groups {
             let mut paths = Vec::with_capacity(files.len());
             let mut kept = Vec::with_capacity(files.len());
@@ -1704,6 +1708,7 @@ impl HeldService {
                 }
             }
             if kept.is_empty() {
+                gone += 1;
                 continue;
             }
             let mut landing = probe_files(library.as_ref(), paths).await;
@@ -1746,7 +1751,12 @@ impl HeldService {
             .await
             {
                 identify::Outcome::Matched(summary) => summary,
-                identify::Outcome::Review { reason, .. } => return Err(refused(reason)),
+                identify::Outcome::Review { reason, detail } => {
+                    return Err(HeldError::Refused(crate::reason::refusal(
+                        reason,
+                        detail.as_deref(),
+                    )));
+                }
                 identify::Outcome::Busy | identify::Outcome::Closed => {
                     return Err(HeldError::Busy("held match edition read".to_owned()));
                 }
@@ -1869,11 +1879,40 @@ impl HeldService {
             .await
             .map_err(|error| self.record_failed(entry_id, error))?;
             self.consume(entry, &consumed).await;
+            // Fork: files asked for as a stand-in album went in under a
+            // MusicBrainz album: link the two, so the stand-in's request
+            // and page follow.
+            if !consumed.is_empty() {
+                let mut asked: Vec<(String, String)> = Vec::new();
+                if let Some(group) = entry.release_group_mbid.clone() {
+                    asked.push((group, entry.album_title.clone().unwrap_or_default()));
+                }
+                if let Some(task) = task.as_ref() {
+                    asked.push((task.release_group_mbid.clone(), task.album_title.clone()));
+                }
+                crate::stand_ins::link_after_match(
+                    &self.db,
+                    self.drops.ticks().as_ref(),
+                    asked,
+                    release.release_group_id.clone(),
+                    release.title.clone(),
+                )
+                .await;
+            }
             if let Some(task) = task
                 && acted.imported > 0
             {
                 self.settle_task(&library, &task, &release).await;
             }
+        }
+        // Fork: every file was gone from disk, so nothing was matched: say
+        // so rather than answer as if it worked.
+        if gone > 0 && acted.imported == 0 && acted.owned == 0 && acted.held.is_empty() {
+            return Err(HeldError::Refused(
+                "The held files are no longer on disk, so nothing was matched. Discard the \
+                 entry, or fetch the album again."
+                    .to_owned(),
+            ));
         }
         Ok(acted)
     }

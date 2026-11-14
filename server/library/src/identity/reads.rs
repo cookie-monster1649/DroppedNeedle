@@ -292,10 +292,19 @@ pub fn group_owned(conn: &Connection, release_group_mbid: &str) -> rusqlite::Res
     if release_group_mbid.is_empty() {
         return Ok(false);
     }
-    conn.prepare_cached(sql::GROUP_OWNED.text())?
-        .query_row(params![release_group_mbid.to_ascii_lowercase()], |row| {
-            row.get(0)
-        })
+    let owned = |group: &str| -> rusqlite::Result<bool> {
+        conn.prepare_cached(sql::GROUP_OWNED.text())?
+            .query_row(params![group.to_ascii_lowercase()], |row| row.get(0))
+    };
+    if owned(release_group_mbid)? {
+        return Ok(true);
+    }
+    // Fork: a stand-in group linked to the MusicBrainz group it turned out
+    // to be is held when the library holds that group.
+    match crate::sources::links::linked(conn, release_group_mbid)? {
+        Some(group) => owned(&group),
+        None => Ok(false),
+    }
 }
 
 /// The title and album artist of a live album a local-only album titled

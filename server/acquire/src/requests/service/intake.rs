@@ -36,6 +36,8 @@ struct TrackFields {
 
 /// Batch row cap.
 const BATCH_MAX_ITEMS: usize = 500;
+/// Fork: how long one batch spends checking stand-in albums at MusicBrainz.
+const BATCH_CHECK_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How long a pending row may go without a task before the waiting pass
 /// takes it for one that lost its dispatch.
@@ -462,7 +464,11 @@ impl RequestsService {
         granted: bool,
     ) -> Result<IntakeResponse, RequestsError> {
         let role = principal.role();
-        let mbid = validate_mbid(&body.musicbrainz_id)?;
+        let submitted = validate_mbid(&body.musicbrainz_id)?;
+        // Fork: a stand-in album MusicBrainz knows is asked for as its
+        // MusicBrainz group, linked to the stand-in.
+        let mbid = self.musicbrainz_for(&submitted).await;
+        let redirected = !mbid.eq_ignore_ascii_case(&submitted);
         let now = self.now_epoch();
         // Intake treats the submitted id as canonical and
         // requires real names up front.
@@ -499,7 +505,11 @@ impl RequestsService {
             .as_deref()
             .map(validate_mbid)
             .transpose()?
-            .map(|release| release.to_lowercase());
+            .map(|release| release.to_lowercase())
+            // Fork: a stand-in edition is no edition of the MusicBrainz group.
+            .filter(|release| {
+                !(redirected && droppedneedle_providers::virtual_ids::is_virtual(release))
+            });
         if let Some(existing) = self.store.get(RequestKind::Album, &mbid).await?
             && (existing.status.is_active() || existing.status == RequestStatus::Cancelling)
         {
@@ -831,10 +841,23 @@ impl RequestsService {
         // skipped.
         let mut seen_canonical = std::collections::HashSet::new();
         let mut normalized = Vec::new();
+        // Fork: stand-in albums are checked at MusicBrainz first, within a
+        // budget so a long batch is never held up; the rest go as they are.
+        let checks_until = std::time::Instant::now() + BATCH_CHECK_BUDGET;
         for item in raw_items {
             let Ok(mbid) = validate_mbid(&item.musicbrainz_id) else {
                 duplicate_count = duplicate_count.saturating_add(1);
                 continue;
+            };
+            let mbid = if std::time::Instant::now() < checks_until {
+                self.musicbrainz_for(&mbid).await
+            } else {
+                crate::stand_ins::musicbrainz_for(
+                    &self.library,
+                    &crate::stand_ins::LinkedOnly,
+                    &mbid,
+                )
+                .await
             };
             if seen_canonical.insert(mbid.to_lowercase()) {
                 normalized.push((mbid, item));

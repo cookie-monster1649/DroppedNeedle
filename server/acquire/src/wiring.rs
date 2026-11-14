@@ -95,6 +95,8 @@ pub const ACQUIRE_LOOPS: &[&str] = &[
     crate::imports::spotify_sync::SYNC_JOB,
     // Fork: a source album's leftovers.
     crate::requests::source_leftovers::LEFTOVER_JOB,
+    // Fork: stand-in albums linked to their MusicBrainz group.
+    crate::stand_ins::LINK_JOB,
 ];
 
 /// The sections the acquisition clients are built from.
@@ -638,6 +640,13 @@ impl AcquireSetup {
                     },
                     albums: ports.albums,
                     events: events.clone(),
+                    // Fork: a stand-in album is checked at MusicBrainz first.
+                    stand_ins: Arc::new(crate::imports::spotify_resolve::Live::new(
+                        resolver.clone(),
+                        previews.clone(),
+                        db.clone(),
+                        droppedneedle_providers::RequestPriority::UserInitiated,
+                    )),
                 },
                 release_poll: ports.release_poll,
                 targets: clients.targets().clone(),
@@ -892,6 +901,12 @@ impl AcquireSetup {
         crate::requests::source_leftovers::spawn_source_leftovers(
             supervisor,
             self.requests.clone(),
+        )?;
+        // Fork: stand-in albums linked to their MusicBrainz group.
+        crate::stand_ins::spawn_stand_in_links(
+            supervisor,
+            self.requests.library.clone(),
+            self.flows.ticks.clone(),
         )?;
         crate::probes::spawn_probe_loop(
             supervisor,

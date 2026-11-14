@@ -425,6 +425,7 @@ async fn assigned_to(
             }
         }
     }
+    let releases_read = releases.len();
     let aliases = match merged_recordings(library, &local, &releases, PERSON).await {
         Ok(aliases) => aliases,
         Err(detail) => return Outcome::Unavailable(detail),
@@ -450,7 +451,19 @@ async fn assigned_to(
             state = ?summary.state,
             "held match: no release of the picked album pairs with the files"
         );
-        return review(Reason::AlbumNotFound);
+        // Fork: say why, so a person's match never fails without a word.
+        let detail = match releases_read {
+            0 if droppedneedle_providers::virtual_ids::is_virtual(&group) => Some(
+                "Deezer's track list for this album could not be read; open the album page \
+                 and try again.",
+            ),
+            0 => Some("MusicBrainz lists no release of this album to match the files against."),
+            _ => None,
+        };
+        return Outcome::Review {
+            reason: Reason::AlbumNotFound,
+            detail: detail.map(str::to_owned),
+        };
     }
     summary.owned = library.owned(&group, None).await;
     Outcome::Matched(Box::new(summary))

@@ -70,6 +70,8 @@ pub struct RequestsService {
     readiness: super::state::AcquireReadiness,
     /// Users' notices.
     events: droppedneedle_kernel::events::EventHub,
+    /// Fork: the MusicBrainz check before a stand-in album is requested.
+    stand_ins: Arc<dyn crate::stand_ins::StandInCheck>,
 }
 
 /// A dispatch read failure as a server fault (the cause goes to the log).
@@ -229,7 +231,14 @@ impl RequestsService {
             upgrade_policy: state.upgrade_policy.clone(),
             readiness: state.readiness.clone(),
             events: state.events.clone(),
+            stand_ins: state.stand_ins.clone(),
         }
+    }
+
+    /// Fork: the group to request for album `mbid`: a stand-in that
+    /// MusicBrainz knows after all is asked for as its MusicBrainz group.
+    async fn musicbrainz_for(&self, mbid: &str) -> String {
+        crate::stand_ins::musicbrainz_for(&self.library, self.stand_ins.as_ref(), mbid).await
     }
 
     /// Tell `subscriber` plugins about one new request.

@@ -2539,6 +2539,12 @@ fn state_columns() -> Vec<StateColumn> {
             |kind| kind.as_str(),
         ),
         state(
+            "source_links",
+            "via",
+            &droppedneedle_library::sources::links::LinkVia::ALL,
+            droppedneedle_library::sources::links::LinkVia::as_str,
+        ),
+        state(
             "source_promotion_checks",
             "outcome",
             &droppedneedle_library::sources::CheckOutcome::ALL,
@@ -4298,6 +4304,11 @@ mod extension_chains {
                 "catalog",
                 "catalog/0016_spotify_quota.sql",
                 "aa61add1e5ed61051afdd1e496a682903b36ae6d22d38653a8658ee0e71bdae0",
+            ),
+            (
+                "catalog",
+                "catalog/0017_source_links.sql",
+                "6d1b098d5d485ad3969096047fc399ba9e269ee49bf29e916cc9f7c4d7ccd12f",
             ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
