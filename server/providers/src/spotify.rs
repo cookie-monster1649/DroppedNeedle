@@ -18,7 +18,7 @@ use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use crate::RequestPriority;
 use crate::client::{decode, parse_base, unusable_base};
 use crate::error::ProviderError;
-use crate::executor::{Backoff, Executor, Request, Spec, Url, standard_classify};
+use crate::executor::{Answer, Backoff, Executor, Request, Spec, Url, standard_classify};
 
 pub mod models;
 
@@ -55,10 +55,85 @@ const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'~');
 
+/// Fork: the playlist entry fields an import reads, so Spotify sends only
+/// those. The track sits under `track` or `item` (see
+/// [`models::PlaylistEntry`]), so both are named.
+pub const ITEM_FIELDS: &str = "next,items(is_local,\
+track(id,type,name,artists(name),album(id,name,images),external_ids(isrc),track_number,disc_number,duration_ms),\
+item(id,type,name,artists(name),album(id,name,images),external_ids(isrc),track_number,disc_number,duration_ms))";
+
+/// Fork: why Spotify last refused a call (429), as its body said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    /// Spotify's `error.reason`, e.g. `QUOTA_EXCEEDED`; empty when the body
+    /// named none (the rolling rate limit).
+    pub reason: String,
+    /// The wait its `Retry-After` named, uncapped.
+    pub retry_after: Option<Duration>,
+}
+
+impl Refusal {
+    /// True when the app's allowance is used up, not just paced.
+    #[must_use]
+    pub fn is_quota(&self) -> bool {
+        self.reason.eq_ignore_ascii_case("QUOTA_EXCEEDED")
+    }
+}
+
+/// Fork: the last 429 Spotify answered, as the classifier read it. The
+/// spec's classifier is a plain function, so it is kept here for the caller
+/// to take right after the call that failed.
+static LAST_REFUSAL: std::sync::Mutex<Option<Refusal>> = std::sync::Mutex::new(None);
+
+/// Fork: take the reason of the last 429 Spotify answered, if one is
+/// waiting.
+pub fn take_refusal() -> Option<Refusal> {
+    LAST_REFUSAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+}
+
+/// Fork: Spotify's 429 body, `{"error":{"status":429,"reason":"..."}}`.
+#[derive(serde::Deserialize)]
+struct RefusalBody {
+    error: RefusalError,
+}
+
+#[derive(serde::Deserialize)]
+struct RefusalError {
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Fork: the reason a 429 body names, empty when none.
+#[must_use]
+pub fn refusal_reason(body: &[u8]) -> String {
+    serde_json::from_slice::<RefusalBody>(body)
+        .ok()
+        .and_then(|body| body.error.reason)
+        .unwrap_or_default()
+}
+
+/// The standard rules, keeping the reason of a 429 (fork).
+fn classify(answer: &Answer<'_>) -> Result<(), ProviderError> {
+    if answer.reply.status() == 429 {
+        let refusal = Refusal {
+            reason: refusal_reason(answer.reply.bytes()),
+            retry_after: answer.retry_after(),
+        };
+        *LAST_REFUSAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(refusal);
+    }
+    standard_classify(answer)
+}
+
 /// Spotify on the wire: the standard status rules. Spotify normally names
 /// its wait on a 429; one that does not rests the row a few seconds,
-/// doubling. A long wait it names (an app over its allowance) is kept up
-/// to an hour.
+/// doubling. Fork: a long wait it names (an app over its development-mode
+/// quota asks for many hours) is kept in full, up to a day: calling again
+/// sooner is only refused, and stretches the quota's wait.
 pub static SPEC: Spec = Spec {
     source: SOURCE,
     health_key: SOURCE,
@@ -68,8 +143,8 @@ pub static SPEC: Spec = Spec {
         base: Duration::from_secs(2),
         max: Duration::from_secs(60),
     },
-    retry_after_cap: Duration::from_secs(3600),
-    classify: standard_classify,
+    retry_after_cap: Duration::from_secs(24 * 3600),
+    classify,
 };
 
 /// A token grant from the accounts host. Debug is hand-written: the tokens
@@ -316,7 +391,11 @@ impl SpotifyClient {
         self.get(
             access_token,
             &["playlists", playlist_id, "items"],
-            &[("limit", &limit), ("offset", &offset)],
+            &[
+                ("limit", &limit),
+                ("offset", &offset),
+                ("fields", ITEM_FIELDS),
+            ],
             priority,
         )
         .await

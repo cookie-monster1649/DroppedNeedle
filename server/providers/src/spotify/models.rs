@@ -81,6 +81,11 @@ pub struct SimplifiedPlaylist {
     /// Track count on the older shape, null on the current one.
     #[serde(default)]
     pub tracks: Option<TrackCount>,
+    /// Fork: the playlist's version, which changes with every edit. The
+    /// sync compares it with the one it imported, so an unchanged playlist
+    /// costs no call of its own.
+    #[serde(default)]
+    pub snapshot_id: Option<String>,
 }
 
 /// A playlist's owner.
@@ -121,7 +126,7 @@ pub struct Image {
 /// One playlist's metadata, `GET /playlists/{id}?fields=id,name,images,tracks.total,snapshot_id`.
 ///
 /// Checked against the Spotify mock's `spotify_playlist`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PlaylistInfo {
     /// Spotify playlist id. The import does not read it; decoding still
     /// requires it.

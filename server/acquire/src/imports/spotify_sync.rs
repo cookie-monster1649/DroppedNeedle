@@ -1,9 +1,14 @@
 //! Fork: Spotify playlists kept in step with Spotify (Slice C).
 //!
 //! A playlist imported from Spotify may have sync turned on
-//! (`acquire_spotify_playlist_syncs`, one row per synced playlist). The
-//! loop reads each synced playlist's snapshot id, its version at Spotify,
-//! and imports it again only when the snapshot changed. The import mirrors
+//! (`acquire_spotify_playlist_syncs`, one row per synced playlist). Each
+//! pass reads the owner's playlist list once (`/me/playlists`, 50 a page),
+//! which carries every playlist's snapshot id, its version at Spotify, and
+//! imports a playlist again only when its snapshot changed: an unchanged
+//! playlist costs no call of its own, and a changed one only its items.
+//! Liked Songs has no snapshot: its newest page stands in for one, and a
+//! change reads down to the first page already known (every page once a
+//! day). The import mirrors
 //! the playlist (songs added at Spotify appear, songs removed go), through
 //! the same populate the import job runs. With auto-request on, the songs
 //! new since the last import are asked for on the owner's behalf: a track
@@ -20,7 +25,7 @@
 //! Requests go through [`SyncRequests`]: [`RequestsSync`] in the server,
 //! which applies the owner's approval gate and quota as if they had asked.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,9 +36,10 @@ use rusqlite::{OptionalExtension, params};
 
 use super::spotify::{ImportFailure, ImportedTrack, SpotifyImportService};
 use super::spotify_albums::AlbumResolver;
-use super::spotify_client::{SpotifyError, rate_limited_message, unavailable_message};
+use super::spotify_client::{LIKED_SONGS, SpotifyError, rate_limited_message, unavailable_message};
 use super::spotify_store::CollectionsPlaylistBridge;
 use super::spotify_tracks::SpotifySong;
+use super::spotify_usage::RefusalKind;
 use super::sql;
 use crate::db::AcquireDb;
 use crate::requests::error::RequestsError;
@@ -41,6 +47,7 @@ use crate::requests::ledger::want_key;
 use crate::requests::models::{TrackIntake, WantIntake};
 use crate::requests::service::RequestsService;
 use crate::requests::state::RequestsState;
+use droppedneedle_providers::spotify::models::PlaylistInfo;
 
 /// Name of the sync loop.
 pub const SYNC_JOB: &str = "spotify-playlist-sync";
@@ -52,9 +59,14 @@ pub const COOLDOWN_JOB: &str = "spotify-cooldown-keeper";
 /// Fork: how often the wait Spotify asked for is checked and kept.
 const COOLDOWN_EVERY: Duration = Duration::from_secs(30);
 
-/// How often synced playlists are checked. A check whose snapshot did not
-/// change costs one small Spotify call per playlist.
+/// How often synced playlists are checked. Fork: a check costs one
+/// `/me/playlists` read per owner (a page per 50 playlists), one Liked Songs
+/// page when it is synced, and nothing per unchanged playlist.
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(15 * 60);
+
+/// Fork: how often a synced Liked Songs is read to the end, for songs
+/// unliked below the newest pages.
+pub const LIKED_FULL_EVERY_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// The most songs one sync asks for, so a playlist that grew by hundreds
 /// overnight does not flood the queue; the rest are asked for by hand.
@@ -84,6 +96,8 @@ pub struct SyncRow {
     pub auto_request: bool,
     /// The snapshot last imported.
     pub snapshot_id: Option<String>,
+    /// Fork: when a synced Liked Songs was last read to the end.
+    pub full_read_at: Option<i64>,
 }
 
 /// The sync settings over the shared database.
@@ -201,10 +215,23 @@ impl SpotifySyncs {
                             spotify_playlist_id: row.get(2)?,
                             auto_request: row.get::<_, i64>(3)? != 0,
                             snapshot_id: row.get(4)?,
+                            full_read_at: row.get(5)?,
                         })
                     })?
                     .collect::<rusqlite::Result<_>>()
                     .map_err(DbError::from)
+            })
+            .await
+    }
+
+    /// Fork: record that `playlist_id` (Liked Songs) was read to the end.
+    pub async fn record_full_read(&self, playlist_id: &str) -> Result<(), DbError> {
+        let playlist_id = playlist_id.to_owned();
+        let now = self.db.clock().now_ms();
+        self.db
+            .write("spotify.sync.full_read", move |tx| {
+                tx.execute(sql::RECORD_FULL_READ.text(), params![playlist_id, now])?;
+                Ok(())
             })
             .await
     }
@@ -324,6 +351,10 @@ impl SpotifySync {
             }
         };
         let mut imported = 0;
+        // Fork: one playlist list per owner, read on their first playlist
+        // that is not Liked Songs.
+        let mut listings: HashMap<String, Result<HashMap<String, PlaylistInfo>, String>> =
+            HashMap::new();
         for row in rows {
             // Fork: a wait Spotify asked for ends the pass; the next one
             // after it ends goes on.
@@ -335,7 +366,36 @@ impl SpotifySync {
                 self.library.keep_cooldown().await;
                 return imported;
             }
-            match self.sync(&row).await {
+            let listed = if row.spotify_playlist_id == LIKED_SONGS {
+                None
+            } else {
+                if !listings.contains_key(&row.user_id) {
+                    let listing = self
+                        .listing(&row.user_id)
+                        .await
+                        .map_err(|failure| self.failure(&failure));
+                    listings.insert(row.user_id.clone(), listing);
+                }
+                match &listings[&row.user_id] {
+                    Ok(listing) => Some(listing.get(&row.spotify_playlist_id).cloned()),
+                    Err(message) => {
+                        self.record_failure(&row, message.clone()).await;
+                        continue;
+                    }
+                }
+            };
+            let outcome = match listed {
+                None => self.sync_liked(&row).await,
+                Some(Some(info)) => self.sync(&row, &info).await,
+                Some(None) => {
+                    // Not in the owner's list: unfollowed or deleted at
+                    // Spotify. Nothing is called for it.
+                    self.record_failure(&row, "No longer in your Spotify playlists".to_owned())
+                        .await;
+                    continue;
+                }
+            };
+            match outcome {
                 Ok(synced) => {
                     if !synced.unchanged {
                         imported += 1;
@@ -351,19 +411,8 @@ impl SpotifySync {
                     }
                 }
                 Err(failure) => {
-                    let message = failure_message(
-                        &failure,
-                        self.library.cooling_for(),
-                        self.service.now_ms(),
-                    );
-                    tracing::warn!(playlist_id = %row.playlist_id, %message, "spotify playlist sync failed");
-                    if let Err(error) = self
-                        .syncs
-                        .record(&row.playlist_id, None, Some(message))
-                        .await
-                    {
-                        tracing::warn!(%error, "playlist sync failure not recorded");
-                    }
+                    let message = self.failure(&failure);
+                    self.record_failure(&row, message).await;
                 }
             }
         }
@@ -372,19 +421,114 @@ impl SpotifySync {
         imported
     }
 
-    /// Sync one playlist: import it when its snapshot changed and ask for
-    /// the songs new since the last import.
-    pub async fn sync(&self, row: &SyncRow) -> Result<Synced, ImportFailure> {
-        let snapshot = self
+    /// Fork: the owner's playlist list, read once a pass: each playlist's
+    /// version and cover by Spotify id. Kept for the import page too.
+    async fn listing(&self, user_id: &str) -> Result<HashMap<String, PlaylistInfo>, ImportFailure> {
+        let (refresher, _) = self
             .service
-            .snapshot(&row.user_id, &row.spotify_playlist_id)
+            .access(
+                user_id,
+                droppedneedle_providers::RequestPriority::BackgroundSync,
+            )
             .await?;
+        let me = refresher.spotify_user_id();
+        Ok(self
+            .service
+            .refresh_listing(
+                user_id,
+                &refresher,
+                Some(me.as_str()).filter(|me| !me.is_empty()),
+            )
+            .await?)
+    }
+
+    fn failure(&self, failure: &ImportFailure) -> String {
+        failure_message(
+            failure,
+            self.service.client().refusal_kind(),
+            self.library.cooling_for(),
+            self.service.now_ms(),
+        )
+    }
+
+    async fn record_failure(&self, row: &SyncRow, message: String) {
+        tracing::warn!(playlist_id = %row.playlist_id, %message, "spotify playlist sync failed");
+        if let Err(error) = self
+            .syncs
+            .record(&row.playlist_id, None, Some(message))
+            .await
+        {
+            tracing::warn!(%error, "playlist sync failure not recorded");
+        }
+    }
+
+    /// Sync one playlist whose version and cover the owner's list gave
+    /// (`listed`): import it when its snapshot changed and ask for the songs
+    /// new since the last import. Fork: an unchanged one calls nothing.
+    pub async fn sync(
+        &self,
+        row: &SyncRow,
+        listed: &PlaylistInfo,
+    ) -> Result<Synced, ImportFailure> {
+        let snapshot = listed.snapshot_id.clone();
         if snapshot.is_some() && snapshot == row.snapshot_id {
             return Ok(Synced {
                 unchanged: true,
                 ..Synced::default()
             });
         }
+        let known = self.known(row).await?;
+        let populated = self
+            .service
+            .populate_listed(
+                &row.user_id,
+                &row.spotify_playlist_id,
+                &row.playlist_id,
+                listed,
+            )
+            .await?;
+        self.after_import(row, known, populated, snapshot).await
+    }
+
+    /// Fork: sync a Liked Songs playlist: its newest page tells whether it
+    /// changed; a change reads down to the first known page, or every page
+    /// once a day.
+    pub async fn sync_liked(&self, row: &SyncRow) -> Result<Synced, ImportFailure> {
+        let now = self.service.now_ms();
+        let full = row
+            .full_read_at
+            .is_none_or(|at| now - at >= LIKED_FULL_EVERY_MS);
+        // A full read is due: the stored version does not stop it.
+        let unchanged_if = if full {
+            None
+        } else {
+            row.snapshot_id.as_deref()
+        };
+        let known = self.known(row).await?;
+        let Some(liked) = self
+            .service
+            .sync_liked(&row.user_id, &row.playlist_id, unchanged_if, full)
+            .await?
+        else {
+            return Ok(Synced {
+                unchanged: true,
+                ..Synced::default()
+            });
+        };
+        if liked.complete
+            && let Err(error) = self.syncs.record_full_read(&row.playlist_id).await
+        {
+            tracing::warn!(%error, "liked songs full read not recorded");
+        }
+        let unchanged =
+            liked.populated.snapshot_id.is_some() && liked.populated.snapshot_id == row.snapshot_id;
+        let mut synced = self.after_import(row, known, liked.populated, None).await?;
+        synced.unchanged = unchanged;
+        Ok(synced)
+    }
+
+    /// What the playlist held before an import: Spotify ids and want keys.
+    async fn known(&self, row: &SyncRow) -> Result<HashSet<String>, ImportFailure> {
         let before = self.entries(row).await?;
         let mut known: HashSet<String> = HashSet::new();
         for entry in &before {
@@ -393,10 +537,17 @@ impl SpotifySync {
             }
             known.insert(want_key(&entry.artist_name, &entry.track_name));
         }
-        let populated = self
-            .service
-            .populate(&row.user_id, &row.spotify_playlist_id, &row.playlist_id)
-            .await?;
+        Ok(known)
+    }
+
+    /// Ask for the songs an import added and record the snapshot.
+    async fn after_import(
+        &self,
+        row: &SyncRow,
+        known: HashSet<String>,
+        populated: super::spotify::Populated,
+        snapshot: Option<String>,
+    ) -> Result<Synced, ImportFailure> {
         // The import linked what the library holds already.
         let linked: HashSet<String> = self
             .entries(row)
@@ -442,17 +593,23 @@ impl SpotifySync {
     }
 }
 
-fn failure_message(failure: &ImportFailure, wait: Duration, now_ms: i64) -> String {
+fn failure_message(
+    failure: &ImportFailure,
+    kind: RefusalKind,
+    wait: Duration,
+    now_ms: i64,
+) -> String {
     match failure {
         ImportFailure::Settings(_) => "Spotify app settings do not read".to_owned(),
         ImportFailure::Spotify(SpotifyError::NotLinked) => "Spotify account not linked".to_owned(),
-        ImportFailure::Spotify(SpotifyError::RateLimited { retry_after }) => {
+        ImportFailure::Spotify(SpotifyError::RateLimited { retry_after, quota }) => {
+            let kind = if *quota { RefusalKind::Quota } else { kind };
             let wait = if wait.is_zero() {
                 Duration::from_secs(retry_after.unwrap_or(0))
             } else {
                 wait
             };
-            rate_limited_message(wait, now_ms)
+            rate_limited_message(kind, wait, now_ms)
         }
         ImportFailure::Spotify(SpotifyError::Unavailable(detail)) => unavailable_message(detail),
         ImportFailure::Spotify(SpotifyError::Busy) => "The database was busy".to_owned(),
@@ -478,6 +635,7 @@ pub fn spawn_spotify_sync(
             let library = library.clone();
             async move {
                 library.keep_cooldown().await;
+                library.log_usage();
                 Ok(Next::Continue)
             }
         }),

@@ -36,4 +36,5 @@ pub mod spotify_resolve;
 pub mod spotify_store;
 pub mod spotify_sync;
 pub mod spotify_tracks;
+pub mod spotify_usage;
 pub(crate) mod sql;
