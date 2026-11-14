@@ -2142,7 +2142,11 @@ async fn followed(db: &Db, user_id: &str) -> Vec<(String, i64)> {
     .expect("follows read")
 }
 
-/// A 429 from Spotify stops the artist sync instead of skipping on.
+/// A 429 from Spotify stops the artist sync instead of skipping on. An
+/// artist MusicBrainz or Deezer names is followed without reading its
+/// albums at Spotify; the one whose read was cut short is recorded as
+/// looked up, so it does not go first next time, and the wait is kept
+/// across a restart.
 #[tokio::test]
 async fn a_rate_limited_artist_sync_stops_and_follows_nothing() {
     let (_auth, bundle, deps, recorder, user_id, _guards) = library_rig().await;
@@ -2152,7 +2156,11 @@ async fn a_rate_limited_artist_sync_stops_and_follows_nothing() {
         .sync_artists(&user_id, RequestPriority::UserInitiated)
         .await;
     assert!(stopped.is_err(), "a 429 stops the run, not just one artist");
-    assert!(followed(&bundle.db, &user_id).await.is_empty());
+    assert_eq!(
+        followed(&bundle.db, &user_id).await,
+        vec![("Aurora Current".to_owned(), 0)],
+        "matched without reading its albums at Spotify"
+    );
     let asked = recorder
         .snapshot()
         .spotify_paths
@@ -2160,6 +2168,41 @@ async fn a_rate_limited_artist_sync_stops_and_follows_nothing() {
         .filter(|path| path.starts_with("/artists/") && path.ends_with("/albums"))
         .count();
     assert_eq!(asked, 1, "no artist is asked after the first 429");
+    let user = user_id.clone();
+    let tried: (Option<i64>, i64, Option<i64>) = bundle
+        .db
+        .read("test.attempt", move |conn| {
+            Ok::<_, droppedneedle_kernel::db::DbError>(conn.query_row(
+                "SELECT matched_at, attempts, fetched_at FROM acquire_spotify_followed_artists \
+                 WHERE user_id = ?1 AND artist_mbid IS NULL",
+                [user],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert!(tried.0.is_some() && tried.2.is_some(), "{tried:?}");
+    assert_eq!(tried.1, 1);
+
+    deps.spotify_library.keep_cooldown().await;
+    assert!(
+        !deps.spotify_library.cooling_for().is_zero(),
+        "Spotify asked for an hour"
+    );
+    {
+        let kept: i64 = bundle
+            .db
+            .read("test.cooldown", |conn| {
+                Ok::<_, droppedneedle_kernel::db::DbError>(conn.query_row(
+                    "SELECT COUNT(*) FROM acquire_spotify_cooldowns WHERE scope = 'spotify'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(kept, 1, "the wait is kept for a restart");
+    }
 }
 
 /// Fork: artists followed at Spotify are followed here without
@@ -2261,7 +2304,7 @@ async fn saved_albums_are_matched_flagged_new_and_never_requested() {
     let (_auth, bundle, deps, recorder, user_id, _guards) = library_rig().await;
     let library = deps.spotify_library.clone();
     let scan = library
-        .scan_albums(&user_id, RequestPriority::UserInitiated)
+        .scan_albums(&user_id, RequestPriority::UserInitiated, true)
         .await
         .expect("scan runs");
     assert_eq!((scan.read, scan.matched, scan.new), (2, 1, 0), "{scan:?}");
@@ -2292,7 +2335,7 @@ async fn saved_albums_are_matched_flagged_new_and_never_requested() {
 
     recorder.save_album();
     let scan = library
-        .scan_albums(&user_id, RequestPriority::UserInitiated)
+        .scan_albums(&user_id, RequestPriority::UserInitiated, true)
         .await
         .expect("scan runs");
     assert_eq!((scan.read, scan.new), (3, 1));
@@ -2348,7 +2391,7 @@ async fn saved_albums_are_matched_flagged_new_and_never_requested() {
 
     recorder.unsave_album();
     let scan = library
-        .scan_albums(&user_id, RequestPriority::UserInitiated)
+        .scan_albums(&user_id, RequestPriority::UserInitiated, true)
         .await
         .expect("scan runs");
     assert_eq!(scan.removed, 1);

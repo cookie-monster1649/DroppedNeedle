@@ -384,7 +384,7 @@ Run from the repo root. `make help` lists every target.
   | `lrclib` | 1 a second, no burst | ours: a volunteer service | 2026-10-18 |
   | `youtube` | 1 a second, burst 2 | theirs: 100 searches a day; the pace is ours | 2026-10-18 |
   | `github` | 50 an hour, burst 10 | theirs: 60 an hour unauthenticated | 2026-10-18 |
-  | `spotify` | 2 a second, burst 5 | ours: no published number, 429 past it | 2026-10-30 |
+  | `spotify` | 1 a second, burst 3 | ours: no published number, 429 past it; development mode far lower | 2026-11-14 |
   | `plextv` | 1 a second, burst 5 | ours: no published limit | 2026-10-30 |
   | `newznab` | 1 a second, burst 5, per indexer | ours: each indexer also reports its own daily caps, which the client holds to | 2026-10-30 |
   | `hibp` | 5 a second, four in flight | ours: no limit on Pwned Passwords | 2026-10-30 |

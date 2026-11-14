@@ -31,7 +31,7 @@ use rusqlite::{OptionalExtension, params};
 
 use super::spotify::{ImportFailure, ImportedTrack, SpotifyImportService};
 use super::spotify_albums::AlbumResolver;
-use super::spotify_client::SpotifyError;
+use super::spotify_client::{SpotifyError, rate_limited_message, unavailable_message};
 use super::spotify_store::CollectionsPlaylistBridge;
 use super::spotify_tracks::SpotifySong;
 use super::sql;
@@ -44,6 +44,13 @@ use crate::requests::state::RequestsState;
 
 /// Name of the sync loop.
 pub const SYNC_JOB: &str = "spotify-playlist-sync";
+
+/// Fork: name of the loop that keeps a Spotify rate-limit wait across a
+/// restart.
+pub const COOLDOWN_JOB: &str = "spotify-cooldown-keeper";
+
+/// Fork: how often the wait Spotify asked for is checked and kept.
+const COOLDOWN_EVERY: Duration = Duration::from_secs(30);
 
 /// How often synced playlists are checked. A check whose snapshot did not
 /// change costs one small Spotify call per playlist.
@@ -318,6 +325,16 @@ impl SpotifySync {
         };
         let mut imported = 0;
         for row in rows {
+            // Fork: a wait Spotify asked for ends the pass; the next one
+            // after it ends goes on.
+            if !self.library.cooling_for().is_zero() {
+                tracing::info!(
+                    wait_secs = self.library.cooling_for().as_secs(),
+                    "spotify asked for a wait; sync pass ends"
+                );
+                self.library.keep_cooldown().await;
+                return imported;
+            }
             match self.sync(&row).await {
                 Ok(synced) => {
                     if !synced.unchanged {
@@ -334,7 +351,11 @@ impl SpotifySync {
                     }
                 }
                 Err(failure) => {
-                    let message = failure_message(&failure);
+                    let message = failure_message(
+                        &failure,
+                        self.library.cooling_for(),
+                        self.service.now_ms(),
+                    );
                     tracing::warn!(playlist_id = %row.playlist_id, %message, "spotify playlist sync failed");
                     if let Err(error) = self
                         .syncs
@@ -421,16 +442,19 @@ impl SpotifySync {
     }
 }
 
-fn failure_message(failure: &ImportFailure) -> String {
+fn failure_message(failure: &ImportFailure, wait: Duration, now_ms: i64) -> String {
     match failure {
         ImportFailure::Settings(_) => "Spotify app settings do not read".to_owned(),
         ImportFailure::Spotify(SpotifyError::NotLinked) => "Spotify account not linked".to_owned(),
-        ImportFailure::Spotify(SpotifyError::RateLimited { .. }) => {
-            "Spotify is limiting requests".to_owned()
+        ImportFailure::Spotify(SpotifyError::RateLimited { retry_after }) => {
+            let wait = if wait.is_zero() {
+                Duration::from_secs(retry_after.unwrap_or(0))
+            } else {
+                wait
+            };
+            rate_limited_message(wait, now_ms)
         }
-        ImportFailure::Spotify(SpotifyError::Unavailable(_)) => {
-            "Spotify could not be reached".to_owned()
-        }
+        ImportFailure::Spotify(SpotifyError::Unavailable(detail)) => unavailable_message(detail),
         ImportFailure::Spotify(SpotifyError::Busy) => "The database was busy".to_owned(),
         ImportFailure::Spotify(SpotifyError::Store(_)) => {
             "The playlist could not be saved".to_owned()
@@ -438,15 +462,30 @@ fn failure_message(failure: &ImportFailure) -> String {
     }
 }
 
-/// Start the sync loop on `supervisor`.
+/// Start the sync loop on `supervisor`. Fork: the first pass waits a
+/// whole interval, so a restart (a deploy) never calls Spotify by itself;
+/// beside it a small loop keeps a rate-limit wait across restarts,
+/// restoring a kept one at start.
 pub fn spawn_spotify_sync(
     supervisor: &Supervisor,
     sync: Arc<SpotifySync>,
 ) -> Result<(), AlreadyRunning> {
+    let library = sync.library.clone();
+    supervisor.periodic(
+        COOLDOWN_JOB,
+        Schedule::new(COOLDOWN_EVERY),
+        FnTick(move |_| {
+            let library = library.clone();
+            async move {
+                library.keep_cooldown().await;
+                Ok(Next::Continue)
+            }
+        }),
+    )?;
     supervisor.periodic(
         SYNC_JOB,
         Schedule::new(SYNC_INTERVAL)
-            .with_initial_delay(Duration::from_secs(120))
+            .with_initial_delay(SYNC_INTERVAL)
             .with_jitter(Duration::from_secs(60)),
         FnTick(move |_| {
             let sync = sync.clone();
