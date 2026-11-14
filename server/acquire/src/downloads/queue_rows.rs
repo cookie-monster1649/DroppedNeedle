@@ -314,7 +314,17 @@ impl DownloadStore<'_> {
         if self.get_task(&successor.id)?.is_some() {
             return Ok(false);
         }
-        let details = self.task_details(&source.id)?;
+        let mut details = self.task_details(&source.id)?;
+        // Fork: a retry moved from a stand-in album to its MusicBrainz
+        // group keeps no stand-in edition pin.
+        if successor.release_group_mbid != source.release_group_mbid
+            && details
+                .release_mbid
+                .as_deref()
+                .is_some_and(droppedneedle_providers::virtual_ids::is_virtual)
+        {
+            details.release_mbid = None;
+        }
         let plan = self.task_plan(&source.id)?.for_successor();
         if source.download_type == "track" {
             let recording = source.recording_mbid.clone().unwrap_or_default();

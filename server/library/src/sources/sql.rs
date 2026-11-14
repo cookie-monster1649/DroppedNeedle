@@ -254,6 +254,26 @@ droppedneedle_kernel::sql! {
            AND NOT EXISTS (SELECT 1 FROM source_links l WHERE l.stand_in = id) \
          ORDER BY id";
 
+    /// Fork: stand-ins still open and not linked: an open album request,
+    /// a wanted watch, a queued album download or an open held album
+    /// entry. What the backfill checks at MusicBrainz.
+    pub(super) OPEN_UNLINKED = "SELECT DISTINCT id FROM ( \
+           SELECT lower(musicbrainz_id) AS id FROM request_history \
+             WHERE request_kind = 'album' \
+             AND status NOT IN ('imported', 'cancelled', 'rejected', 'cancelling') \
+           UNION ALL SELECT release_group_mbid_lower FROM wanted_watches WHERE state = 'watching' \
+           UNION ALL SELECT lower(release_group_mbid) FROM download_tasks \
+             WHERE download_type = 'album' AND status = 'queued' \
+           UNION ALL SELECT lower(release_group_mbid) FROM acquire_held_entries \
+             WHERE state = 'held' AND COALESCE(recording_mbid, '') = '' \
+             AND release_group_mbid IS NOT NULL) \
+         WHERE substr(id, 1, 15) = 'd0ab1e00-50c3-8' \
+           AND NOT EXISTS (SELECT 1 FROM source_links l WHERE l.stand_in = id) \
+         ORDER BY id";
+
+    /// Fork: every link, stand-in and group.
+    pub(super) EVERY_LINK = "SELECT stand_in, musicbrainz_id FROM source_links ORDER BY stand_in";
+
     /// The live albums holding files by the artist folded `?1` that have a
     /// MusicBrainz group: title, group.
     pub(super) ARTIST_ALBUM_GROUPS = "SELECT a.title, i.release_group_mbid \

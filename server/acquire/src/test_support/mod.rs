@@ -32,6 +32,8 @@ pub fn statement_files() -> Vec<StatementFile> {
         // Fork: the source-album leftover sweep.
         crate::requests::source_leftovers::sql::registered(),
         crate::search_jobs::sql::registered(),
+        // Fork: settling linked stand-in albums.
+        crate::stand_ins::sql::registered(),
         crate::test_support::sql::registered(),
     ]
 }

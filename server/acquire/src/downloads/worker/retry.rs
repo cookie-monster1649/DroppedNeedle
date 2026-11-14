@@ -106,6 +106,26 @@ impl DownloadWorker {
                     // One live download per album: another one already
                     // fetching it, of any owner or origin, or the library
                     // already holding it, ends the retries.
+                    // Fork: a stand-in album linked to its MusicBrainz
+                    // group is never retried as the stand-in: the group in
+                    // the library ends the retries, else the retry asks
+                    // for the group.
+                    let mut row = row.clone();
+                    if source.download_type == "album"
+                        && let Some(group) = droppedneedle_library::sources::links::linked(
+                            store.conn(),
+                            source.release_group_mbid.trim(),
+                        )?
+                    {
+                        if droppedneedle_library::identity::reads::group_owned(
+                            store.conn(),
+                            &group,
+                        )? {
+                            store.stop_retries(&source, &RetryStop::InLibrary, now)?;
+                            return Ok(Retried::Stopped(RetryStop::InLibrary));
+                        }
+                        row.release_group_mbid = group;
+                    }
                     let stop = match store.live_twin(&source.id)? {
                         Some(live) => Some(RetryStop::Downloading(live)),
                         None => store

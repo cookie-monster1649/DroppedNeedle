@@ -246,6 +246,9 @@ pub struct AcquireSetup {
     pub spotify_import_jobs: Arc<SpotifyImportJobs>,
     /// Fork: keeps synced Spotify playlists in step with Spotify.
     pub spotify_sync: Arc<crate::imports::spotify_sync::SpotifySync>,
+    /// Fork: the MusicBrainz, Deezer and catalogue lookups at background
+    /// priority: the stand-in backfill's check.
+    pub background_lookups: Arc<crate::imports::spotify_resolve::Live>,
 }
 
 /// The drop-import service over the landing's library port, a staging
@@ -673,14 +676,15 @@ impl AcquireSetup {
         ));
         let spotify_syncs = crate::imports::spotify_sync::SpotifySyncs::new(db.clone());
         // Fork: the Spotify library and link resolver.
+        let background_lookups = Arc::new(crate::imports::spotify_resolve::Live::new(
+            resolver.clone(),
+            previews,
+            db.clone(),
+            droppedneedle_providers::RequestPriority::BackgroundSync,
+        ));
         let spotify_library = Arc::new(crate::imports::spotify_library::SpotifyLibrary::new(
             spotify_service.clone(),
-            crate::imports::spotify_resolve::Live::new(
-                resolver.clone(),
-                previews,
-                db.clone(),
-                droppedneedle_providers::RequestPriority::BackgroundSync,
-            ),
+            (*background_lookups).clone(),
             db.clone(),
             core.requests.follows.clone(),
         ));
@@ -812,6 +816,7 @@ impl AcquireSetup {
             import_folder,
             spotify_import_jobs,
             spotify_sync,
+            background_lookups,
         })
     }
 
@@ -901,6 +906,7 @@ impl AcquireSetup {
             supervisor,
             self.requests.library.clone(),
             self.flows.ticks.clone(),
+            self.background_lookups.clone(),
         )?;
         crate::probes::spawn_probe_loop(
             supervisor,
