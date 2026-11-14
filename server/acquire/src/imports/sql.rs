@@ -38,7 +38,7 @@ droppedneedle_kernel::sql! {
     /// Fork: every synced playlist from Spotify, least recently checked
     /// first: id, owner, Spotify id, auto-request, snapshot.
     pub(super) SYNC_ROWS = "SELECT s.playlist_id, p.user_id, substr(p.source_ref, 9), \
-             s.auto_request, s.snapshot_id FROM acquire_spotify_playlist_syncs s \
+             s.auto_request, s.snapshot_id, s.full_read_at FROM acquire_spotify_playlist_syncs s \
              JOIN catalog_playlists p ON p.id = s.playlist_id \
              WHERE p.source_ref LIKE 'spotify:%' AND p.user_id IS NOT NULL \
              ORDER BY COALESCE(s.checked_at, 0), s.playlist_id";
@@ -47,6 +47,36 @@ droppedneedle_kernel::sql! {
     pub(super) RECORD_SYNC = "UPDATE acquire_spotify_playlist_syncs SET \
              snapshot_id = COALESCE(?2, snapshot_id), checked_at = ?3, last_error = ?4 \
              WHERE playlist_id = ?1";
+    /// Fork: record a read of Liked Songs to the end for playlist `?1` at
+    /// `?2`.
+    pub(super) RECORD_FULL_READ = "UPDATE acquire_spotify_playlist_syncs SET full_read_at = ?2 \
+             WHERE playlist_id = ?1";
+    /// Fork: the Spotify album id of each entry of playlist `?1`, by entry.
+    pub(super) ENTRY_SPOTIFY_ALBUMS = "SELECT t.id, x.spotify_album_id \
+             FROM catalog_playlist_tracks t \
+             JOIN catalog_playlist_entry_identities x ON x.entry_id = t.id \
+             WHERE t.playlist_id = ?1 AND x.spotify_album_id IS NOT NULL";
+    /// Fork: user `?1`'s listed Spotify playlists (the import page's
+    /// cache), in Spotify's order: id, name, description, owner name,
+    /// owned, count, cover, snapshot, listed at.
+    pub(super) LISTED_PLAYLISTS = "SELECT spotify_playlist_id, name, description, owner_name, \
+             owned, track_count, cover_url, snapshot_id, listed_at \
+             FROM acquire_spotify_listed_playlists WHERE user_id = ?1 ORDER BY position";
+    /// Fork: forget user `?1`'s listed playlists, Liked Songs kept.
+    pub(super) FORGET_LISTED = "DELETE FROM acquire_spotify_listed_playlists \
+             WHERE user_id = ?1 AND spotify_playlist_id <> 'liked'";
+    /// Fork: forget everything listed for user `?1` (a disconnect).
+    pub(super) FORGET_ALL_LISTED = "DELETE FROM acquire_spotify_listed_playlists \
+             WHERE user_id = ?1";
+    /// Fork: keep one listed playlist (or `liked`) for user `?1`.
+    pub(super) KEEP_LISTED = "INSERT INTO acquire_spotify_listed_playlists (user_id, \
+             spotify_playlist_id, position, name, description, owner_name, owned, track_count, \
+             cover_url, snapshot_id, listed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+             ON CONFLICT (user_id, spotify_playlist_id) DO UPDATE SET position = excluded.position, \
+             name = excluded.name, description = excluded.description, \
+             owner_name = excluded.owner_name, owned = excluded.owned, \
+             track_count = excluded.track_count, cover_url = excluded.cover_url, \
+             snapshot_id = excluded.snapshot_id, listed_at = excluded.listed_at";
     /// Fork: a playlist owner's role and the name their requests show.
     /// Fork: songs asked for by name not yet fetched (failed, or queued
     /// and not started), at most `?1`: request key, owner, artist, album,
@@ -163,9 +193,21 @@ droppedneedle_kernel::sql! {
          WHERE user_id = ?1 AND spotify_artist_id = ?2";
 
     /// The end of the wait Spotify last asked for on rate row `?1`.
-    pub(crate) COOLDOWN_UNTIL = "SELECT until_at FROM acquire_spotify_cooldowns WHERE scope = ?1";
-    /// Keep the end of the wait Spotify asked for on rate row `?1`.
-    pub(crate) KEEP_COOLDOWN = "INSERT INTO acquire_spotify_cooldowns (scope, until_at, updated_at) \
-         VALUES (?1, ?2, ?3) ON CONFLICT (scope) DO UPDATE SET until_at = excluded.until_at, \
-         updated_at = excluded.updated_at";
+    /// Fork: with why it was asked: reason, endpoint, Retry-After, the wait set.
+    pub(crate) COOLDOWN_UNTIL = "SELECT until_at, reason, endpoint, retry_after_secs, wait_ms \
+         FROM acquire_spotify_cooldowns WHERE scope = ?1";
+    /// Keep the end of the wait Spotify asked for on rate row `?1`, and
+    /// why (fork): reason `?4`, endpoint `?5`, Retry-After `?6`, wait `?7`.
+    pub(crate) KEEP_COOLDOWN = "INSERT INTO acquire_spotify_cooldowns (scope, until_at, updated_at, \
+         reason, endpoint, retry_after_secs, wait_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+         ON CONFLICT (scope) DO UPDATE SET until_at = excluded.until_at, \
+         updated_at = excluded.updated_at, reason = excluded.reason, \
+         endpoint = excluded.endpoint, retry_after_secs = excluded.retry_after_secs, \
+         wait_ms = excluded.wait_ms";
+    /// Fork: how many artists user `?1` follows at Spotify, as last read.
+    pub(crate) FOLLOWED_COUNT = "SELECT COUNT(*) FROM acquire_spotify_followed_artists \
+         WHERE user_id = ?1";
+    /// Fork: how many albums user `?1` saved at Spotify, as last read.
+    pub(crate) SAVED_COUNT = "SELECT COUNT(*) FROM acquire_spotify_saved_albums \
+         WHERE user_id = ?1";
 }

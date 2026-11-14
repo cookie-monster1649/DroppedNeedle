@@ -20,7 +20,8 @@
 	import { toastStore } from '$lib/stores/toast';
 	import {
 		getSpotifyPlaylistsQuery,
-		createImportSpotifyPlaylistMutation
+		createImportSpotifyPlaylistMutation,
+		createRefreshSpotifyPlaylistsMutation
 	} from '$lib/features/playlists/queries/spotify.svelte';
 	import { ApiError } from '$lib/api/errors';
 	import { withBasePath } from '$lib/utils/basePath';
@@ -30,6 +31,24 @@
 
 	const playlistsQuery = getSpotifyPlaylistsQuery();
 	const importMutation = createImportSpotifyPlaylistMutation();
+	// Fork: the list is served from what was last read; Spotify is read
+	// again only on this explicit refresh.
+	const refreshMutation = createRefreshSpotifyPlaylistsMutation();
+	const listedAt = $derived(
+		playlistsQuery.data?.listed_at ? new Date(playlistsQuery.data.listed_at).toLocaleString() : null
+	);
+
+	async function handleRefresh() {
+		if (refreshMutation.isPending) return;
+		try {
+			await refreshMutation.mutateAsync();
+		} catch (error) {
+			toastStore.show({
+				message: providerUnavailableMessage(error) ?? 'Could not refresh from Spotify',
+				type: 'error'
+			});
+		}
+	}
 
 	let importing = $state<string | null>(null);
 	let importingAll = $state(false);
@@ -177,9 +196,19 @@
 							<p class="font-semibold">Spotify connected</p>
 							<p class="sp-status__meta">
 								{playlistList.length} playlist{playlistList.length === 1 ? '' : 's'} · {importedCount}
-								imported
+								imported{#if listedAt}
+									· read {listedAt}{/if}
 							</p>
 						</div>
+						<Button
+							variant="outline"
+							size="sm"
+							icon={RefreshCw}
+							onclick={() => void handleRefresh()}
+							disabled={refreshMutation.isPending}
+						>
+							{refreshMutation.isPending ? 'Refreshing…' : 'Refresh from Spotify'}
+						</Button>
 					</div>
 					{#if importingAll}
 						<p class="sp-progress" role="status">

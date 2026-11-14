@@ -42,8 +42,9 @@ use super::lidarr::{
 use super::models::{
     LidarrArtistListResponse, LidarrConnectionSettings, LidarrImportRequest, LidarrImportResponse,
     LidarrTestResponse, SabnzbdStatusResponse, SlskdStatusResponse, SpotifyAuthUrlResponse,
-    SpotifyImportRequest, SpotifyImportResponse, SpotifyImportStatus, SpotifyPlaylistListResponse,
-    SpotifyRedirectUri, SpotifySettings, SpotifySyncState, SpotifySyncUpdate,
+    SpotifyImportRequest, SpotifyImportResponse, SpotifyImportStatus, SpotifyPlaylistListQuery,
+    SpotifyPlaylistListResponse, SpotifyRedirectUri, SpotifySettings, SpotifySyncState,
+    SpotifySyncUpdate,
 };
 use super::models::{
     SpotifyLibraryState, SpotifyLibraryUpdate, SpotifyResolution, SpotifyResolveQuery,
@@ -494,8 +495,10 @@ pub async fn disconnect_spotify(
 }
 
 /// The caller's owned Spotify playlists. Unlinked reads as a 400,
-/// upstream failures as a 502.
+/// upstream failures as a 502. Fork: served from the last listing; Spotify
+/// is read only with `refresh=true` (or when nothing was listed yet).
 #[utoipa::path(get, tag = "imports", path = "/api/v3/acquire/spotify/playlists",
+    params(SpotifyPlaylistListQuery),
     responses(
         (status = 200, description = "Owned playlists", body = SpotifyPlaylistListResponse),
         (status = 503, description = "Spotify is rate limiting this server")
@@ -503,10 +506,11 @@ pub async fn disconnect_spotify(
 pub async fn list_spotify_playlists(
     State(deps): State<ImportsDeps>,
     User(principal): User,
+    ValidQuery(query): ValidQuery<SpotifyPlaylistListQuery>,
 ) -> Result<Json<SpotifyPlaylistListResponse>, ApiError> {
     let playlists = deps
         .spotify_service()
-        .list_playlists(principal.user_id())
+        .list_playlists(principal.user_id(), query.refresh)
         .await
         .map_err(|error| match error {
             ImportFailure::Settings(error) => settings_failed(error),
@@ -525,7 +529,7 @@ fn spotify_failed(error: SpotifyError) -> ImportsError {
         SpotifyError::Unavailable(detail) => ImportsError::Unavailable {
             cause: format!("spotify playlist list failed: {detail}"),
         },
-        SpotifyError::RateLimited { retry_after } => ImportsError::SpotifyPaced { retry_after },
+        SpotifyError::RateLimited { retry_after, .. } => ImportsError::SpotifyPaced { retry_after },
         SpotifyError::Store(cause) => ImportsError::internal(&cause),
         SpotifyError::Busy => ImportsError::Busy {
             cause: "spotify store busy".to_owned(),

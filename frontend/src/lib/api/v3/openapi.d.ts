@@ -300,7 +300,8 @@ export interface paths {
         };
         /**
          * The caller's owned Spotify playlists. Unlinked reads as a 400,
-         *     upstream failures as a 502.
+         *     upstream failures as a 502. Fork: served from the last listing; Spotify
+         *     is read only with `refresh=true` (or when nothing was listed yet).
          */
         get: operations["list_spotify_playlists"];
         put?: never;
@@ -24132,6 +24133,13 @@ export interface components {
              */
             liked_songs?: null | components["schemas"]["SpotifyPlaylistItem"];
             /**
+             * Format: int64
+             * @description Fork: when the list was read at Spotify (epoch milliseconds). The
+             *     page shows what was last read; it reads Spotify again only when
+             *     asked to refresh.
+             */
+            listed_at?: number | null;
+            /**
              * @description Fork: the link predates the library scopes: connect Spotify again to
              *     read Liked Songs, saved albums and followed artists. Imported
              *     playlists stay.
@@ -26584,7 +26592,10 @@ export interface operations {
     };
     list_spotify_playlists: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Read the list at Spotify now instead of showing the last one. */
+                refresh?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;

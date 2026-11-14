@@ -596,8 +596,19 @@
         "tags": [
           "imports"
         ],
-        "summary": "The caller's owned Spotify playlists. Unlinked reads as a 400,\nupstream failures as a 502.",
+        "summary": "The caller's owned Spotify playlists. Unlinked reads as a 400,\nupstream failures as a 502. Fork: served from the last listing; Spotify\nis read only with `refresh=true` (or when nothing was listed yet).",
         "operationId": "list_spotify_playlists",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "description": "Read the list at Spotify now instead of showing the last one.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Owned playlists",
@@ -67610,6 +67621,14 @@
               }
             ],
             "description": "Fork: the caller's Liked Songs as a playlist (id `liked`), when the\nlink may read them."
+          },
+          "listed_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Fork: when the list was read at Spotify (epoch milliseconds). The\npage shows what was last read; it reads Spotify again only when\nasked to refresh."
           },
           "needs_reconnect": {
             "type": "boolean",

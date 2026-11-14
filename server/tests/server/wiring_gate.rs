@@ -94,6 +94,10 @@ const RULES: &[Rule] = &[
                 "library/src/tags/picard.rs",
                 "a compiled regular expression",
             ),
+            (
+                "providers/src/spotify.rs",
+                "fork: the reason of the last Spotify 429, handed from the spec's plain classify fn to the caller, which takes it right after the refused call",
+            ),
         ],
     },
     Rule {

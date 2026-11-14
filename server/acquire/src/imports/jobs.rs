@@ -47,6 +47,8 @@ pub const NOT_LINKED: &str = "SPOTIFY_NOT_LINKED";
 pub const UNAVAILABLE: &str = "SPOTIFY_UNAVAILABLE";
 /// Spotify kept asking us to slow down.
 pub const RATE_LIMITED: &str = "SPOTIFY_RATE_LIMITED";
+/// Fork: Spotify's allowance for this app is used up for now.
+pub const QUOTA_USED: &str = "SPOTIFY_QUOTA_USED";
 /// The playlist could not be saved.
 pub const SAVE_FAILED: &str = "SPOTIFY_SAVE_FAILED";
 
@@ -87,6 +89,7 @@ pub fn failure_message(code: Option<&str>) -> &'static str {
         Some(NOT_LINKED) => "Spotify account not linked",
         Some(UNAVAILABLE) => "Failed to fetch playlist from Spotify",
         Some(RATE_LIMITED) => "Spotify is limiting requests. Try again later",
+        Some(QUOTA_USED) => "Spotify quota used up. The import tries again by itself later",
         Some(SAVE_FAILED) => "Failed to save the imported playlist",
         _ => "The import did not finish",
     }
@@ -208,9 +211,9 @@ impl JobHandler for SpotifyImportJobs {
                     UNAVAILABLE
                 }
                 // The wait Spotify named decides the next try.
-                Err(ImportFailure::Spotify(SpotifyError::RateLimited { retry_after })) => {
+                Err(ImportFailure::Spotify(SpotifyError::RateLimited { retry_after, quota })) => {
                     return Outcome::Retry {
-                        code: RATE_LIMITED,
+                        code: if quota { QUOTA_USED } else { RATE_LIMITED },
                         at: retry_after.map(|secs| {
                             service
                                 .now_ms()
