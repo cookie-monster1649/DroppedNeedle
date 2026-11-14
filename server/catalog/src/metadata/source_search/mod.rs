@@ -113,6 +113,9 @@ pub(crate) fn merge_hits(
             score: 60_i32
                 .saturating_sub(i32::try_from(rank).unwrap_or(60) * 2)
                 .max(1),
+            // Fork: Deezer gives no release count; an exact title still
+            // ranks as exact, after MusicBrainz's exact groups that have one.
+            releases: None,
         });
     }
     out
@@ -274,6 +277,7 @@ mod tests {
             disambiguation: None,
             type_info: None,
             score: 100,
+            releases: None,
         }
     }
 

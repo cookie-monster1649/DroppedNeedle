@@ -614,7 +614,7 @@ impl Live {
                 Ok(())
             })
             .await;
-        kept.map_err(|error| ResolveError::Store(error))?;
+        kept.map_err(ResolveError::Store)?;
         Ok(virtual_ids::mint(
             catalogue::PROVIDER,
             Kind::ReleaseGroup,
@@ -982,7 +982,7 @@ impl Lookups for Live {
                     )?)
                 })
                 .await
-                .map_err(|error| ResolveError::Store(error))?;
+                .map_err(ResolveError::Store)?;
             Ok(Some(kept))
         })
     }
