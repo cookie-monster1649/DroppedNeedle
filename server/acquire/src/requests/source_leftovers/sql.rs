@@ -2,13 +2,16 @@
 
 droppedneedle_kernel::sql! {
     /// Album tasks on stand-in groups that settled partial or failed
-    /// between `?1` and `?2` with no later task for the same group:
+    /// between `?1` and `?2` with no later task for the same group, and
+    /// not linked to a MusicBrainz group (fork):
     /// id, owner, plan.
     pub(super) SETTLED_SOURCE_TASKS = "SELECT t.id, t.user_id, t.plan_json \
            FROM download_tasks t \
           WHERE t.download_type = 'album' AND t.status IN ('partial', 'failed') \
             AND t.release_group_mbid LIKE 'd0ab1e00-50c3-8%' \
             AND t.updated_at > ?1 AND t.updated_at <= ?2 \
+            AND NOT EXISTS (SELECT 1 FROM source_links l \
+                 WHERE l.stand_in = lower(t.release_group_mbid)) \
             AND NOT EXISTS (SELECT 1 FROM download_tasks n \
                  WHERE n.release_group_mbid = t.release_group_mbid \
                    AND n.download_type = 'album' \

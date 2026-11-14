@@ -863,6 +863,15 @@ pub fn library_folder_wait(folder: Option<&std::path::Path>, problem: FolderProb
     }
 }
 
+/// Fork: the answer to a person's match that did not take: the reason,
+/// what it was about (`detail`, when known), and what to do.
+pub fn refusal(reason: Reason, detail: Option<&str>) -> String {
+    match detail.map(str::trim).filter(|detail| !detail.is_empty()) {
+        Some(detail) => format!("{} {detail} {}", reason.message(), reason.action()),
+        None => format!("{} {}", reason.message(), reason.action()),
+    }
+}
+
 /// Log each stored spelling this version does not know, once per start.
 /// Readers take such a spelling as [`Reason::HeldByEarlierVersion`]
 /// without a word, so this is the one place it is logged.

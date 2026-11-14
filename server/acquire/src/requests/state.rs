@@ -49,6 +49,9 @@ pub struct RequestsState {
     /// Users' notices: a follower hears when someone else's ask starts
     /// their followed artist's release.
     pub events: droppedneedle_kernel::events::EventHub,
+    /// Fork: the MusicBrainz check a request for a stand-in album runs
+    /// first ([`crate::stand_ins::LinkedOnly`] reads only links made).
+    pub stand_ins: Arc<dyn crate::stand_ins::StandInCheck>,
 }
 
 /// What the Weekly Mix routes read: the requests state and the mix
@@ -88,6 +91,8 @@ pub struct RequestsPorts {
     pub albums: droppedneedle_library::removal::Mutations,
     /// See [`RequestsState::events`].
     pub events: droppedneedle_kernel::events::EventHub,
+    /// See [`RequestsState::stand_ins`].
+    pub stand_ins: Arc<dyn crate::stand_ins::StandInCheck>,
 }
 
 impl RequestsState {
@@ -114,6 +119,7 @@ impl RequestsState {
             readiness: ports.readiness,
             albums: ports.albums,
             events: ports.events,
+            stand_ins: ports.stand_ins,
         }
     }
 }

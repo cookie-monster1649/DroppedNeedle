@@ -64,6 +64,13 @@ function actionSummary(result: HeldActionResult): string {
 	return result.message ? `${summary}. ${result.message}` : summary;
 }
 
+// Fork: an action that moved no file is a warning, never a quiet "info".
+export function heldToastType(result: HeldActionResult): 'success' | 'info' | 'warning' {
+	if (result.imported > 0) return 'success';
+	if (result.already_owned > 0 || result.discarded > 0 || result.still_held > 0) return 'info';
+	return 'warning';
+}
+
 // A held action can move files into the library, end a download's hold and
 // settle a drop item: refresh the queue (which holds the held lists), the
 // import jobs, and, when files went in, the library surfaces that show them.
@@ -98,7 +105,7 @@ export function createHeldMutation<I extends HeldFilesInput>(
 		onSuccess: (result: HeldActionResult) => {
 			toastStore.show({
 				message: actionSummary(result),
-				type: result.imported > 0 ? 'success' : 'info'
+				type: heldToastType(result)
 			});
 		},
 		effects: (result: HeldActionResult, input: I) => {

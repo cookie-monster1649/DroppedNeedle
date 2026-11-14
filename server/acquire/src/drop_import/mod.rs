@@ -414,24 +414,26 @@ impl DropImports {
                 return Err(DropError::Busy("drop match edition read".to_owned()));
             }
             other => {
-                let reason = match other {
+                let (reason, detail) = match other {
                     Outcome::Unavailable(detail) => {
                         tracing::warn!(item_id, %detail, "drop match: MusicBrainz unavailable");
-                        Reason::MusicbrainzUnavailable
+                        (Reason::MusicbrainzUnavailable, None)
                     }
-                    Outcome::AcoustidUnavailable => Reason::AcoustidUnavailable,
-                    Outcome::Review { reason, .. } => reason,
-                    Outcome::Matched(_) | Outcome::Busy | Outcome::Closed => Reason::ImportFailed,
+                    Outcome::AcoustidUnavailable => (Reason::AcoustidUnavailable, None),
+                    Outcome::Review { reason, detail } => (reason, detail),
+                    Outcome::Matched(_) | Outcome::Busy | Outcome::Closed => {
+                        (Reason::ImportFailed, None)
+                    }
                 };
                 let mut back = item.clone();
                 back.status = DropItemStatus::NeedsReview;
                 self.store
                     .save_item(&back, DropItemStatus::Processing)
                     .await?;
-                return Err(DropError::Invalid(format!(
-                    "{} {}",
-                    reason.message(),
-                    reason.action()
+                // Fork: the detail says why the picked album did not take.
+                return Err(DropError::Invalid(crate::reason::refusal(
+                    reason,
+                    detail.as_deref(),
                 )));
             }
         };
@@ -466,8 +468,34 @@ impl DropImports {
                 FileFate::Held(..) => matched.held += 1,
             }
         }
+        // Fork: files asked for as a stand-in album went in under the
+        // MusicBrainz album the person picked: link the two.
+        let placed = summary.best().map(|found| {
+            (
+                found.release.release_group_id.clone(),
+                found.release.title.clone(),
+            )
+        });
         self.finish(&job, organised, Some(entry)).await;
+        if matched.imported + matched.owned > 0
+            && let (Some((group, title)), Some(asked)) = (placed, entry.release_group_mbid.clone())
+        {
+            let asked_title = entry.album_title.clone().unwrap_or_default();
+            crate::stand_ins::link_after_match(
+                self.store.db(),
+                self.ticks.as_ref(),
+                vec![(asked, asked_title)],
+                group,
+                title,
+            )
+            .await;
+        }
         Ok(matched)
+    }
+
+    /// Fork: where import events and fulfilled requests are announced.
+    pub(crate) fn ticks(&self) -> &Arc<dyn TickSink> {
+        &self.ticks
     }
 
     /// The import folder's real path for an import-folder job, checked now;

@@ -414,6 +414,32 @@ impl LandingLibrary for LibraryLanding {
         priority: RequestPriority,
     ) -> BoxFuture<'a, Result<Vec<ReleaseHit>, SourceError>> {
         Box::pin(async move {
+            // Fork: a stand-in group is not in MusicBrainz's search index;
+            // its releases are the stand-in releases the library minted for
+            // its Deezer album and editions, read from there on lookup.
+            if droppedneedle_providers::virtual_ids::is_virtual(release_group_mbid) {
+                let group = release_group_mbid.to_ascii_lowercase();
+                let read = group.clone();
+                let ids = self
+                    .library
+                    .db
+                    .read("landing.stand_in_releases", move |conn| {
+                        droppedneedle_library::sources::links::releases(conn, &read)
+                            .map_err(DbError::from)
+                    })
+                    .await
+                    .map_err(|error| SourceError(error.to_string()))?;
+                return Ok(ids
+                    .into_iter()
+                    .map(|id| ReleaseHit {
+                        id,
+                        release_group_id: group.clone(),
+                        score: 100,
+                        track_count: None,
+                        title: String::new(),
+                    })
+                    .collect());
+            }
             Ok(
                 group_editions(self.releases.at(priority).as_ref(), release_group_mbid)
                     .await?

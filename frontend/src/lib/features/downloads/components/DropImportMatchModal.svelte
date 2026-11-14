@@ -8,6 +8,8 @@
 	import Input from '$lib/ui/Input.svelte';
 	import Modal from '$lib/ui/Modal.svelte';
 	import SpotifyMatchList from '$lib/features/downloads/components/SpotifyMatchList.svelte';
+	import { sourceBadge } from '$lib/features/search/source/sourceBadge';
+	import { pickerAlbums, matchMoved } from '$lib/features/downloads/components/matchPicker';
 
 	// Curators pick the album a held entry's files belong to; the app pairs them.
 	interface Props {
@@ -29,7 +31,8 @@
 
 	const searchQuery = getAlbumSearchQuery(() => searchTerm);
 	const match = createMatchHeldMutation();
-	const results = $derived(searchQuery.data ?? []);
+	// Fork: MusicBrainz albums first, then the Deezer albums it lacks.
+	const results = $derived(pickerAlbums(searchQuery.data ?? []));
 	// Fork: the Spotify songs search the typed words once the person types;
 	// until then, the held file's own title.
 	const initialSearch = untrack(() => searchTerm);
@@ -39,12 +42,14 @@
 	async function pick(album: Album) {
 		if (match.isPending) return;
 		try {
-			await match.mutateAsync({
+			const result = await match.mutateAsync({
 				entryId,
 				matchMbid: album.musicbrainz_id,
 				releaseGroupMbid
 			});
-			onclose();
+			// Fork: a match that moved no file keeps the picker open; the
+			// toast says why.
+			if (matchMoved(result)) onclose();
 		} catch {
 			// the mutation's onError already toasted; keep the modal open to retry
 		}
@@ -91,7 +96,14 @@
 					alt=""
 				/>
 				<div class="min-w-0">
-					<p class="truncate text-sm font-medium">{album.title}</p>
+					<p class="truncate text-sm font-medium">
+						{album.title}
+						{#if sourceBadge(album.musicbrainz_id)}
+							<span class="badge badge-xs badge-ghost ml-1 align-middle"
+								>{sourceBadge(album.musicbrainz_id)}</span
+							>
+						{/if}
+					</p>
 					<p class="truncate text-xs text-muted">
 						{album.artist || 'Unknown artist'}{album.year ? ` · ${album.year}` : ''}
 					</p>
