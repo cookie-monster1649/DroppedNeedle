@@ -371,6 +371,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/acquire/spotify/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork: "Sync all now": check the user's synced playlists and Liked Songs
+         *     now, in the background. At most once per five minutes, and never while
+         *     Spotify's wait runs; the 409 carries the sentence to show.
+         */
+        post: operations["sync_all_spotify"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/acquire/spotify/synced/{playlist_id}": {
         parameters: {
             query?: never;
@@ -24058,7 +24079,7 @@ export interface components {
         /** @description Fork: the caller's Spotify library sync (Profile, Spotify card). */
         SpotifyLibraryState: {
             /**
-             * @description Saved albums are read again every 15 minutes; new ones are flagged
+             * @description Saved albums are read again every 2 hours; new ones are flagged
              *     for review, never requested by themselves.
              */
             album_sync: boolean;
@@ -24232,7 +24253,7 @@ export interface components {
              */
             checked_at?: number | null;
             /**
-             * @description The playlist is checked against Spotify every 15 minutes and
+             * @description The playlist is checked against Spotify every 2 hours and
              *     imported again when it changed there.
              */
             enabled: boolean;
@@ -26718,6 +26739,33 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpotifySettings"];
+                };
+            };
+        };
+    };
+    sync_all_spotify: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Refused: too soon, or Spotify asked to wait */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };

@@ -32,8 +32,8 @@
 //!   one does not start; "Sync now" runs a part at most once in
 //!   [`SYNC_NOW_GAP`].
 //!
-//! The playlist sync runs [`SpotifyLibrary::run_once`] each pass (every 15
-//! minutes); "Sync now" runs one part for one user in the background.
+//! The playlist sync runs [`SpotifyLibrary::run_once`] each pass (every two
+//! hours); "Sync now" runs one part for one user in the background.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -91,10 +91,10 @@ const REFETCH_MS: i64 = 30 * DAY_MS;
 /// limited read); the rest wait for the next pass.
 pub const ARTIST_FETCHES_PER_PASS: usize = 10;
 
-/// How often the 15-minute loop reads the followed artists.
+/// How often the sync loop reads the followed artists.
 const ARTISTS_EVERY_MS: i64 = DAY_MS;
 
-/// How often the 15-minute loop reads every saved album (for un-saves);
+/// How often the sync loop reads every saved album (for un-saves);
 /// between, it stops at the first page it knows.
 const ALBUMS_FULL_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -411,7 +411,7 @@ impl SpotifyLibrary {
     }
 
     /// The card's line for the wait left now.
-    fn cooling_message(&self) -> String {
+    pub(crate) fn cooling_message(&self) -> String {
         rate_limited_message(
             self.service.client().refusal_kind(),
             self.cooling_for(),
@@ -764,7 +764,7 @@ impl SpotifyLibrary {
         }
     }
 
-    /// One pass for every user with a sync on (the 15-minute loop).
+    /// One pass for every user with a sync on (the playlist sync loop).
     ///
     /// Followed artists are read once a day, or sooner while a sync cut
     /// short left artists never looked up; saved albums every pass, every

@@ -791,6 +791,37 @@
         ]
       }
     },
+    "/api/v3/acquire/spotify/sync": {
+      "post": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: \"Sync all now\": check the user's synced playlists and Liked Songs\nnow, in the background. At most once per five minutes, and never while\nSpotify's wait runs; the 409 carries the sentence to show.",
+        "operationId": "sync_all_spotify",
+        "responses": {
+          "202": {
+            "description": "Started"
+          },
+          "409": {
+            "description": "Refused: too soon, or Spotify asked to wait",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/acquire/spotify/synced/{playlist_id}": {
       "get": {
         "tags": [
@@ -67474,7 +67505,7 @@
         "properties": {
           "album_sync": {
             "type": "boolean",
-            "description": "Saved albums are read again every 15 minutes; new ones are flagged\nfor review, never requested by themselves."
+            "description": "Saved albums are read again every 2 hours; new ones are flagged\nfor review, never requested by themselves."
           },
           "albums_checked_at": {
             "type": [
@@ -67862,7 +67893,7 @@
           },
           "enabled": {
             "type": "boolean",
-            "description": "The playlist is checked against Spotify every 15 minutes and\nimported again when it changed there."
+            "description": "The playlist is checked against Spotify every 2 hours and\nimported again when it changed there."
           },
           "last_error": {
             "type": [

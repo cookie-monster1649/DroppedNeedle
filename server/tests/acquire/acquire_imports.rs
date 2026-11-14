@@ -201,6 +201,24 @@ fn rig_with(
     let probe_cache = Arc::new(ProbeCache::new(clients.clone()));
     let probes = Arc::new(LiveProbes::new(probe_cache.clone()));
     let worker_settings = Arc::new(WorkerSettings::new(&platform.settings, clients.clone()));
+    let spotify_library = Arc::new(imports::spotify_library::SpotifyLibrary::new(
+        service.clone(),
+        imports::spotify_resolve::Live::new(
+            resolver.clone(),
+            providers.previews.clone(),
+            AcquireDb::new(platform.db.clone(), platform.clock.clone()),
+            droppedneedle_providers::RequestPriority::BackgroundSync,
+        ),
+        AcquireDb::new(platform.db.clone(), platform.clock.clone()),
+        follows.clone(),
+    ));
+    let spotify_sync = Arc::new(imports::spotify_sync::SpotifySync::new(
+        service.clone(),
+        spotify_playlists.clone(),
+        syncs.clone(),
+        Arc::new(Asked::default()),
+        spotify_library.clone(),
+    ));
     let deps = ImportsDeps {
         lidarr: LidarrClient::new(http),
         lidarr_settings,
@@ -213,17 +231,8 @@ fn rig_with(
         resolver: resolver.clone(),
         spotify_imports,
         spotify_syncs: syncs.clone(),
-        spotify_library: Arc::new(imports::spotify_library::SpotifyLibrary::new(
-            service.clone(),
-            imports::spotify_resolve::Live::new(
-                resolver.clone(),
-                providers.previews.clone(),
-                AcquireDb::new(platform.db.clone(), platform.clock.clone()),
-                droppedneedle_providers::RequestPriority::BackgroundSync,
-            ),
-            AcquireDb::new(platform.db.clone(), platform.clock.clone()),
-            follows.clone(),
-        )),
+        spotify_library,
+        spotify_sync,
         probes: Arc::new(LiveProbes::bundle(&probes)),
         ids: Arc::new(FixedIdGenerator),
         base_path: String::new(),
@@ -2145,6 +2154,82 @@ async fn liked_songs_sync_as_a_playlist_and_lose_unliked_songs() {
         asked.0.lock().unwrap().is_empty(),
         "an unlike asks for nothing"
     );
+}
+
+/// Fork: press "Sync all now"; answers the status and the body as text
+/// (a 202 has none).
+async fn sync_all(app: Router) -> (StatusCode, String) {
+    let response = app
+        .oneshot(
+            Request::post("/api/v3/acquire/spotify/sync")
+                .header("host", "app.test")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router answers");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body reads");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Fork: "Sync all now" runs the playlist sync for the user in the
+/// background (an unlike reaches Liked Songs without waiting two hours),
+/// and a second press within five minutes is refused with the wait.
+#[tokio::test]
+async fn sync_all_now_syncs_liked_songs_once_per_five_minutes() {
+    use imports::spotify_sync::SpotifySync;
+    let (_auth, bundle, deps, recorder, user_id, _guards) = library_rig().await;
+    let (status, body) = post_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/playlists/liked/import",
+        json!({"name": "Liked Songs"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let playlist_id = body["playlist_id"].as_str().expect("id").to_owned();
+    assert_eq!(
+        poll_job_done(&bundle, &user_id, "liked").await,
+        ImportState::Done
+    );
+    let (status, body) = put_json(
+        authed_app(deps.clone(), &user_id, Role::User),
+        &format!("/api/v3/acquire/spotify/synced/{playlist_id}"),
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let mut deps = deps;
+    deps.spotify_sync = Arc::new(SpotifySync::new(
+        bundle.service.clone(),
+        bundle.bridge.clone(),
+        bundle.syncs.clone(),
+        Arc::new(Asked::default()),
+        deps.spotify_library.clone(),
+    ));
+    recorder.unlike_song();
+    let (status, body) = sync_all(authed_app(deps.clone(), &user_id, Role::User)).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let (status, body) = sync_all(authed_app(deps.clone(), &user_id, Role::User)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("Try again in"), "{body}");
+
+    let mut names = Vec::new();
+    for _ in 0..100 {
+        names = playlist_rows(&bundle.playlists, &user_id, &playlist_id)
+            .await
+            .into_iter()
+            .map(|row| row.track_name)
+            .collect::<Vec<String>>();
+        if names.len() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(names, vec!["Glass Tides".to_owned()], "the unlike synced");
 }
 
 async fn followed(db: &Db, user_id: &str) -> Vec<(String, i64)> {
