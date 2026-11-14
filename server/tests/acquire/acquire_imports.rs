@@ -222,6 +222,7 @@ fn rig_with(
         syncs.clone(),
         Arc::new(Asked::default()),
         spotify_library.clone(),
+        Arc::new(droppedneedle_acquire::playlist_import::hold::PlaylistHold::default()),
     ));
     let deps = ImportsDeps {
         lidarr: LidarrClient::new(http),
@@ -1216,6 +1217,7 @@ async fn a_synced_spotify_playlist_follows_spotify_and_asks_for_new_songs() {
         bundle.syncs.clone(),
         asked.clone(),
         bundle.deps.spotify_library.clone(),
+        Arc::new(droppedneedle_acquire::playlist_import::hold::PlaylistHold::default()),
     );
     assert_eq!(sync.run_once().await, 1, "the first check imports");
     assert!(
@@ -1272,6 +1274,85 @@ async fn a_synced_spotify_playlist_follows_spotify_and_asks_for_new_songs() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["enabled"], false);
     assert!(bundle.syncs.rows().await.expect("rows").is_empty());
+}
+
+/// Fork: while a playlist-folder import covers a synced playlist, the
+/// songs a sync finds are held back, not asked for, and asked for once the
+/// hold lifts. Another user's playlists that Spotify refuses read as a
+/// refusal (the import's public match notes it and goes on).
+#[tokio::test]
+async fn a_playlist_import_hold_defers_a_syncs_asks_until_released() {
+    use droppedneedle_acquire::imports::spotify_client::is_refused;
+    use droppedneedle_acquire::playlist_import::hold::PlaylistHold;
+    use imports::spotify_sync::SpotifySync;
+    let (auth, admin_id, user_id) = seed_rig().await;
+    let (api, accounts, covers, recorder) = serve_spotify().await.expect("mock serves");
+    let _musicbrainz = serve_musicbrainz(&auth).await;
+    let bundle = rig_for(
+        &auth,
+        &api.base_url,
+        &accounts.base_url,
+        Some(&covers.base_url),
+    );
+    seed_spotify_app(bundle.deps.clone(), &admin_id).await;
+    link_spotify(bundle.deps.clone(), &recorder, &user_id).await;
+    let (status, body) = post_json(
+        authed_app(bundle.deps.clone(), &user_id, Role::User),
+        "/api/v3/acquire/spotify/playlists/sp-playlist-1/import",
+        json!({"name": "Neon Nights"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let playlist_id = body["playlist_id"].as_str().expect("id").to_owned();
+    assert_eq!(
+        poll_job_done(&bundle, &user_id, "sp-playlist-1").await,
+        ImportState::Done
+    );
+    let (status, _) = put_json(
+        authed_app(bundle.deps.clone(), &user_id, Role::User),
+        &format!("/api/v3/acquire/spotify/synced/{playlist_id}"),
+        json!({"enabled": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let asked = Arc::new(Asked::default());
+    let hold = Arc::new(PlaylistHold::default());
+    hold.set_playlists(["sp-playlist-1".to_owned()].into());
+    let sync = SpotifySync::new(
+        bundle.service.clone(),
+        bundle.bridge.clone(),
+        bundle.syncs.clone(),
+        asked.clone(),
+        bundle.deps.spotify_library.clone(),
+        hold.clone(),
+    );
+    assert_eq!(sync.run_once().await, 1, "the first check imports");
+    recorder.grow_playlist();
+    assert_eq!(sync.run_once().await, 1, "a new snapshot imports");
+    assert!(asked.0.lock().unwrap().is_empty(), "the ask is held");
+    assert_eq!(hold.status().state, "holding");
+    assert_eq!(hold.status().deferred_songs, 1);
+    assert_eq!(sync.ask_deferred(hold.release()).await, 1);
+    assert_eq!(*asked.0.lock().unwrap(), vec!["Paper Lanterns".to_owned()]);
+    assert_eq!(hold.status().state, "released");
+
+    // Another user's playlists, refused as a development-mode app is.
+    let (refresher, _) = bundle
+        .service
+        .access(
+            &user_id,
+            droppedneedle_providers::RequestPriority::BackgroundSync,
+        )
+        .await
+        .unwrap_or_else(|_| panic!("linked"));
+    let refused = bundle
+        .service
+        .client()
+        .public_playlists(&refresher, "someone-else")
+        .await
+        .expect_err("refused");
+    assert!(is_refused(&refused), "{refused:?}");
 }
 
 /// Spotify app settings that do not read are never an empty app. Starting
@@ -2168,6 +2249,7 @@ async fn liked_songs_sync_as_a_playlist_and_lose_unliked_songs() {
         bundle.syncs.clone(),
         asked.clone(),
         bundle.deps.spotify_library.clone(),
+        Arc::new(droppedneedle_acquire::playlist_import::hold::PlaylistHold::default()),
     );
     assert_eq!(sync.run_once().await, 1, "the first check imports");
     assert_eq!(sync.run_once().await, 0, "nothing liked or unliked");
@@ -2236,6 +2318,7 @@ async fn sync_all_now_syncs_liked_songs_once_per_five_minutes() {
         bundle.syncs.clone(),
         Arc::new(Asked::default()),
         deps.spotify_library.clone(),
+        Arc::new(droppedneedle_acquire::playlist_import::hold::PlaylistHold::default()),
     ));
     recorder.unlike_song();
     let (status, body) = sync_all(authed_app(deps.clone(), &user_id, Role::User)).await;

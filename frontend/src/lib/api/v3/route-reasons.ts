@@ -90,5 +90,15 @@ export const ROUTE_REASONS: readonly { method: string; path: string; reason: str
 		method: 'GET',
 		path: '/api/v3/admin/playlist-import/status',
 		reason: 'fork admin tool read by scripts; no page'
+	},
+	{
+		method: 'POST',
+		path: '/api/v3/admin/playlist-import/stop',
+		reason: 'fork admin tool run by scripts; no page'
+	},
+	{
+		method: 'POST',
+		path: '/api/v3/admin/playlist-import/release-hold',
+		reason: 'fork admin tool run by scripts; no page'
 	}
 ];

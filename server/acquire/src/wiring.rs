@@ -697,6 +697,11 @@ impl AcquireSetup {
             db.clone(),
             core.requests.follows.clone(),
         ));
+        // Fork: the playlist-folder import's download hold, shared with the
+        // playlist sync.
+        let playlist_hold = Arc::new(crate::playlist_import::hold::PlaylistHold::at(
+            crate::playlist_import::reports_dir(&db).join("hold.json"),
+        ));
         let spotify_sync = Arc::new(crate::imports::spotify_sync::SpotifySync::new(
             spotify_service.clone(),
             spotify_playlists.clone(),
@@ -705,7 +710,14 @@ impl AcquireSetup {
                 core.requests.clone(),
             )),
             spotify_library.clone(),
+            playlist_hold.clone(),
         ));
+        let playlist_spotify = crate::playlist_import::SpotifyParts {
+            service: spotify_service.clone(),
+            library: spotify_library.clone(),
+            sync: spotify_sync.clone(),
+            hold: playlist_hold,
+        };
         let spotify_import_jobs = Arc::new(SpotifyImportJobs::new(spotify_service, events.clone()));
         let spotify_imports = SpotifyImports::new(platform.db.clone(), queue);
         let probes = Arc::new(LiveProbes::new(probe_cache.clone()));
@@ -805,6 +817,7 @@ impl AcquireSetup {
             db.clone(),
             background_lookups.clone(),
             landing.library().clone(),
+            playlist_spotify,
         ));
 
         Ok(Self {

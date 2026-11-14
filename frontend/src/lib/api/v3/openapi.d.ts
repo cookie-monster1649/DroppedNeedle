@@ -596,6 +596,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/admin/playlist-import/release-hold": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork: release the download hold now: synced playlists the import
+         *     covers ask for their songs again, and the songs held back are asked for.
+         *     `POST /api/v3/admin/playlist-import/release-hold`.
+         */
+        post: operations["playlist_import_release_hold_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/admin/playlist-import/run": {
         parameters: {
             query?: never;
@@ -630,6 +651,27 @@ export interface paths {
         get: operations["playlist_import_status_handler"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/admin/playlist-import/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork: stop a running import gracefully: it ends after the file it is
+         *     on, and what it did is kept for the next run.
+         *     `POST /api/v3/admin/playlist-import/stop`.
+         */
+        post: operations["playlist_import_stop_handler"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16008,6 +16050,15 @@ export interface components {
              */
             total_pages: number;
         };
+        /** @description The hold's state, for the status. */
+        HoldStatus: {
+            /** @description Songs held back, waiting to be asked for. */
+            deferred_songs: number;
+            /** @description Spotify playlists the hold covers. */
+            playlists: number;
+            /** @description `off` (no playlists known), `holding`, `released` or `finished`. */
+            state: string;
+        };
         /**
          * @description Home: its sections, in page order, plus the page-level fields. A
          *     section with no rows is left out.
@@ -21125,14 +21176,26 @@ export interface components {
             /** @description Whether a source folder is set. */
             configured: boolean;
             done: number;
+            /** @description Fork: the download hold on synced playlists the import covers. */
+            hold: components["schemas"]["HoldStatus"];
             /** @description How the last run ended. */
             last?: string | null;
             mode?: null | components["schemas"]["Mode"];
+            /**
+             * @description Fork: what the step is waiting on, when it waits (Spotify's rate
+             *     limit).
+             */
+            note?: string | null;
             /** @description Where the reports are written. */
             reports: string;
             /** @description A run is going. */
             running: boolean;
-            /** @description `walking`, `reading`, `resolving`, `importing`, `done`, `failed`. */
+            /** @description Fork: whether the public Spotify playlist match is set. */
+            spotify_match: boolean;
+            /**
+             * @description `walking`, `reading`, `resolving`, `spotify`, `matching`,
+             *     `importing`, `done`, `stopped`, `failed`.
+             */
             step: string;
             total: number;
         };
@@ -27518,6 +27581,25 @@ export interface operations {
             };
         };
     };
+    playlist_import_release_hold_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Progress"];
+                };
+            };
+        };
+    };
     playlist_import_run_handler: {
         parameters: {
             query?: never;
@@ -27538,6 +27620,25 @@ export interface operations {
         };
     };
     playlist_import_status_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Progress"];
+                };
+            };
+        };
+    };
+    playlist_import_stop_handler: {
         parameters: {
             query?: never;
             header?: never;

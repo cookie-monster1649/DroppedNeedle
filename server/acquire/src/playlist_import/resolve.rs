@@ -24,6 +24,9 @@ pub enum Via {
     BarcodeMusicbrainz,
     NameMusicbrainz,
     NameDeezer,
+    /// Fork: matched to an entry of the folder's public Spotify playlist,
+    /// then resolved by that entry's ISRC or album.
+    SpotifyPlaylist,
 }
 
 /// A resolved file.
@@ -84,7 +87,7 @@ pub fn facts(
 }
 
 /// A Deezer answer, checked at MusicBrainz.
-async fn from_deezer(
+pub(super) async fn from_deezer(
     via: Via,
     stand_in: String,
     recording: String,

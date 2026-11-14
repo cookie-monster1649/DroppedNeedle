@@ -20,7 +20,7 @@ use super::spotify_usage::{RefusalKind, SpotifyUsage};
 use droppedneedle_kernel::clock::Clock;
 use droppedneedle_providers::images::ImageClient;
 use droppedneedle_providers::spotify::models::{
-    AlbumDetail, EntryTrack, Image, PlaylistEntry, PlaylistInfo, Profile, SavedAlbum,
+    AlbumDetail, EntryTrack, Image, PlaylistEntry, PlaylistHead, PlaylistInfo, Profile, SavedAlbum,
     SimplifiedPlaylist, SpotifyArtist, TrackCount,
 };
 use droppedneedle_providers::spotify::{self, TokenGrant};
@@ -126,6 +126,14 @@ pub fn unavailable_message(detail: &str) -> String {
     } else {
         "Spotify answered with an error".to_owned()
     }
+}
+
+/// Fork: Spotify refused to read what was asked (403), or said there is
+/// none (404): for another user's playlists, a development-mode app's
+/// limit rather than an outage.
+pub fn is_refused(error: &SpotifyError) -> bool {
+    matches!(error, SpotifyError::Unavailable(detail)
+        if detail.contains("(403)") || detail.contains("(404)"))
 }
 
 /// A provider failure as the import sees it.
@@ -358,6 +366,47 @@ impl SpotifyClient {
         Ok(playlists)
     }
 
+    /// Fork: another user's public playlists, page by page
+    /// (`/users/{id}/playlists`).
+    pub async fn public_playlists(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        user_id: &str,
+    ) -> Result<Vec<SimplifiedPlaylist>, SpotifyError> {
+        let priority = refresher.priority;
+        let mut playlists = Vec::new();
+        let mut offset: i64 = 0;
+        loop {
+            let page = self
+                .authed(refresher, "/users/{id}/playlists", |token| async move {
+                    self.api
+                        .user_playlists_page(&token, user_id, offset, priority)
+                        .await
+                })
+                .await?;
+            let page_len = page.items.len();
+            playlists.extend(page.items);
+            if playlists.len() as i64 >= page.total || page_len == 0 {
+                break;
+            }
+            offset += spotify::PLAYLISTS_PAGE;
+        }
+        Ok(playlists)
+    }
+
+    /// Fork: one playlist's id, name and version.
+    pub async fn playlist_head(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        playlist_id: &str,
+    ) -> Result<PlaylistHead, SpotifyError> {
+        let priority = refresher.priority;
+        self.authed(refresher, "/playlists/{id}", |token| async move {
+            self.api.playlist_head(&token, playlist_id, priority).await
+        })
+        .await
+    }
+
     /// Playlist metadata.
     pub async fn playlist(
         &self,
@@ -387,6 +436,18 @@ impl SpotifyClient {
         if playlist_id == LIKED_SONGS {
             return self.liked_songs(refresher).await;
         }
+        self.playlist_tracks_with(refresher, playlist_id, spotify::ITEM_FIELDS)
+            .await
+    }
+
+    /// Fork: [`Self::playlist_tracks`] of a real playlist with the entry
+    /// `fields` given.
+    pub async fn playlist_tracks_with(
+        &self,
+        refresher: &TokenRefresher<'_>,
+        playlist_id: &str,
+        fields: &str,
+    ) -> Result<Vec<EntryTrack>, SpotifyError> {
         let priority = refresher.priority;
         let mut tracks = Vec::new();
         let mut offset: i64 = 0;
@@ -394,7 +455,7 @@ impl SpotifyClient {
             let page = self
                 .authed(refresher, "/playlists/{id}/items", |token| async move {
                     self.api
-                        .playlist_items_page(&token, playlist_id, offset, priority)
+                        .playlist_items_page_with(&token, playlist_id, offset, fields, priority)
                         .await
                 })
                 .await?;

@@ -24,20 +24,25 @@
 //!   so a run stopped by a restart or an outage picks up where it was and
 //!   a second run imports nothing twice.
 
+pub mod hold;
 pub mod http;
 pub mod report;
 pub mod resolve;
+pub mod spotify_match;
 pub mod walk;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use self::hold::{HoldStatus, PlaylistHold};
 use self::report::Report;
 use self::resolve::Resolved;
+use self::spotify_match::{Catalogue, PlaylistMatch, PublicMatch, PublicSource, StepEnd};
 use crate::db::AcquireDb;
 use crate::drop_import::identify::{self, Outcome as Identified};
 use crate::imports::spotify_resolve::Live;
@@ -60,6 +65,8 @@ const READ_BATCH: usize = 50;
 const SAVE_EVERY: usize = 25;
 /// A pause between two songs' lookups, beside the providers' own limits.
 const LOOKUP_GAP: Duration = Duration::from_millis(250);
+/// Fork: how a run an admin stopped ends.
+const STOPPED_BY_ADMIN: &str = "stopped by an admin (state kept; run again to go on)";
 
 /// What a file's tags say.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -91,6 +98,10 @@ pub struct FileState {
     /// What the import did: `imported`, `already_owned`, `unmatched`,
     /// `held:<reason>`.
     pub outcome: Option<String>,
+    /// Fork: the public Spotify playlist entry the file matched, when the
+    /// normal resolver found nothing.
+    #[serde(default)]
+    pub playlist_match: Option<PlaylistMatch>,
 }
 
 /// A lookup's answer for a file.
@@ -106,6 +117,9 @@ pub enum Resolution {
 pub struct State {
     /// By path below the source.
     pub files: BTreeMap<String, FileState>,
+    /// Fork: the public Spotify playlists and their entries, as last read.
+    #[serde(default)]
+    pub spotify: Option<Catalogue>,
 }
 
 /// Which run.
@@ -122,8 +136,12 @@ pub struct Progress {
     /// A run is going.
     pub running: bool,
     pub mode: Option<Mode>,
-    /// `walking`, `reading`, `resolving`, `importing`, `done`, `failed`.
+    /// `walking`, `reading`, `resolving`, `spotify`, `matching`,
+    /// `importing`, `done`, `stopped`, `failed`.
     pub step: String,
+    /// Fork: what the step is waiting on, when it waits (Spotify's rate
+    /// limit).
+    pub note: Option<String>,
     pub done: usize,
     pub total: usize,
     /// How the last run ended.
@@ -132,6 +150,10 @@ pub struct Progress {
     pub reports: String,
     /// Whether a source folder is set.
     pub configured: bool,
+    /// Fork: whether the public Spotify playlist match is set.
+    pub spotify_match: bool,
+    /// Fork: the download hold on synced playlists the import covers.
+    pub hold: HoldStatus,
 }
 
 /// Why a run did not start.
@@ -151,39 +173,62 @@ pub struct PlaylistImport {
     source: Option<PathBuf>,
     reports: PathBuf,
     progress: Mutex<Progress>,
+    /// Fork: the public Spotify playlist match, when set.
+    public: Option<PublicMatch>,
+    /// Fork: an admin asked the run to stop.
+    stop: AtomicBool,
+    /// Fork: the download hold.
+    hold: Arc<PlaylistHold>,
+    /// Fork: asks for the songs the hold kept, once it lifts.
+    releaser: Arc<crate::imports::spotify_sync::SpotifySync>,
+}
+
+/// Fork: the Spotify side of the import: the public-playlist match's
+/// client and the download hold shared with the playlist sync.
+pub struct SpotifyParts {
+    pub service: Arc<crate::imports::spotify::SpotifyImportService>,
+    pub library: Arc<crate::imports::spotify_library::SpotifyLibrary>,
+    pub sync: Arc<crate::imports::spotify_sync::SpotifySync>,
+    pub hold: Arc<PlaylistHold>,
+}
+
+/// Where the reports and state go: `PLAYLIST_IMPORT_REPORTS`, else
+/// `playlist-import` beside the database.
+pub fn reports_dir(db: &AcquireDb) -> PathBuf {
+    std::env::var_os(REPORTS_ENV)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| {
+            db.path()
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("playlist-import")
+        })
 }
 
 impl PlaylistImport {
-    /// The import over the environment's folders.
-    pub fn new(db: AcquireDb, lookups: Arc<Live>, library: Arc<dyn LandingLibrary>) -> Self {
-        let source = std::env::var_os(SOURCE_ENV)
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty());
-        let reports = std::env::var_os(REPORTS_ENV)
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| {
-                db.path()
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join("playlist-import")
-            });
-        Self::with_folders(db, lookups, library, source, reports)
-    }
-
-    /// The import over the folders given.
-    pub fn with_folders(
+    /// The import over the environment's folders; the public-playlist
+    /// match is on when the environment names a source.
+    pub fn new(
         db: AcquireDb,
         lookups: Arc<Live>,
         library: Arc<dyn LandingLibrary>,
-        source: Option<PathBuf>,
-        reports: PathBuf,
+        spotify: SpotifyParts,
     ) -> Self {
+        let source = std::env::var_os(SOURCE_ENV)
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty());
+        let reports = reports_dir(&db);
         let progress = Progress {
             reports: reports.display().to_string(),
             configured: source.is_some(),
             ..Progress::default()
         };
+        let public = PublicSource::from_env().map(|source| PublicMatch {
+            source,
+            service: spotify.service,
+            library: spotify.library,
+        });
         Self {
             db,
             lookups,
@@ -191,20 +236,60 @@ impl PlaylistImport {
             source,
             reports,
             progress: Mutex::new(progress),
+            public,
+            stop: AtomicBool::new(false),
+            hold: spotify.hold,
+            releaser: spotify.sync,
         }
+    }
+
+    /// Fork: the download hold.
+    pub fn hold(&self) -> &Arc<PlaylistHold> {
+        &self.hold
+    }
+
+    /// Fork: ask a running run to stop at the next file; what it did is
+    /// kept. Answers whether a run was going.
+    pub fn stop(&self) -> bool {
+        let running = self.progress().running;
+        if running {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+        running
+    }
+
+    /// Fork: release the download hold now; answers how many songs were
+    /// asked for.
+    pub async fn release_hold(&self) -> usize {
+        let deferred = self.hold.release();
+        self.ask_deferred(deferred).await
+    }
+
+    async fn ask_deferred(&self, deferred: Vec<hold::Deferred>) -> usize {
+        self.releaser.ask_deferred(deferred).await
+    }
+
+    fn set_note(&self, note: &str) {
+        let mut progress = self.progress.lock().unwrap_or_else(|p| p.into_inner());
+        progress.note = Some(note.to_owned());
     }
 
     /// What the import is doing.
     pub fn progress(&self) -> Progress {
-        self.progress
+        let mut progress = self
+            .progress
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .clone()
+            .clone();
+        progress.spotify_match = self.public.is_some();
+        progress.hold = self.hold.status();
+        progress
     }
 
     fn set(&self, step: &str, done: usize, total: usize) {
         let mut progress = self.progress.lock().unwrap_or_else(|p| p.into_inner());
         progress.step = step.to_owned();
+        progress.note = None;
         progress.done = done;
         progress.total = total;
     }
@@ -224,6 +309,8 @@ impl PlaylistImport {
                 return Err(StartError::Running);
             }
             progress.running = true;
+            progress.note = None;
+            self.stop.store(false, Ordering::SeqCst);
             progress.mode = Some(mode);
             progress.step = "walking".to_owned();
         }
@@ -236,14 +323,27 @@ impl PlaylistImport {
                     format!("stopped: {error}")
                 }
             };
-            let mut progress = this.progress.lock().unwrap_or_else(|p| p.into_inner());
-            progress.running = false;
-            progress.step = if ended.starts_with("stopped") {
-                "failed".to_owned()
-            } else {
-                "done".to_owned()
-            };
-            progress.last = Some(ended);
+            let by_admin = this.stop.swap(false, Ordering::SeqCst);
+            let finished = mode == Mode::Import && !ended.starts_with("stopped");
+            {
+                let mut progress = this.progress.lock().unwrap_or_else(|p| p.into_inner());
+                progress.running = false;
+                progress.note = None;
+                progress.step = if by_admin && ended.starts_with("stopped") {
+                    "stopped".to_owned()
+                } else if ended.starts_with("stopped") {
+                    "failed".to_owned()
+                } else {
+                    "done".to_owned()
+                };
+                progress.last = Some(ended);
+            }
+            // The real run is done: the songs the hold kept are asked for.
+            if finished {
+                let deferred = this.hold.finish();
+                let asked = this.ask_deferred(deferred).await;
+                tracing::info!(asked, "playlist import finished; download hold lifted");
+            }
         });
         Ok(())
     }
@@ -322,11 +422,26 @@ impl PlaylistImport {
         mark_duplicates(&mut state);
         self.check_library(&mut state).await?;
         self.save(&state).await?;
-        let stopped = self.resolve_all(&mut state, mode).await;
+        let stopped = self.resolve_all(&mut state).await;
         self.save(&state).await?;
         if let Err(error) = stopped {
             self.write_report(&state, mode, Some(&error)).await?;
             return Err(error);
+        }
+        // Fork: what the resolver left, matched to the public playlists.
+        let matched = self.public_match(&mut state).await;
+        self.save(&state).await?;
+        let stopped = match matched {
+            Ok(StepEnd::Done) => None,
+            Ok(StepEnd::Stopped) => Some(STOPPED_BY_ADMIN.to_owned()),
+            Err(error) => Some(error),
+        };
+        if let Some(error) = stopped {
+            self.write_report(&state, mode, Some(&error)).await?;
+            return Err(error);
+        }
+        if mode == Mode::Import {
+            self.link_found(&state).await?;
         }
         if mode == Mode::Import {
             let stopped = self.import_all(source, &mut state).await;
@@ -379,7 +494,7 @@ impl PlaylistImport {
 
     /// Resolve every song not yet looked up. A service that fails stops
     /// the pass; what was found stays in the state.
-    async fn resolve_all(&self, state: &mut State, mode: Mode) -> Result<(), String> {
+    async fn resolve_all(&self, state: &mut State) -> Result<(), String> {
         let todo: Vec<String> = state
             .files
             .iter()
@@ -394,6 +509,9 @@ impl PlaylistImport {
             .collect();
         let total = todo.len();
         for (index, rel) in todo.iter().enumerate() {
+            if self.stop.load(Ordering::SeqCst) {
+                return Err(STOPPED_BY_ADMIN.to_owned());
+            }
             self.set("resolving", index, total);
             let Some(tags) = state.files.get(rel).and_then(|file| file.tags.clone()) else {
                 continue;
@@ -420,9 +538,6 @@ impl PlaylistImport {
                 self.save(state).await?;
             }
             tokio::time::sleep(LOOKUP_GAP).await;
-        }
-        if mode == Mode::Import {
-            self.link_found(state).await?;
         }
         Ok(())
     }
@@ -476,6 +591,9 @@ impl PlaylistImport {
         }
         let total = albums.len();
         for (index, (album, rels)) in albums.into_iter().enumerate() {
+            if self.stop.load(Ordering::SeqCst) {
+                return Err(STOPPED_BY_ADMIN.to_owned());
+            }
             self.set("importing", index, total);
             let outcomes = self.import_album(source, &album, &rels).await?;
             for (rel, outcome) in outcomes {

@@ -210,6 +210,11 @@ fn nothing_is_wired_after_construction() {
 /// file with two sites of one name lists it twice.
 const LATE_ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "acquire/src/playlist_import/mod.rs",
+        "public",
+        "the public-playlist match, on only when the environment names a Spotify source",
+    ),
+    (
         "acquire/src/probes.rs",
         "sabnzbd",
         "one health pass's SABnzbd queue, there only while the section sets one up",
