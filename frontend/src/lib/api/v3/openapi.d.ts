@@ -575,6 +575,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/admin/playlist-import/dry-run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a dry run: tags read, songs resolved, a report written; the
+         *     library is left as it is.
+         *     `POST /api/v3/admin/playlist-import/dry-run`.
+         */
+        post: operations["playlist_import_dry_run_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/admin/playlist-import/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start the import itself; a run stopped early goes on where it was.
+         *     `POST /api/v3/admin/playlist-import/run`.
+         */
+        post: operations["playlist_import_run_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/admin/playlist-import/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the playlist import is doing, and how its last run ended.
+         *     `GET /api/v3/admin/playlist-import/status`.
+         */
+        get: operations["playlist_import_status_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/admin/precache/run": {
         parameters: {
             query?: never;
@@ -18627,6 +18688,11 @@ export interface components {
          * @enum {string}
          */
         MixRefreshStatus: "started" | "already_running";
+        /**
+         * @description Which run.
+         * @enum {string}
+         */
+        Mode: "dry_run" | "import";
         /** @description `GET /albums/{album_id}/more-by-artist`. */
         MoreByArtistResponse: {
             /** @description Other release groups by the artist, in MusicBrainz browse order. */
@@ -21054,6 +21120,22 @@ export interface components {
          *     to the connections and library routes.
          */
         ProfileResponse: components["schemas"]["UserResponse"];
+        /** @description What the import is doing. */
+        Progress: {
+            /** @description Whether a source folder is set. */
+            configured: boolean;
+            done: number;
+            /** @description How the last run ended. */
+            last?: string | null;
+            mode?: null | components["schemas"]["Mode"];
+            /** @description Where the reports are written. */
+            reports: string;
+            /** @description A run is going. */
+            running: boolean;
+            /** @description `walking`, `reading`, `resolving`, `importing`, `done`, `failed`. */
+            step: string;
+            total: number;
+        };
         /**
          * @description A service a connect-a-service card points at.
          * @enum {string}
@@ -27413,6 +27495,63 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    playlist_import_dry_run_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Progress"];
+                };
+            };
+        };
+    };
+    playlist_import_run_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Progress"];
+                };
+            };
+        };
+    };
+    playlist_import_status_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Progress"];
                 };
             };
         };

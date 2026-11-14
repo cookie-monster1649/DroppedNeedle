@@ -347,7 +347,7 @@ async fn plan(
         let release_track = &release.tracks[track];
         match &batch.origin {
             _ if gate.imports_held() => true,
-            Origin::Upload { .. } | Origin::Folder { .. } => true,
+            Origin::Upload { .. } | Origin::Folder { .. } | Origin::PlaylistFolder { .. } => true,
             Origin::Download { upgrade, .. } => {
                 *upgrade
                     || batch
@@ -666,6 +666,12 @@ async fn import(
             folders,
         } => (
             format!("drop-{drop_item_id}"),
+            ImportOrigin::Folder,
+            None,
+            Some(folders.clone()),
+        ),
+        Origin::PlaylistFolder { key, folders } => (
+            format!("playlist-import-{key}"),
             ImportOrigin::Folder,
             None,
             Some(folders.clone()),

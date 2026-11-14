@@ -82,6 +82,13 @@ pub enum Origin {
         drop_item_id: i64,
         folders: Vec<PathBuf>,
     },
+    /// Fork: files of a playlist-folder import, copied from where they
+    /// are (beneath `folders`, never through a link below them) and left
+    /// there. `key` names the import's staging folder.
+    PlaylistFolder {
+        key: String,
+        folders: Vec<PathBuf>,
+    },
 }
 
 /// One file of a batch.
