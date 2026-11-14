@@ -21,8 +21,10 @@
 	import {
 		getSpotifyPlaylistsQuery,
 		createImportSpotifyPlaylistMutation,
-		createRefreshSpotifyPlaylistsMutation
+		createRefreshSpotifyPlaylistsMutation,
+		createSyncAllSpotifyMutation
 	} from '$lib/features/playlists/queries/spotify.svelte';
+	import { SYNC_ALL_HOLD_MS, syncAllRefusal } from '$lib/features/spotify/state/syncAll';
 	import { ApiError } from '$lib/api/errors';
 	import { withBasePath } from '$lib/utils/basePath';
 	import { providerUnavailableMessage } from '$lib/utils/serviceError';
@@ -47,6 +49,26 @@
 				message: providerUnavailableMessage(error) ?? 'Could not refresh from Spotify',
 				type: 'error'
 			});
+		}
+	}
+
+	// Fork: "Sync all now": synced playlists and Liked Songs, sooner than
+	// the two-hour sync. The button rests a minute after a press.
+	const syncAllMutation = createSyncAllSpotifyMutation();
+	let syncAllHeld = $state(false);
+
+	async function handleSyncAll() {
+		if (syncAllHeld) return;
+		syncAllHeld = true;
+		setTimeout(() => (syncAllHeld = false), SYNC_ALL_HOLD_MS);
+		try {
+			await syncAllMutation.mutateAsync();
+			toastStore.show({
+				message: 'Syncing your playlists and Liked Songs in the background',
+				type: 'success'
+			});
+		} catch (error) {
+			toastStore.show({ message: syncAllRefusal(error), type: 'error' });
 		}
 	}
 
@@ -208,6 +230,16 @@
 							disabled={refreshMutation.isPending}
 						>
 							{refreshMutation.isPending ? 'Refreshing…' : 'Refresh from Spotify'}
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							icon={RefreshCw}
+							onclick={() => void handleSyncAll()}
+							disabled={syncAllHeld || syncAllMutation.isPending}
+							title="Check synced playlists and Liked Songs now (they sync every 2 hours)"
+						>
+							Sync all now
 						</Button>
 					</div>
 					{#if importingAll}

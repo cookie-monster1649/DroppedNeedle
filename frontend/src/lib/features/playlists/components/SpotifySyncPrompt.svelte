@@ -69,7 +69,7 @@
 			<span>
 				<span class="font-medium">Sync with Spotify</span>
 				<span class="block text-base-content/60">
-					Mirror changes made on Spotify, checked every 15 minutes.
+					Mirror changes made on Spotify, checked every 2 hours.
 				</span>
 			</span>
 		</label>

@@ -21,7 +21,7 @@
 		{:else if sync.state.checked_at}
 			Checked {formatRelativeTime(new Date(sync.state.checked_at))}
 		{:else}
-			First check within 15 minutes
+			First check within 2 hours
 		{/if}
 	</p>
 {/if}

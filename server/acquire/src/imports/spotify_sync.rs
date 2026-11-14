@@ -37,6 +37,7 @@ use rusqlite::{OptionalExtension, params};
 use super::spotify::{ImportFailure, ImportedTrack, SpotifyImportService};
 use super::spotify_albums::AlbumResolver;
 use super::spotify_client::{LIKED_SONGS, SpotifyError, rate_limited_message, unavailable_message};
+use super::spotify_library::SYNC_NOW_GAP;
 use super::spotify_store::CollectionsPlaylistBridge;
 use super::spotify_tracks::SpotifySong;
 use super::spotify_usage::RefusalKind;
@@ -61,8 +62,9 @@ const COOLDOWN_EVERY: Duration = Duration::from_secs(30);
 
 /// How often synced playlists are checked. Fork: a check costs one
 /// `/me/playlists` read per owner (a page per 50 playlists), one Liked Songs
-/// page when it is synced, and nothing per unchanged playlist.
-pub const SYNC_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// page when it is synced, and nothing per unchanged playlist. Every two
+/// hours, to spare Spotify's quota; "Sync all now" runs one sooner.
+pub const SYNC_INTERVAL: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// Fork: how often a synced Liked Songs is read to the end, for songs
 /// unliked below the newest pages.
@@ -316,6 +318,10 @@ pub struct SpotifySync {
     syncs: SpotifySyncs,
     requests: Arc<dyn SyncRequests>,
     library: Arc<super::spotify_library::SpotifyLibrary>,
+    /// Fork: one pass at a time, the loop's or a "Sync all now".
+    pass: tokio::sync::Mutex<()>,
+    /// Fork: when each user last started "Sync all now", and who runs one.
+    forced: std::sync::Mutex<(HashMap<String, std::time::Instant>, HashSet<String>)>,
 }
 
 impl SpotifySync {
@@ -333,23 +339,91 @@ impl SpotifySync {
             syncs,
             requests,
             library,
+            pass: tokio::sync::Mutex::new(()),
+            forced: std::sync::Mutex::new((HashMap::new(), HashSet::new())),
         }
     }
 
     /// Check every synced playlist once; answers how many were imported
     /// again. One playlist's failure is recorded on it and the rest go on.
     pub async fn run_once(&self) -> usize {
+        let _pass = self.pass.lock().await;
         let moved = self.requests.upgrade_wants(self.service.resolver()).await;
         if moved > 0 {
             tracing::info!(moved, "songs asked for by name moved to musicbrainz tracks");
         }
+        let Some(imported) = self.sync_rows(None).await else {
+            return 0;
+        };
+        // Fork: followed artists and saved albums.
+        self.library.run_once().await;
+        imported
+    }
+
+    /// Fork: "Sync all now": one pass over `user_id`'s synced playlists and
+    /// Liked Songs, in the background. Each playlist is still imported only
+    /// when its snapshot changed. Refused (with the sentence to show) while
+    /// Spotify's wait runs, within [`SYNC_NOW_GAP`] of the user's last one,
+    /// or while one runs.
+    ///
+    /// # Errors
+    ///
+    /// The sentence to show when it does not start.
+    pub fn sync_now(self: &Arc<Self>, user_id: &str) -> Result<(), String> {
+        if !self.library.cooling_for().is_zero() {
+            return Err(self.library.cooling_message());
+        }
+        {
+            let mut forced = self.forced.lock().unwrap_or_else(|p| p.into_inner());
+            let (started, running) = &mut *forced;
+            if let Some(at) = started.get(user_id)
+                && at.elapsed() < SYNC_NOW_GAP
+            {
+                let left = SYNC_NOW_GAP
+                    .saturating_sub(at.elapsed())
+                    .as_secs()
+                    .div_ceil(60);
+                return Err(format!(
+                    "Your playlists were synced moments ago. Try again in {left} minute{}.",
+                    if left == 1 { "" } else { "s" }
+                ));
+            }
+            if running.contains(user_id) {
+                return Err("A sync of your playlists is already running.".to_owned());
+            }
+            started.insert(user_id.to_owned(), std::time::Instant::now());
+            running.insert(user_id.to_owned());
+        }
+        let (sync, user) = (self.clone(), user_id.to_owned());
+        tokio::spawn(async move {
+            {
+                let _pass = sync.pass.lock().await;
+                let imported = sync.sync_rows(Some(&user)).await;
+                tracing::info!(user_id = %user, ?imported, "spotify sync all now ran");
+            }
+            sync.forced
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .1
+                .remove(&user);
+        });
+        Ok(())
+    }
+
+    /// Check the synced playlists (only `only`'s, when given); answers how
+    /// many were imported again, or `None` when a wait Spotify asked for
+    /// ended the pass.
+    async fn sync_rows(&self, only: Option<&str>) -> Option<usize> {
         let rows = match self.syncs.rows().await {
             Ok(rows) => rows,
             Err(error) => {
                 tracing::warn!(%error, "synced playlists unreadable");
-                return 0;
+                return Some(0);
             }
         };
+        let rows = rows
+            .into_iter()
+            .filter(|row| only.is_none_or(|user| row.user_id == user));
         let mut imported = 0;
         // Fork: one playlist list per owner, read on their first playlist
         // that is not Liked Songs.
@@ -364,7 +438,7 @@ impl SpotifySync {
                     "spotify asked for a wait; sync pass ends"
                 );
                 self.library.keep_cooldown().await;
-                return imported;
+                return None;
             }
             let listed = if row.spotify_playlist_id == LIKED_SONGS {
                 None
@@ -416,9 +490,7 @@ impl SpotifySync {
                 }
             }
         }
-        // Fork: followed artists and saved albums.
-        self.library.run_once().await;
-        imported
+        Some(imported)
     }
 
     /// Fork: the owner's playlist list, read once a pass: each playlist's

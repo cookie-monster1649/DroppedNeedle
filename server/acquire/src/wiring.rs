@@ -709,6 +709,7 @@ impl AcquireSetup {
             spotify_imports,
             spotify_syncs,
             spotify_library,
+            spotify_sync: spotify_sync.clone(),
             probes: Arc::new(LiveProbes::bundle(&probes)),
             ids: ids.clone(),
             base_path: config.base_path.clone(),
