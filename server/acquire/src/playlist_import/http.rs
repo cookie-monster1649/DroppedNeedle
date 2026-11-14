@@ -1,5 +1,5 @@
 //! The playlist-folder import's admin routes: start a dry run or the real
-//! import, and read what it is doing.
+//! import, read what it is doing, stop it, and release the download hold.
 
 use std::sync::Arc;
 
@@ -64,10 +64,47 @@ pub async fn playlist_import_status_handler(
     Ok(Json(import.progress()))
 }
 
+/// Fork: stop a running import gracefully: it ends after the file it is
+/// on, and what it did is kept for the next run.
+/// `POST /api/v3/admin/playlist-import/stop`.
+#[utoipa::path(
+    post,
+    tag = "settings",
+    path = "/api/v3/admin/playlist-import/stop",
+    responses((status = 200, body = Progress))
+)]
+pub async fn playlist_import_stop_handler(
+    State(import): State<Arc<PlaylistImport>>,
+    _admin: Admin,
+) -> Result<Json<Progress>, ApiError> {
+    import.stop();
+    Ok(Json(import.progress()))
+}
+
+/// Fork: release the download hold now: synced playlists the import
+/// covers ask for their songs again, and the songs held back are asked for.
+/// `POST /api/v3/admin/playlist-import/release-hold`.
+#[utoipa::path(
+    post,
+    tag = "settings",
+    path = "/api/v3/admin/playlist-import/release-hold",
+    responses((status = 200, body = Progress))
+)]
+pub async fn playlist_import_release_hold_handler(
+    State(import): State<Arc<PlaylistImport>>,
+    _admin: Admin,
+) -> Result<Json<Progress>, ApiError> {
+    let asked = import.release_hold().await;
+    tracing::info!(asked, "playlist import download hold released by an admin");
+    Ok(Json(import.progress()))
+}
+
 /// The playlist import's routes, for admins.
 pub fn routes() -> Routes<Arc<PlaylistImport>> {
     Routes::new()
         .admin(routes!(playlist_import_dry_run_handler))
         .admin(routes!(playlist_import_run_handler))
         .admin(routes!(playlist_import_status_handler))
+        .admin(routes!(playlist_import_stop_handler))
+        .admin(routes!(playlist_import_release_hold_handler))
 }

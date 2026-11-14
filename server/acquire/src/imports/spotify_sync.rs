@@ -322,6 +322,8 @@ pub struct SpotifySync {
     pass: tokio::sync::Mutex<()>,
     /// Fork: when each user last started "Sync all now", and who runs one.
     forced: std::sync::Mutex<(HashMap<String, std::time::Instant>, HashSet<String>)>,
+    /// Fork: the playlist-folder import's download hold, when wired.
+    hold: Arc<crate::playlist_import::hold::PlaylistHold>,
 }
 
 impl SpotifySync {
@@ -332,6 +334,7 @@ impl SpotifySync {
         syncs: SpotifySyncs,
         requests: Arc<dyn SyncRequests>,
         library: Arc<super::spotify_library::SpotifyLibrary>,
+        hold: Arc<crate::playlist_import::hold::PlaylistHold>,
     ) -> Self {
         Self {
             service,
@@ -341,7 +344,21 @@ impl SpotifySync {
             library,
             pass: tokio::sync::Mutex::new(()),
             forced: std::sync::Mutex::new((HashMap::new(), HashSet::new())),
+            hold,
         }
+    }
+
+    /// Fork: ask for the songs a hold kept back, as their owners; answers
+    /// how many were asked for.
+    pub async fn ask_deferred(
+        &self,
+        deferred: Vec<crate::playlist_import::hold::Deferred>,
+    ) -> usize {
+        let mut asked = 0;
+        for held in deferred {
+            asked += self.requests.request(&held.user_id, held.tracks).await;
+        }
+        asked
     }
 
     /// Check every synced playlist once; answers how many were imported
@@ -645,7 +662,19 @@ impl SpotifySync {
         };
         if row.auto_request && !added.is_empty() {
             let asked: Vec<ImportedTrack> = added.into_iter().take(MAX_SYNC_REQUESTS).collect();
-            synced.requested = self.requests.request(&row.user_id, asked).await;
+            // Fork: a playlist a pending playlist-folder import covers asks
+            // later, once the import ran or an admin released the hold.
+            match &self.hold {
+                hold if hold.holds(&row.spotify_playlist_id) => {
+                    tracing::info!(
+                        playlist_id = %row.playlist_id,
+                        songs = asked.len(),
+                        "spotify sync asks held for the playlist import"
+                    );
+                    hold.defer(&row.user_id, &row.playlist_id, asked);
+                }
+                _ => synced.requested = self.requests.request(&row.user_id, asked).await,
+            }
         }
         // Recorded only once the import and its asks are done, so a sync cut
         // short is done again.

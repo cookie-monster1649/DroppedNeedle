@@ -26,7 +26,7 @@ use droppedneedle_providers::RequestPriority;
 use droppedneedle_providers::spotify::models::{EntryTrack, Image, PlaylistInfo};
 
 /// One imported track row.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ImportedTrack {
     /// Track title.
     pub track_name: String,

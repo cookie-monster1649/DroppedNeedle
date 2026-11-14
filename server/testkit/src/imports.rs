@@ -311,6 +311,7 @@ pub async fn serve_spotify()
     let api = axum::Router::new()
         .route("/me", get(spotify_me))
         .route("/me/playlists", get(spotify_playlists))
+        .route("/users/{id}/playlists", get(spotify_user_playlists))
         .route("/playlists/{id}", get(spotify_playlist))
         .route("/playlists/{id}/items", get(spotify_items))
         .route("/playlists/{id}/tracks", get(spotify_tracks_tombstone))
@@ -353,6 +354,15 @@ async fn spotify_me(State(state): State<SpotifyState>, headers: HeaderMap) -> Re
         return StatusCode::UNAUTHORIZED.into_response();
     }
     Json(json!({"id": SPOTIFY_USER_ID, "display_name": "Mock Listener"})).into_response()
+}
+
+/// Fork: another user's playlists: refused, as Spotify refuses a
+/// development-mode app.
+async fn spotify_user_playlists(State(state): State<SpotifyState>) -> Response {
+    state
+        .recorder
+        .record(|calls| calls.spotify_paths.push("/users/{id}/playlists".to_owned()));
+    StatusCode::FORBIDDEN.into_response()
 }
 
 async fn spotify_playlists(
