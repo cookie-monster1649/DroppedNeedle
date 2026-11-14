@@ -463,7 +463,9 @@ fn group(rows: Vec<sql::FolderEntryRow>) -> Vec<WantedUser> {
                 playlists: Vec::new(),
             });
         }
-        let user = users.last_mut().expect("pushed above");
+        let Some(user) = users.last_mut() else {
+            continue;
+        };
         if user
             .playlists
             .last()
@@ -475,7 +477,9 @@ fn group(rows: Vec<sql::FolderEntryRow>) -> Vec<WantedUser> {
                 entries: Vec::new(),
             });
         }
-        let playlist = user.playlists.last_mut().expect("pushed above");
+        let Some(playlist) = user.playlists.last_mut() else {
+            continue;
+        };
         if row.position.is_none() {
             continue;
         }

@@ -1,9 +1,16 @@
 > [!WARNING]
-> **This is an AI vibe-coded fork** of [DroppedNeedle](https://github.com/DroppedNeedle/DroppedNeedle). It was built with AI coding tools rather than written by hand, and it is not affiliated with or supported by the upstream project. Report problems with this fork here, not upstream. Every change is in the [commit history](https://github.com/cookie-monster1649/DroppedNeedle/commits/nuc/v3.0.0-beta.4/).
+> **This is an AI vibe-coded fork** of [DroppedNeedle](https://github.com/DroppedNeedle/DroppedNeedle). It was built with AI coding tools rather than written by hand, and it is not affiliated with or supported by the upstream project. Report problems with this fork here, not upstream. Every change is in the [commit history](https://github.com/cookie-monster1649/DroppedNeedle/commits/nuc/v3.0.0-beta.5/).
 
 ## About this fork
 
-This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`. It's built as the image `ghcr.io/cookie-monster1649/droppedneedle:nuc-v3.0.0-beta.4` and runs on a single home-server deployment. Its main aim: music MusicBrainz doesn't know (Deezer and Spotify releases) should be handled as well as music it does.
+This fork is based on upstream `v3.0.0-beta.5` and lives on the branch `nuc/v3.0.0-beta.5` (the beta.4-based branch `nuc/v3.0.0-beta.4` is kept as it was). It runs on a single home-server deployment. Its main aim: music MusicBrainz doesn't know (Deezer and Spotify releases) should be handled as well as music it does.
+
+### Dropped in favour of upstream beta.5
+- **ListenBrainz greyed-out tab and Last.fm fallback:** upstream now asks the listening service you chose first and the other one only when yours has nothing, and says why in a notice. The fork's greyed-out tab and automatic switch are gone.
+- **A playlist row's play button starts the queue at that row:** upstream fixes the same bug ("Play on a playlist row starts the track you clicked").
+- **Copies list only albums with files:** upstream's shared "owned album" rule (live and with an indexed track) now covers this, and the fork's lists use that rule instead of its own.
+- **Rescan after a Deezer tag write:** upstream now asks for a scan of every written folder when any Library management run (or undo) ends, so the fork's own rescan is gone.
+- **Deezer search** now sits beside upstream's new exact-title ranking: a Deezer album whose title is the query ranks as exact, after MusicBrainz's exact albums.
 
 ### What it changes
 
@@ -12,7 +19,7 @@ This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`.
 - **Deezer albums request as one download (stage b):** an album on stand-in IDs is requested through the normal edition request. One task with the Deezer track list as its plan asks only for the missing tracks. Tracks a settled partial or failed task left behind are asked for one by one, at their place on the album, after 30 minutes.
 - **Deezer artist pages and covers (stage c):** artists on stand-in IDs show the library's albums by them and their Deezer picture, and their Last.fm bio is looked up by name. Albums on stand-in IDs with no art of their own use the Deezer cover.
 - **Deezer discography:** an artist on stand-in IDs lists every album, EP and single Deezer has for them (up to 300), not only the ones you hold. Each links to a normal album page with its Deezer tracklist, and Request album plans one download from it.
-- **Deezer search:** being added on `nuc/v3.0.0-beta.4` alongside the discography work; not yet in this branch's history.
+- **Deezer search:** Deezer's artists and albums MusicBrainz lacks show beside MusicBrainz's in search (Settings → Advanced switch).
 - **Deezer editions (stage d):** Deezer's other editions of an album (explicit or clean, deluxe, remastered) are looked up monthly and listed as editions of it, so any of them can be requested.
 - **Deezer tags:** files from Deezer albums get `DEEZER_ALBUMID`, `DEEZER_TRACKID` and `DEEZER_ARTISTID` tags.
 - **Switching to MusicBrainz:** an album moves to MusicBrainz automatically once MusicBrainz has a confident match.
@@ -64,16 +71,15 @@ This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`.
 - **Shared IDs:** if another artist already holds that MusicBrainz ID, a merge is suggested in the Artists tab.
 
 **Other**
-- **ListenBrainz unavailable:** where you can pick ListenBrainz or Last.fm (artist Popular, Popular, Trending, Your top), an unavailable ListenBrainz shows as a greyed-out tab with a tooltip, and Last.fm is picked automatically. When ListenBrainz comes back the tab is enabled again, but you stay on the tab you're on.
 - **Login:** `OIDC_NEW_USER_ROLE` sets the role for new SSO accounts.
-- **Player:** a track that ends unheard is reloaded transcoded. A playlist row's play button starts the queue at that row.
+- **Player:** a track that ends unheard is reloaded transcoded.
 
 ### Keeping upstream merges easy
 - Changed upstream code is marked with `Fork:` comments, kept small, and placed at hook points.
 - New behaviour lives in additive tables (fork extension migrations) and isolated modules, for example the source layer.
 - Stand-in IDs reuse the existing MusicBrainz ID columns, so upstream's routes, caches and plans work unchanged.
 - To merge upstream:
-  1. `git fetch upstream && git merge upstream/v3`
+  1. `git fetch upstream --tags`, then rebase the fork's commits onto the new tag on a new `nuc/<tag>` branch
   2. Resolve the `Fork:` hunks.
   3. Run the Rust and frontend suites. Source gates (`tests/server/source_gates.rs`) list fork spawn sites.
 
@@ -88,7 +94,6 @@ This fork is based on upstream `v3` and lives on the branch `nuc/v3.0.0-beta.4`.
 
 ### Known gaps
 - **The metadata-source roadmap is incomplete:** stage e (Spotify as a source) is still to do. Identify does not offer Deezer releases as candidates for albums with no confirmed match; those still go through the Deezer suggestion and confirmation flow.
-- **CI Audit and Licenses fail:** this is the bundled-SQLite advisory in `libsqlite3-sys`, which upstream also has.
 
 The fork's plan and notes are in [docs/fork/PLAN.md](docs/fork/PLAN.md).
 

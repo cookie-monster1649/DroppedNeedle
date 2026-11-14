@@ -74,7 +74,7 @@ fn fresh_migrate_marks_version_and_seeds() {
     assert_eq!(scalar(&connection, "PRAGMA user_version"), latest_version());
     // 179 upstream tables, plus the extension ledger and the catalogue
     // extension's tables (fork).
-    assert_eq!(table_names(&connection).len(), 194);
+    assert_eq!(table_names(&connection).len(), 196);
     assert_eq!(
         scalar(
             &connection,
