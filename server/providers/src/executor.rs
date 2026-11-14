@@ -382,6 +382,17 @@ pub struct Reply {
 }
 
 impl Reply {
+    /// Fork: a reply built by a test, for a classifier test.
+    #[cfg(test)]
+    pub(crate) fn for_test(provider: &'static str, status: u16, body: &str) -> Self {
+        Self {
+            provider,
+            status,
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
     /// The status code.
     #[must_use]
     pub fn status(&self) -> u16 {
