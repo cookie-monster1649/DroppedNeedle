@@ -905,6 +905,7 @@ const SPAWN_SITES: &[(&str, usize, &str)] = &[
     ("acquire/src/imports/spotify_sync.rs", 1, SPOTIFY_SYNC_ALL),
     ("acquire/src/playlist_import/mod.rs", 6, AWAITED),
     ("acquire/src/playlist_import/mod.rs", 1, PLAYLIST_IMPORT),
+    ("acquire/src/playlist_import/spotify_match.rs", 1, AWAITED),
     ("acquire/src/requests/service/edition.rs", 1, AWAITED),
     ("acquire/src/search_jobs/mod.rs", 1, SEARCH),
     ("acquire/src/slskd/repository.rs", 3, AWAITED),

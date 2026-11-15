@@ -19,6 +19,9 @@ pub struct Counts {
     pub name_deezer: usize,
     /// Fork: matched to a public Spotify playlist entry, then resolved.
     pub spotify_playlist: usize,
+    /// Fork: matched to a row of the folder's playlist CSV, then resolved.
+    #[serde(default)]
+    pub playlist_csv: usize,
     /// Fork: matched to an entry, but the entry did not resolve either.
     pub matched_unresolved: usize,
     /// Deezer answers MusicBrainz knows (linked to the group).
@@ -78,9 +81,12 @@ pub struct PlaylistSide {
     pub still_unresolved: usize,
 }
 
-/// Fork: what the public Spotify playlist match did.
+/// Fork: what the public playlist match did.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct SpotifySummary {
+    /// Fork: where the entries came from: `spotify` (the API) or
+    /// `playlist_csv` (the playlist CSV folder).
+    pub source: String,
     /// Why the step stopped short, when it did.
     pub note: Option<String>,
     /// Spotify calls the last step made.
@@ -96,6 +102,7 @@ pub struct SpotifySummary {
 impl SpotifySummary {
     fn of(state: &State, playlists: &BTreeMap<String, Counts>) -> Option<Self> {
         let catalogue = state.spotify.as_ref()?;
+        let csv = super::csv_source::is_csv(catalogue);
         let mut folders = BTreeMap::new();
         let mut unmapped_playlists = Vec::new();
         for (id, cached) in &catalogue.playlists {
@@ -119,10 +126,15 @@ impl SpotifySummary {
                 unmapped_folders.push(folder.clone());
             }
             let side = folders.entry(folder.clone()).or_default();
-            side.matched = counts.spotify_playlist;
+            side.matched = if csv {
+                counts.playlist_csv
+            } else {
+                counts.spotify_playlist
+            };
             side.still_unresolved = counts.unresolved;
         }
         Some(Self {
+            source: if csv { "playlist_csv" } else { "spotify" }.to_owned(),
             note: catalogue.note.clone(),
             calls: catalogue.calls,
             folders,
@@ -166,7 +178,7 @@ impl Report {
                 counts.duplicates += 1;
                 continue;
             }
-            if file.in_library && file.outcome.is_none() {
+            if file.in_library && !super::settled(file.outcome.as_deref()) {
                 counts.already_in_library += 1;
                 continue;
             }
@@ -194,6 +206,7 @@ impl Report {
                         Via::NameMusicbrainz => counts.name_musicbrainz += 1,
                         Via::NameDeezer => counts.name_deezer += 1,
                         Via::SpotifyPlaylist => counts.spotify_playlist += 1,
+                        Via::PlaylistCsv => counts.playlist_csv += 1,
                     }
                     if found.stand_in.is_some()
                         && !droppedneedle_providers::virtual_ids::is_virtual(&found.album)
@@ -226,6 +239,7 @@ impl Report {
                 t.name_musicbrainz += counts.name_musicbrainz;
                 t.name_deezer += counts.name_deezer;
                 t.spotify_playlist += counts.spotify_playlist;
+                t.playlist_csv += counts.playlist_csv;
                 t.matched_unresolved += counts.matched_unresolved;
                 t.deezer_on_musicbrainz += counts.deezer_on_musicbrainz;
                 t.unresolved += counts.unresolved;
@@ -261,7 +275,8 @@ impl Report {
             + t.barcode_musicbrainz
             + t.name_musicbrainz
             + t.name_deezer
-            + t.spotify_playlist;
+            + t.spotify_playlist
+            + t.playlist_csv;
         format!(
             "{} files: {resolved} resolved on {} albums, {} unresolved, {} duplicates, {} already in the library, {} imported",
             t.files, self.albums, t.unresolved, t.duplicates, t.already_in_library, t.imported
@@ -281,7 +296,7 @@ impl Report {
         }
         out.push_str(&format!("{}\n\n", self.headline()));
         let header = format!(
-            "{:<32} {:>6} {:>8} {:>8} {:>8} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>9}\n",
+            "{:<32} {:>6} {:>8} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>9}\n",
             "playlist",
             "files",
             "isrc-mb",
@@ -290,6 +305,7 @@ impl Report {
             "name-mb",
             "name-dz",
             "sp-list",
+            "pl-csv",
             "unres",
             "dupes",
             "inlib",
@@ -300,7 +316,7 @@ impl Report {
         out.push_str(&header);
         let row = |name: &str, c: &Counts| {
             format!(
-                "{:<32} {:>6} {:>8} {:>8} {:>8} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>9}\n",
+                "{:<32} {:>6} {:>8} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>9}\n",
                 name.chars().take(32).collect::<String>(),
                 c.files,
                 c.isrc_musicbrainz,
@@ -309,6 +325,7 @@ impl Report {
                 c.name_musicbrainz,
                 c.name_deezer,
                 c.spotify_playlist,
+                c.playlist_csv,
                 c.unresolved,
                 c.duplicates,
                 c.already_in_library,
@@ -353,14 +370,25 @@ impl Report {
 impl SpotifySummary {
     /// The readable part of the report.
     pub fn text(&self) -> String {
-        let mut out = String::from("\nPublic Spotify playlist match:\n");
+        let csv = self.source == "playlist_csv";
+        let mut out = String::from(if csv {
+            "\nPlaylist CSV match (via playlist_csv; the Spotify API is not used):\n"
+        } else {
+            "\nPublic Spotify playlist match:\n"
+        });
         if let Some(note) = &self.note {
             out.push_str(&format!("  NOTE: {note}\n"));
         }
-        out.push_str(&format!("  Spotify calls this run: {}\n", self.calls));
+        if !csv {
+            out.push_str(&format!("  Spotify calls this run: {}\n", self.calls));
+        }
         out.push_str(&format!(
             "  {:<32} {:>8} {:>8} {:>8}  {}\n",
-            "folder", "entries", "matched", "unres", "playlist"
+            "folder",
+            "entries",
+            "matched",
+            "unres",
+            if csv { "csv file" } else { "playlist" }
         ));
         for (folder, side) in &self.folders {
             out.push_str(&format!(
@@ -369,18 +397,25 @@ impl SpotifySummary {
                 side.entries,
                 side.matched,
                 side.still_unresolved,
-                side.spotify_id.as_deref().unwrap_or("UNMAPPED"),
+                side.spotify_id
+                    .as_deref()
+                    .map(|id| id
+                        .strip_prefix(super::csv_source::ID_PREFIX)
+                        .map_or_else(|| id.to_owned(), |name| format!("{name}.csv")))
+                    .unwrap_or_else(|| "UNMAPPED".to_owned()),
             ));
         }
         if !self.unmapped_folders.is_empty() {
             out.push_str(&format!(
-                "  Folders with no playlist: {}\n",
+                "  Folders with no {}: {}\n",
+                if csv { "CSV file" } else { "playlist" },
                 self.unmapped_folders.join(", ")
             ));
         }
         if !self.unmapped_playlists.is_empty() {
             out.push_str(&format!(
-                "  Playlists with no folder: {}\n",
+                "  {} with no folder: {}\n",
+                if csv { "CSV files" } else { "Playlists" },
                 self.unmapped_playlists.join(", ")
             ));
         }

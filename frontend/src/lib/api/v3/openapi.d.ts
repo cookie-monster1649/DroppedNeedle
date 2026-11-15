@@ -20889,11 +20889,19 @@ export interface components {
              *     limit).
              */
             note?: string | null;
+            /**
+             * @description Fork: the playlist CSV folder, when set (it takes the Spotify API's
+             *     place).
+             */
+            playlist_csvs?: string | null;
             /** @description Where the reports are written. */
             reports: string;
             /** @description A run is going. */
             running: boolean;
-            /** @description Fork: whether the public Spotify playlist match is set. */
+            /**
+             * @description Fork: whether the public playlist match is set (the Spotify API or
+             *     the playlist CSV folder).
+             */
             spotify_match: boolean;
             /**
              * @description `walking`, `reading`, `resolving`, `spotify`, `matching`,
