@@ -77,6 +77,10 @@ pub struct Report {
     pub resolved_after_tags: Vec<Listed>,
     /// Fork: the public Spotify playlist match, when it is set.
     pub spotify: Option<SpotifySummary>,
+    /// Fork: the "link spotify ids" step, when it ran
+    /// ([`super::link_ids`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub links: Option<super::link_ids::LinkReport>,
 }
 
 /// Fork: one folder's public playlist.
@@ -304,6 +308,7 @@ impl Report {
             unresolved,
             not_imported,
             resolved_after_tags,
+            links: None,
         }
     }
 
@@ -335,6 +340,7 @@ impl Report {
         let mode = match self.mode {
             Mode::DryRun => "dry run",
             Mode::Import => "import",
+            Mode::LinkIds => "import, provider links again",
         };
         out.push_str(&format!("Playlist-folder import ({mode})\n"));
         if let Some(stopped) = &self.stopped {
@@ -392,6 +398,9 @@ impl Report {
         ));
         if let Some(spotify) = &self.spotify {
             out.push_str(&spotify.text());
+        }
+        if let Some(links) = &self.links {
+            out.push_str(&links.text());
         }
         if !self.unresolved.is_empty() {
             out.push_str(&format!("\nUnresolved ({}):\n", self.unresolved.len()));

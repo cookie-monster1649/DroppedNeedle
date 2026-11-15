@@ -25,6 +25,13 @@
 //!   scan, which groups it by its album artist and album and flags it
 //!   unmatched when identification finds nothing ([`tags_fallback`]; on
 //!   unless `PLAYLIST_IMPORT_TAGS_FALLBACK=false`).
+//! - Fork: last of all, every file the import put in the library (or found
+//!   there) gets provider links on its track, its Spotify id from the
+//!   playlist CSV row it pairs to and its ISRC, so a later Spotify playlist
+//!   sync links each entry straight to the file ([`link_ids`]). The step
+//!   also runs on its own: on a loop after start (over the state an earlier
+//!   import left, and again while tag-only copies wait for the scan) and
+//!   when an admin asks for it ([`Mode::LinkIds`]).
 //! - The state file keeps each file's tags, resolution and import outcome,
 //!   so a run stopped by a restart or an outage picks up where it was and
 //!   a second run imports nothing twice.
@@ -32,9 +39,11 @@
 pub mod csv_source;
 pub mod hold;
 pub mod http;
+pub mod link_ids;
 pub mod report;
 pub mod resolve;
 pub mod spotify_match;
+pub(crate) mod sql;
 pub mod tags_fallback;
 pub mod walk;
 
@@ -242,6 +251,9 @@ pub struct State {
 pub enum Mode {
     DryRun,
     Import,
+    /// Fork: only the "link spotify ids" step, over the state an earlier
+    /// import left ([`link_ids`]).
+    LinkIds,
 }
 
 /// What the import is doing.
@@ -251,8 +263,8 @@ pub struct Progress {
     pub running: bool,
     pub mode: Option<Mode>,
     /// `walking`, `reading`, `resolving`, `spotify`, `matching`,
-    /// `importing`, `tags` (fork: the import by tags), `done`, `stopped`,
-    /// `failed`.
+    /// `importing`, `tags` (fork: the import by tags), `linking` (fork: the
+    /// provider links), `done`, `stopped`, `failed`.
     pub step: String,
     /// Fork: what the step is waiting on, when it waits (Spotify's rate
     /// limit).
@@ -300,6 +312,12 @@ pub struct PlaylistImport {
     hold: Arc<PlaylistHold>,
     /// Fork: asks for the songs the hold kept, once it lifts.
     releaser: Arc<crate::imports::spotify_sync::SpotifySync>,
+    /// Fork: the last "link spotify ids" step's report section.
+    links: Mutex<Option<link_ids::LinkReport>>,
+    /// Fork: the state file's change time and the files still waiting for
+    /// the scan, as the last link step saw them; the link loop runs again
+    /// only when either says there is something new.
+    link_seen: Mutex<Option<(Option<std::time::SystemTime>, usize)>>,
 }
 
 /// Fork: the Spotify side of the import: the public-playlist match's
@@ -366,6 +384,8 @@ impl PlaylistImport {
             stop: AtomicBool::new(false),
             hold: spotify.hold,
             releaser: spotify.sync,
+            links: Mutex::new(None),
+            link_seen: Mutex::new(None),
         }
     }
 
@@ -503,6 +523,9 @@ impl PlaylistImport {
 
     /// One run; answers how it ended, for the status.
     async fn run(&self, source: &Path, mode: Mode) -> Result<String, String> {
+        if mode == Mode::LinkIds {
+            return self.link_only(source).await;
+        }
         let root = source.to_path_buf();
         let found = tokio::task::spawn_blocking(move || walk::walk(&root))
             .await
@@ -587,6 +610,11 @@ impl PlaylistImport {
                     self.write_report(&state, mode, Some(&error)).await?;
                     return Err(error);
                 }
+            }
+            // Fork: last, the provider links of every file put in.
+            self.set("linking", 0, 0);
+            if let Err(error) = self.link_ids(source, &state).await {
+                tracing::warn!(%error, "playlist import: provider links not written (the link loop tries again)");
             }
         }
         let report = self.write_report(&state, mode, None).await?;
@@ -1163,19 +1191,138 @@ impl PlaylistImport {
         Ok(())
     }
 
+    /// Fork: the "link spotify ids" step over `state` ([`link_ids`]): pair
+    /// the files to the playlist CSV rows, find their tracks, write the
+    /// links. Answers the report section, also kept for the report.
+    async fn link_ids(&self, source: &Path, state: &State) -> Result<link_ids::LinkReport, String> {
+        let catalogue = self.link_catalogue(state).await?;
+        let asks = link_ids::asks(state, source);
+        let asked = asks.clone();
+        let tracks = self
+            .db
+            .db()
+            .read("playlist_import.link_tracks", move |conn| {
+                Ok::<_, DbError>(link_ids::tracks(conn, &asked)?)
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+        let plan = link_ids::plan(state, &catalogue, &asks, &tracks);
+        let writes = plan.writes;
+        if !writes.is_empty() {
+            let now = self.db.now_epoch() as f64;
+            self.db
+                .db()
+                .write(Lane::Background, "playlist_import.link_ids", move |tx| {
+                    Ok::<_, DbError>(link_ids::write(tx, &writes, now)?)
+                })
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let report = plan.report;
+        tracing::info!(
+            by_spotify = report.by_spotify,
+            isrc_only = report.isrc_only,
+            no_link = report.no_link,
+            waiting = report.waiting,
+            rows_paired = report.rows_paired,
+            "playlist import: provider links written"
+        );
+        *self.links.lock().unwrap_or_else(|p| p.into_inner()) = Some(report.clone());
+        let seen = (state_changed(&self.state_path()), report.waiting);
+        *self.link_seen.lock().unwrap_or_else(|p| p.into_inner()) = Some(seen);
+        Ok(report)
+    }
+
+    /// Fork: the playlist rows the link step pairs to: the playlist CSVs
+    /// read again (each mapped to its folder as the CSV match does), else
+    /// the catalogue the state keeps.
+    async fn link_catalogue(&self, state: &State) -> Result<Catalogue, String> {
+        let Some(dir) = self.csv_dir() else {
+            return Ok(state.spotify.clone().unwrap_or_default());
+        };
+        let folders: std::collections::BTreeSet<String> = state
+            .files
+            .values()
+            .map(|file| file.playlist.clone())
+            .collect();
+        let source = format!("{}{}", csv_source::ID_PREFIX, dir.display());
+        let read = tokio::task::spawn_blocking(move || csv_source::read_dir(&dir))
+            .await
+            .map_err(|error| error.to_string())??;
+        let mut playlists = read.playlists;
+        spotify_match::map_folders(&mut playlists, &folders);
+        Ok(Catalogue {
+            source,
+            playlists,
+            ..Catalogue::default()
+        })
+    }
+
+    /// Fork: a [`Mode::LinkIds`] run: the link step alone over the saved
+    /// state, then the import report again with its section.
+    async fn link_only(&self, source: &Path) -> Result<String, String> {
+        let state = self.load().await;
+        self.set("linking", 0, 0);
+        let links = self.link_ids(source, &state).await?;
+        self.write_report(&state, Mode::LinkIds, None).await?;
+        Ok(format!(
+            "provider links: {} files by Spotify id, {} by ISRC only, {} with no link ({} not indexed yet); {} of {} CSV rows paired",
+            links.by_spotify,
+            links.isrc_only,
+            links.no_link,
+            links.waiting,
+            links.rows_paired,
+            links.csv_rows
+        ))
+    }
+
+    /// Fork: one turn of the link loop: a [`Mode::LinkIds`] run when a
+    /// source is set, a state exists, no run is going or stopped short,
+    /// and there is something new (first turn since start, the state
+    /// changed, or files still wait for the scan).
+    fn link_tick(self: &Arc<Self>) {
+        if self.source.is_none() {
+            return;
+        }
+        let path = self.state_path();
+        if !path.exists() {
+            return;
+        }
+        let progress = self.progress();
+        if progress.running
+            || progress
+                .last
+                .as_deref()
+                .is_some_and(|last| last.starts_with("stopped"))
+        {
+            return;
+        }
+        let seen = *self.link_seen.lock().unwrap_or_else(|p| p.into_inner());
+        let due = match seen {
+            None => true,
+            Some((changed, waiting)) => waiting > 0 || changed != state_changed(&path),
+        };
+        if due && let Err(error) = self.start(Mode::LinkIds) {
+            tracing::debug!(%error, "playlist import: link pass not started");
+        }
+    }
+
     async fn write_report(
         &self,
         state: &State,
         mode: Mode,
         stopped: Option<&str>,
     ) -> Result<Report, String> {
-        let report = Report::of(state, mode, stopped, self.db.now_epoch());
+        let mut report = Report::of(state, mode, stopped, self.db.now_epoch());
+        if mode != Mode::DryRun {
+            report.links = self.links.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        }
         let dir = self.reports.clone();
         let json = serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?;
         let text = report.text();
         let name = match mode {
             Mode::DryRun => "dry-run",
-            Mode::Import => "import",
+            Mode::Import | Mode::LinkIds => "import",
         };
         tokio::task::spawn_blocking(move || {
             write_atomic(&dir, &dir.join(format!("{name}-report.json")), &json)?;
@@ -1234,6 +1381,47 @@ fn pick_editions(carried: &[Vec<String>]) -> Vec<String> {
     // A stable sort keeps the first listed ahead in a tie.
     votes.sort_by(|a, b| b.1.cmp(&a.1));
     votes.into_iter().map(|(edition, _)| edition).collect()
+}
+
+/// Fork: the link loop's name on the supervisor.
+pub const LINK_JOB: &str = "playlist-import-links";
+/// Fork: how often the link loop looks for something to link.
+pub const LINK_EVERY: Duration = Duration::from_secs(30 * 60);
+
+/// Fork: start the link loop: a few minutes after start, then every
+/// [`LINK_EVERY`], the "link spotify ids" step runs over the saved state
+/// when there is something new ([`PlaylistImport::link_tick`]), so files
+/// imported before the step existed get their links without a re-import,
+/// and tag-only copies get theirs once the scan has indexed them.
+///
+/// # Errors
+///
+/// The loop is already running.
+pub fn spawn_link_loop(
+    supervisor: &droppedneedle_kernel::jobs::Supervisor,
+    import: Arc<PlaylistImport>,
+) -> Result<(), droppedneedle_kernel::jobs::AlreadyRunning> {
+    use droppedneedle_kernel::jobs::{FnTick, Next, Schedule};
+    supervisor.periodic(
+        LINK_JOB,
+        Schedule::new(LINK_EVERY)
+            .with_initial_delay(Duration::from_secs(300))
+            .with_jitter(Duration::from_secs(60)),
+        FnTick(move |_| {
+            let import = import.clone();
+            async move {
+                import.link_tick();
+                Ok(Next::Continue)
+            }
+        }),
+    )
+}
+
+/// Fork: when the state file last changed, `None` when it does not read.
+fn state_changed(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
 }
 
 /// A short, path-safe key for an album's import staging.
