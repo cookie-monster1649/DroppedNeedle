@@ -30,6 +30,9 @@ pub enum Via {
     /// Fork: matched to an entry of the folder's public Spotify playlist,
     /// then resolved by that entry's ISRC or album.
     SpotifyPlaylist,
+    /// Fork: matched to a row of the folder's playlist CSV (an Exportify
+    /// export), then resolved by that row's ISRC or album.
+    PlaylistCsv,
 }
 
 /// A resolved file.

@@ -477,6 +477,7 @@ pub fn item_facts(item: &Item) -> TrackFacts {
 /// A service failed.
 pub async fn resolve_item(
     item: &Item,
+    via: Via,
     file_isrc: Option<&str>,
     lookups: &dyn Lookups,
     check: &dyn StandInCheck,
@@ -488,16 +489,15 @@ pub async fn resolve_item(
     if facts.isrc.as_deref().is_some_and(|code| !tried(code)) {
         if let Some((album, recording)) = lookups.mb_track_by_isrc(&facts).await? {
             return Ok(Some(Resolved {
-                via: Via::SpotifyPlaylist,
+                via,
                 album,
                 stand_in: None,
                 recording,
             }));
         }
         if let Some((stand_in, recording)) = lookups.deezer_track_by_isrc(&facts).await? {
-            let mut found =
-                resolve::from_deezer(Via::SpotifyPlaylist, stand_in, recording, check).await?;
-            found.via = Via::SpotifyPlaylist;
+            let mut found = resolve::from_deezer(via, stand_in, recording, check).await?;
+            found.via = via;
             return Ok(Some(found));
         }
     }
@@ -505,10 +505,10 @@ pub async fn resolve_item(
     match album {
         None => Ok(None),
         Some(found) if found.source == FoundSource::Deezer => Ok(Some(
-            resolve::from_deezer(Via::SpotifyPlaylist, found.id, String::new(), check).await?,
+            resolve::from_deezer(via, found.id, String::new(), check).await?,
         )),
         Some(found) => Ok(Some(Resolved {
-            via: Via::SpotifyPlaylist,
+            via,
             album: found.id,
             stand_in: None,
             recording: String::new(),
@@ -713,6 +713,10 @@ pub enum StepEnd {
 impl PlaylistImport {
     /// The public-playlist match over the state's leftovers.
     pub(super) async fn public_match(&self, state: &mut State) -> Result<StepEnd, String> {
+        // Fork: the playlist CSV folder, when set, takes Spotify's place.
+        if let Some(dir) = self.csv_dir() {
+            return self.csv_match(state, dir).await;
+        }
         let Some(public) = self.public.as_ref() else {
             return Ok(StepEnd::Done);
         };
@@ -773,11 +777,59 @@ impl PlaylistImport {
                 return Ok(StepEnd::Done);
             }
         }
-        self.match_leftovers(state).await
+        self.match_leftovers(state, Via::SpotifyPlaylist).await
+    }
+
+    /// Fork: the match against the playlist CSV files in `dir`: read them
+    /// all (nothing is called), map them to the folders by name, and match
+    /// the leftovers as against Spotify's entries.
+    async fn csv_match(
+        &self,
+        state: &mut State,
+        dir: std::path::PathBuf,
+    ) -> Result<StepEnd, String> {
+        let shown = dir.display().to_string();
+        let read = tokio::task::spawn_blocking(move || super::csv_source::read_dir(&dir))
+            .await
+            .map_err(|error| error.to_string())?;
+        let folders: BTreeSet<String> = state
+            .files
+            .values()
+            .map(|file| file.playlist.clone())
+            .collect();
+        let mut catalogue = Catalogue {
+            source: format!("{}{shown}", super::csv_source::ID_PREFIX),
+            listed_at: crate::db::to_i64(self.db.now_epoch()),
+            ..Catalogue::default()
+        };
+        match read {
+            Err(note) => {
+                tracing::warn!(%note, "playlist import: playlist CSV match skipped");
+                catalogue.note = Some(note);
+                state.spotify = Some(catalogue);
+                return Ok(StepEnd::Done);
+            }
+            Ok(read) => {
+                catalogue.playlists = read.playlists;
+                if catalogue.playlists.is_empty() {
+                    catalogue.note = Some(format!("no .csv file in {shown}"));
+                }
+                if !read.failed.is_empty() {
+                    let failed = format!("files that did not read: {}", read.failed.join("; "));
+                    catalogue.note = Some(match catalogue.note.take() {
+                        Some(note) => format!("{note}; {failed}"),
+                        None => failed,
+                    });
+                }
+            }
+        }
+        map_folders(&mut catalogue.playlists, &folders);
+        state.spotify = Some(catalogue);
+        self.match_leftovers(state, Via::PlaylistCsv).await
     }
 
     /// Match and resolve each leftover against the kept entries.
-    async fn match_leftovers(&self, state: &mut State) -> Result<StepEnd, String> {
+    async fn match_leftovers(&self, state: &mut State, via: Via) -> Result<StepEnd, String> {
         let Some(catalogue) = state.spotify.clone() else {
             return Ok(StepEnd::Done);
         };
@@ -820,6 +872,7 @@ impl PlaylistImport {
                 let answer = loop {
                     match resolve_item(
                         item,
+                        via,
                         tags.isrc.as_deref(),
                         self.lookups.as_ref(),
                         self.lookups.as_ref(),

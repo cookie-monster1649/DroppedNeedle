@@ -60994,6 +60994,13 @@
             ],
             "description": "Fork: what the step is waiting on, when it waits (Spotify's rate\nlimit)."
           },
+          "playlist_csvs": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fork: the playlist CSV folder, when set (it takes the Spotify API's\nplace)."
+          },
           "reports": {
             "type": "string",
             "description": "Where the reports are written."
@@ -61004,7 +61011,7 @@
           },
           "spotify_match": {
             "type": "boolean",
-            "description": "Fork: whether the public Spotify playlist match is set."
+            "description": "Fork: whether the public playlist match is set (the Spotify API or\nthe playlist CSV folder)."
           },
           "step": {
             "type": "string",
