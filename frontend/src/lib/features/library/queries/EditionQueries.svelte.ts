@@ -529,6 +529,21 @@ export function createDeclineArtistSuggestionMutation() {
 	}));
 }
 
+// Fork: "Accept all exact-name best guesses" (admins): how many it covers,
+// then take them all. Names several MusicBrainz artists share are skipped.
+export type ExactGuesses = components['schemas']['ExactGuessesView'];
+
+export const countExactGuesses = (): Promise<ExactGuesses> =>
+	api.v3.GET(v3('/api/v3/library/artist-suggestions/exact-name'));
+
+export function createAcceptExactGuessesMutation() {
+	return createAppMutation(() => ({
+		mutationFn: (): Promise<ExactGuesses> =>
+			api.v3.POST(v3('/api/v3/library/artist-suggestions/exact-name')),
+		effects: () => [catalogChanged(authStore.user?.id)]
+	}));
+}
+
 type EditionTarget = { userId: EditionUserId; localId: string; rgMbid?: string };
 // The edition status's `identity_revision` the action was decided on.
 type GuardedEditionTarget = EditionTarget & { identityRevision: number };
