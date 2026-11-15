@@ -20,6 +20,11 @@
 //!   rule of the download profile applies (the intake has none; the
 //!   global settings are untouched). A file that does not pair stays out
 //!   and is listed; nothing goes to the held list.
+//! - Fork: last, every file still left (nothing resolved it, or it did
+//!   not pair) is copied into the library as it is tagged and left to the
+//!   scan, which groups it by its album artist and album and flags it
+//!   unmatched when identification finds nothing ([`tags_fallback`]; on
+//!   unless `PLAYLIST_IMPORT_TAGS_FALLBACK=false`).
 //! - The state file keeps each file's tags, resolution and import outcome,
 //!   so a run stopped by a restart or an outage picks up where it was and
 //!   a second run imports nothing twice.
@@ -30,6 +35,7 @@ pub mod http;
 pub mod report;
 pub mod resolve;
 pub mod spotify_match;
+pub mod tags_fallback;
 pub mod walk;
 
 use std::collections::{BTreeMap, HashMap};
@@ -103,6 +109,17 @@ pub struct FileState {
     /// normal resolver found nothing.
     #[serde(default)]
     pub playlist_match: Option<PlaylistMatch>,
+    /// Fork: how the file went in when nothing resolved it: `tags_only`
+    /// ([`tags_fallback`]).
+    #[serde(default)]
+    pub via: Option<String>,
+    /// Fork: the tag-only copy's path below the library folder.
+    #[serde(default)]
+    pub library_path: Option<String>,
+    /// Fork: why the file went in by its tags: `not_found`, `refused`, or
+    /// the import outcome it had (`unmatched:…`, `refused:…`).
+    #[serde(default)]
+    pub tags_reason: Option<String>,
 }
 
 /// A lookup's answer for a file.
@@ -234,7 +251,8 @@ pub struct Progress {
     pub running: bool,
     pub mode: Option<Mode>,
     /// `walking`, `reading`, `resolving`, `spotify`, `matching`,
-    /// `importing`, `done`, `stopped`, `failed`.
+    /// `importing`, `tags` (fork: the import by tags), `done`, `stopped`,
+    /// `failed`.
     pub step: String,
     /// Fork: what the step is waiting on, when it waits (Spotify's rate
     /// limit).
@@ -559,6 +577,16 @@ impl PlaylistImport {
             if let Err(error) = stopped {
                 self.write_report(&state, mode, Some(&error)).await?;
                 return Err(error);
+            }
+            // Fork: what is still left goes in by its tags.
+            if tags_fallback::enabled() {
+                self.check_library(&mut state).await?;
+                let stopped = self.import_by_tags(source, &mut state).await;
+                self.save(&state).await?;
+                if let Err(error) = stopped {
+                    self.write_report(&state, mode, Some(&error)).await?;
+                    return Err(error);
+                }
             }
         }
         let report = self.write_report(&state, mode, None).await?;
@@ -1060,6 +1088,79 @@ impl PlaylistImport {
             "playlist import: album placed"
         );
         Ok(out)
+    }
+
+    /// Fork: copy every file [`tags_fallback::takes`] into the library
+    /// folder as it is tagged, for the scan to index and flag
+    /// ([`tags_fallback`]). A file that will not copy keeps its outcome
+    /// and is tried on the next run.
+    async fn import_by_tags(&self, source: &Path, state: &mut State) -> Result<(), String> {
+        let todo: Vec<String> = state
+            .files
+            .iter()
+            .filter(|(_, file)| tags_fallback::takes(file))
+            .map(|(rel, _)| rel.clone())
+            .collect();
+        if todo.is_empty() {
+            return Ok(());
+        }
+        let library = self.library.clone();
+        let root = tokio::task::spawn_blocking(move || {
+            (!library.library_off())
+                .then(|| library.import_folder())
+                .flatten()
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        let Some(root) = root else {
+            tracing::warn!(
+                files = todo.len(),
+                "playlist import: no library folder takes imports; nothing imported by tags"
+            );
+            return Ok(());
+        };
+        let total = todo.len();
+        for (index, rel) in todo.iter().enumerate() {
+            if self.stop.load(Ordering::SeqCst) {
+                return Err(STOPPED_BY_ADMIN.to_owned());
+            }
+            self.set("tags", index, total);
+            let Some(tags) = state.files.get(rel).and_then(|file| file.tags.clone()) else {
+                continue;
+            };
+            let name = Path::new(rel)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let wanted = tags_fallback::destination(&tags, &name);
+            let (root, from, key) = (root.clone(), source.join(rel), tags_fallback::key_of(rel));
+            let placed = tokio::task::spawn_blocking(move || {
+                tags_fallback::place(&root, &from, &wanted, &key)
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+            match placed {
+                Ok(path) => {
+                    if let Some(file) = state.files.get_mut(rel) {
+                        file.tags_reason = Some(tags_fallback::reason(file));
+                        file.outcome = Some(tags_fallback::OUTCOME.to_owned());
+                        file.via = Some(tags_fallback::VIA.to_owned());
+                        file.library_path = Some(path.to_string_lossy().replace('\\', "/"));
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(file = rel, %error, "playlist import: tag-only copy failed");
+                }
+            }
+            if (index + 1) % SAVE_EVERY == 0 {
+                self.save(state).await?;
+            }
+        }
+        tracing::info!(
+            files = total,
+            "playlist import: files imported by their tags"
+        );
+        Ok(())
     }
 
     async fn write_report(

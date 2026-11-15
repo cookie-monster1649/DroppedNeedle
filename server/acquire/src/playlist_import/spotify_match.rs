@@ -518,10 +518,12 @@ pub async fn resolve_item(
 
 /// Whether the step looks at a file: not a duplicate, not held already,
 /// not imported, tags read, and nothing found (or never looked up).
+/// Fork: a file imported by its tags is still looked at, so a later run
+/// can resolve it (the tag-only copy is then left as it is).
 pub fn is_leftover(file: &FileState) -> bool {
     file.duplicate_of.is_none()
         && !file.in_library
-        && file.outcome.is_none()
+        && (file.outcome.is_none() || super::tags_fallback::is_tags_only(file.outcome.as_deref()))
         && file.tags.is_some()
         && !matches!(file.resolved, Some(Resolution::Found(_)))
 }

@@ -482,3 +482,65 @@ spotify:track:t1,USUM70905526,\"Strobe - Radio Edit\",\"For Lack Of A Better Nam
     assert!(text.contains("Folders with no CSV file: D&B"));
     assert!(report.headline().contains("1 resolved"));
 }
+
+/// Fork: files imported by their tags count in the `tags` column; an
+/// unresolved one stays listed with where it went, and one a later run
+/// resolved is left as it is and noted.
+#[test]
+fn files_imported_by_tags_are_counted_and_a_later_resolution_is_noted() {
+    let mut state = State::default();
+    let tags = |title: &str| {
+        Some(Tags {
+            title: title.to_owned(),
+            artist: "A".to_owned(),
+            album: "B".to_owned(),
+            ..Tags::default()
+        })
+    };
+    let found = Some(Resolution::Found(Resolved {
+        via: Via::PlaylistCsv,
+        album: "ea8e626f-520f-4f54-9fab-8004e702afef".to_owned(),
+        stand_in: None,
+        recording: String::new(),
+    }));
+    let tag_only = |title: &str, resolved: Option<Resolution>, why: &str| FileState {
+        playlist: "p1".to_owned(),
+        tags: tags(title),
+        resolved,
+        outcome: Some(tags_fallback::OUTCOME.to_owned()),
+        via: Some(tags_fallback::VIA.to_owned()),
+        library_path: Some(format!("A/B/{title}.mp3")),
+        tags_reason: Some(why.to_owned()),
+        ..FileState::default()
+    };
+    state.files.insert(
+        "p1/a.mp3".into(),
+        tag_only("a", Some(Resolution::NotFound), "not_found"),
+    );
+    state.files.insert(
+        "p1/b.mp3".into(),
+        tag_only("b", found.clone(), "unmatched:not_paired"),
+    );
+    state
+        .files
+        .insert("p1/c.mp3".into(), tag_only("c", found, "not_found"));
+    let report = Report::of(&state, Mode::Import, None, 0);
+    assert_eq!(report.playlists["p1"].tags, 3);
+    assert_eq!(report.total.tags, 3);
+    assert_eq!(report.total.tags_resolved_later, 1);
+    assert_eq!(report.unresolved.len(), 1);
+    assert!(report.unresolved[0].why.contains("tags_only"));
+    assert!(report.not_imported.is_empty());
+    assert_eq!(report.resolved_after_tags.len(), 1);
+    assert_eq!(report.resolved_after_tags[0].path, "p1/c.mp3");
+    let text = report.text();
+    assert!(text.contains(" tags\n"));
+    assert!(text.contains("3 imported by tags"));
+    assert!(text.contains("resolved since"));
+    // The import never takes a tag-only file again; the playlist match
+    // still looks at an unresolved one.
+    assert!(settled(Some(tags_fallback::OUTCOME)));
+    assert!(!tags_fallback::takes(&state.files["p1/a.mp3"]));
+    assert!(spotify_match::is_leftover(&state.files["p1/a.mp3"]));
+    assert!(!spotify_match::is_leftover(&state.files["p1/c.mp3"]));
+}

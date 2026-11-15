@@ -1879,3 +1879,71 @@ async fn a_removed_copy_gives_way_to_another_copy_of_the_song() {
     };
     assert_eq!(marks, 0, "the entry plays another copy, so its mark lifts");
 }
+
+/// Fork: a file the playlist-folder import put in by its tags sits on a
+/// tag-grouped album with no MusicBrainz identity; a synced playlist's
+/// entry still links to it by title and artist, and the already-held
+/// check the download queue asks finds it, so it is never fetched again.
+#[tokio::test]
+async fn a_tag_only_track_with_no_identity_links_and_counts_as_held() {
+    use droppedneedle_catalog::collections::store::playlists::{NewEntry, PlaylistStore};
+
+    let fixture = sqlite_fixture().await;
+    seed(
+        &fixture,
+        "INSERT INTO local_artists (id, display_name, folded_name, kind, created_at, updated_at) \
+         VALUES ('at', 'Obscure Act', 'obscure act', 'group', 3000, 3000); \
+         INSERT INTO local_albums (id, root_id, grouping_key, title, title_folded, \
+         album_artist_name, album_artist_name_folded, album_artist_id, grouping_source, \
+         created_at, updated_at) \
+         VALUES ('alt', 'r1', 'tag:obscure act\u{1f}home rip', 'Home Rip', 'home rip', \
+         'Obscure Act', 'obscure act', 'at', 'automatic', 3000, 3000); \
+         INSERT INTO local_tracks (id, local_album_id, root_id, file_path, relative_path, path_hash, \
+         file_size_bytes, file_mtime_ns, stat_revision, title, title_folded, artist_name, artist_name_folded, \
+         album_title, album_title_folded, album_artist_name, album_artist_name_folded, \
+         disc_number, track_number, duration_seconds, file_format, availability, \
+         ingest_source, imported_at, membership_source) VALUES \
+         ('tt', 'alt', 'r1', '/m/Obscure Act/Home Rip/01.mp3', 'Obscure Act/Home Rip/01.mp3', 'htt', \
+          3000000, 1, 'stt', 'Bedroom Song', 'bedroom song', 'Obscure Act', 'obscure act', \
+          'Home Rip', 'home rip', 'Obscure Act', 'obscure act', 1, 1, 190.0, 'mp3', 'indexed', \
+          'scan', 3000.0, 'automatic');",
+    )
+    .await;
+    let store = PlaylistStore::new(droppedneedle_catalog::collections::db::CollectionsDb::new(
+        fixture.runtime.db().clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    ));
+    let owner = store.owned_by("u1");
+    let (id, _) = owner
+        .create_with(
+            "Spotify",
+            vec![NewEntry {
+                track_name: "Bedroom Song".to_owned(),
+                artist_name: "Obscure Act".to_owned(),
+                album_name: "Bedroom Song (Single)".to_owned(),
+                ..NewEntry::default()
+            }],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(store.link_library().await.unwrap(), 1);
+    let linked: Vec<Option<String>> = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|track| track.library_file_id)
+        .collect();
+    assert_eq!(linked, vec![Some("tt".to_owned())]);
+    let held = fixture
+        .runtime
+        .db()
+        .read("tag-only held", |conn| {
+            droppedneedle_library::identity::reads::song_held(conn, "Obscure Act", "Bedroom Song")
+                .map_err(droppedneedle_kernel::db::DbError::from)
+        })
+        .await
+        .unwrap();
+    assert!(held);
+}
