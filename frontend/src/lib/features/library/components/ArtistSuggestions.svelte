@@ -200,6 +200,9 @@
 								</span>
 							</p>
 						{/if}
+						{#if item.open_reason}
+							<p class="text-xs text-muted" data-testid="artist-open-reason">{item.open_reason}</p>
+						{/if}
 					</div>
 					<div class="flex gap-2">
 						{#if canTake(item)}

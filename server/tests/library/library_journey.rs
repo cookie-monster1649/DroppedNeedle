@@ -8917,6 +8917,392 @@ async fn an_artist_is_linked_by_its_deezer_artists_musicbrainz_link() {
     assert_eq!(wire.sent().len(), 4);
 }
 
+/// Fork: the evidence ladder links an unlinked artist whose ISRCs credit
+/// one MusicBrainz artist under its name (asking MusicBrainz once, then
+/// from its own kept answers), leaves one whose ISRCs disagree open with a
+/// reason the Artists tab shows, and never touches an artist a person
+/// turned down or linked.
+#[tokio::test]
+async fn the_evidence_ladder_links_by_isrc_and_leaves_people_alone() {
+    use droppedneedle_library::artist_match::ArtistSuggestions;
+    use droppedneedle_library::artist_match::ladder::LadderTurn;
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::RequestPriority;
+    use droppedneedle_providers::musicbrainz::MbSource;
+    use droppedneedle_providers::test_support::ScriptedWire;
+    const WILLO: &str = "aaaaaaaa-0000-4000-8000-0000000000e1";
+    const OTHER: &str = "aaaaaaaa-0000-4000-8000-0000000000e2";
+    const FETCHED: &str = "aaaaaaaa-0000-4000-8000-0000000000e3";
+    const PERSONS: &str = "aaaaaaaa-0000-4000-8000-0000000000e4";
+
+    let rig = Rig::start("lib-artist-ladder").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let _paused = rig.pause_identification().await;
+    let music = app.config.root_app_dir.join("music");
+    for (folder, album, name) in [
+        ("a", "Album A", "Willo"),
+        ("b", "Album B", "Split Mind"),
+        ("c", "Album C", "Turned Down"),
+        ("d", "Album D", "Hand Set"),
+        ("e", "Album E", "Fetch Me"),
+    ] {
+        let file = plant(&music, &format!("{folder}/01.flac"), "management_full.flac");
+        tag_artist(&file, album, name, None, None);
+    }
+    app.add_library_folder("music", &music).await;
+    let db = app.db();
+    let artist_of = |album: &str| -> String {
+        db.query_row(
+            "SELECT album_artist_id FROM local_albums WHERE title = ?1",
+            [album],
+            |row| row.get(0),
+        )
+        .expect("album indexed")
+    };
+    let track_of = |album: &str| -> String {
+        db.query_row(
+            "SELECT t.id FROM local_tracks t JOIN local_albums a ON a.id = t.local_album_id \
+             WHERE a.title = ?1",
+            [album],
+            |row| row.get(0),
+        )
+        .expect("track indexed")
+    };
+    let (willo, split, declined, person, fetch) = (
+        artist_of("Album A"),
+        artist_of("Album B"),
+        artist_of("Album C"),
+        artist_of("Album D"),
+        artist_of("Album E"),
+    );
+    let user: String = db
+        .query_row("SELECT id FROM auth_users LIMIT 1", [], |row| row.get(0))
+        .expect("admin");
+    let isrc = |album: &str, isrc: &str| {
+        format!(
+            "INSERT INTO local_entity_source_links (id, local_track_id, provider, \
+             external_entity_type, external_id, canonical_url, decision_source, verified_at, \
+             created_at, updated_at) VALUES ('{isrc}', '{}', 'isrc', 'recording', '{isrc}', \
+             'isrc:{isrc}', 'automatic', 1, 1, 1)",
+            track_of(album)
+        )
+    };
+    // Two ISRCs credit Willo; two credit different artists named Split
+    // Mind; the declined and person-linked artists' ISRCs credit someone.
+    let credits = |mbid: &str, name: &str| json!([[mbid, name, name]]).to_string();
+    for (album, code, answer) in [
+        ("Album A", "USAAA0000001", credits(WILLO, "Willo")),
+        ("Album A", "USAAA0000002", credits(WILLO, "WILLO")),
+        ("Album B", "USAAA0000003", credits(WILLO, "Split Mind")),
+        ("Album B", "USAAA0000004", credits(OTHER, "Split Mind")),
+        ("Album C", "USAAA0000005", credits(OTHER, "Turned Down")),
+        ("Album D", "USAAA0000006", credits(OTHER, "Hand Set")),
+    ] {
+        app.seed(isrc(album, code)).await;
+        app.seed(format!(
+            "INSERT INTO library_artist_evidence_cache (lookup, answer, fetched_at) \
+             VALUES ('isrc:{code}', '{answer}', 9000000000000)"
+        ))
+        .await;
+    }
+    app.seed(isrc("Album E", "USAAA0000007")).await;
+    app.seed(format!(
+        "INSERT INTO library_artist_suggestions (local_artist_id, musicbrainz_artist_id, \
+         musicbrainz_name, suggestion_state, decided_by_user_id, checked_at, updated_at) \
+         VALUES ('{declined}', '{OTHER}', 'Turned Down', 'declined', '{user}', 1, 1)"
+    ))
+    .await;
+    app.seed(format!(
+        "INSERT INTO local_artist_external_identities (local_artist_id, provider, \
+         provider_artist_id, decision_source, selected_by_user_id, selected_at) \
+         VALUES ('{person}', 'musicbrainz', '{PERSONS}', 'manual', '{user}', 1)"
+    ))
+    .await;
+    // Willo also has a best guess, so the Artists tab lists it until linked;
+    // Split Mind's guess keeps it listed with its reason.
+    app.seed(format!(
+        "INSERT INTO library_artist_suggestions (local_artist_id, musicbrainz_artist_id, \
+         musicbrainz_name, suggestion_state, checked_at, updated_at) \
+         VALUES ('{split}', '{OTHER}', 'Split Mind', 'open', 1, 1)"
+    ))
+    .await;
+
+    // The one ISRC not kept is asked of MusicBrainz.
+    let wire = Arc::new(ScriptedWire::new());
+    wire.answer(
+        "http://127.0.0.1:9/musicbrainz/ws/2/recording",
+        200,
+        &[("content-type", "application/json")],
+        json!({"count": 1, "offset": 0, "recordings": [{"id": "bbbbbbbb-0000-4000-8000-000000000001",
+            "title": "Album E 1", "artist-credit": [{"name": "Fetch Me", "joinphrase": "",
+            "artist": {"id": FETCHED, "name": "Fetch Me"}}]}]})
+        .to_string(),
+    );
+    let providers = Providers::unpaced(wire.clone());
+    let suggestions = ArtistSuggestions::new(
+        droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+            .expect("database opens"),
+        providers.previews.clone(),
+        providers.musicbrainz.fixed(
+            MbSource::Official {
+                base_url: "http://127.0.0.1:9/musicbrainz/ws/2".to_owned(),
+            },
+            RequestPriority::BackgroundSync,
+        ),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+    let turn = suggestions.ladder_some(10).await.expect("ladder turn");
+    assert_eq!(
+        turn,
+        LadderTurn {
+            checked: 3,
+            linked: 2,
+            merges: 0,
+            deezer_only: 0
+        }
+    );
+    let asked: Vec<String> = wire
+        .sent()
+        .iter()
+        .filter_map(|sent| sent.query("query"))
+        .collect();
+    assert_eq!(asked, vec!["isrc:USAAA0000007".to_owned()]);
+
+    let link = |artist: &str| -> Option<(String, String)> {
+        db.query_row(
+            "SELECT provider_artist_id, decision_source FROM local_artist_external_identities \
+             WHERE local_artist_id = ?1",
+            [artist],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()
+    };
+    assert_eq!(link(&willo), Some((WILLO.to_owned(), "manual".to_owned())));
+    assert_eq!(
+        link(&fetch),
+        Some((FETCHED.to_owned(), "manual".to_owned()))
+    );
+    assert_eq!(link(&split), None, "disagreeing ISRCs link nothing");
+    assert_eq!(link(&declined), None, "a turned-down artist is untouched");
+    assert_eq!(
+        link(&person),
+        Some((PERSONS.to_owned(), "manual".to_owned())),
+        "a person's link is untouched"
+    );
+    let reason: String = db
+        .query_row(
+            "SELECT reason_code FROM library_catalog_actions WHERE local_artist_id = ?1",
+            [&willo],
+            |row| row.get(0),
+        )
+        .expect("audited");
+    assert_eq!(reason, "ARTIST_LINK_FROM_ISRC");
+    let kept: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM library_artist_evidence_cache WHERE lookup = 'isrc:USAAA0000007'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("cache read");
+    assert_eq!(kept, 1, "the answer is kept");
+
+    let (status, body) = app
+        .call("GET", "/api/v3/library/artist-suggestions", &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let item = body["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["artist_id"] == json!(split))
+        .cloned()
+        .expect("split mind listed");
+    assert_eq!(
+        item["open_reason"],
+        json!("Its ISRCs credit 2 different MusicBrainz artists named Split Mind"),
+        "{body}"
+    );
+
+    // Checked: the next turn checks nobody and asks nothing.
+    assert_eq!(suggestions.ladder_some(10).await, Ok(LadderTurn::default()));
+    assert_eq!(wire.sent().len(), 1);
+}
+
+/// Fork: an artist MusicBrainz has no artist of, whose one Deezer artist
+/// of the name lists one of its albums, is linked to that Deezer artist's
+/// stand-in (and opens an artist page); one with two Deezer artists of the
+/// name stays open. Once MusicBrainz knows the artist (its ISRC credits
+/// it), the next check moves the link to MusicBrainz.
+#[tokio::test]
+async fn a_deezer_only_artist_takes_its_stand_in_and_hands_over_to_musicbrainz() {
+    use droppedneedle_library::artist_match::ArtistSuggestions;
+    use droppedneedle_library::artist_match::ladder::LadderTurn;
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::RequestPriority;
+    use droppedneedle_providers::musicbrainz::MbSource;
+    use droppedneedle_providers::test_support::ScriptedWire;
+    const LATER: &str = "aaaaaaaa-0000-4000-8000-0000000000f1";
+
+    let rig = Rig::start("lib-artist-deezer-only").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let _paused = rig.pause_identification().await;
+    let music = app.config.root_app_dir.join("music");
+    for (folder, album, name) in [("a", "Night Drive", "Teste"), ("b", "Album B", "Twice")] {
+        let file = plant(&music, &format!("{folder}/01.flac"), "management_full.flac");
+        tag_artist(&file, album, name, None, None);
+    }
+    app.add_library_folder("music", &music).await;
+    let db = app.db();
+    let artist_of = |album: &str| -> String {
+        db.query_row(
+            "SELECT album_artist_id FROM local_albums WHERE title = ?1",
+            [album],
+            |row| row.get(0),
+        )
+        .expect("album indexed")
+    };
+    let (teste, twice) = (artist_of("Night Drive"), artist_of("Album B"));
+    let keep = |lookup: &str, answer: Value| {
+        format!(
+            "INSERT INTO library_artist_evidence_cache (lookup, answer, fetched_at) \
+             VALUES ('{lookup}', '{answer}', 9000000000000) ON CONFLICT (lookup) DO UPDATE \
+             SET answer = excluded.answer"
+        )
+    };
+    for (lookup, answer) in [
+        ("mbsearch:teste", json!([])),
+        ("mbsearch:twice", json!([])),
+        (
+            "dzsearch:teste",
+            json!([{"id": "77", "name": "Teste", "picture": null},
+                   {"id": "78", "name": "Teste Band", "picture": null}]),
+        ),
+        ("dzalbums:77", json!([["770", "Night Drive (Deluxe)"]])),
+        (
+            "dzsearch:twice",
+            json!([{"id": "81", "name": "Twice", "picture": null},
+                   {"id": "82", "name": "TWICE", "picture": null}]),
+        ),
+    ] {
+        app.seed(keep(lookup, answer)).await;
+    }
+    app.seed(format!(
+        "INSERT INTO library_artist_suggestions (local_artist_id, musicbrainz_artist_id, \
+         suggestion_state, checked_at, updated_at, merge_artist_id) \
+         VALUES ('{twice}', NULL, 'open', 1, 1, NULL)"
+    ))
+    .await;
+    let wire = Arc::new(ScriptedWire::new());
+    let providers = Providers::unpaced(wire.clone());
+    let suggestions = ArtistSuggestions::new(
+        droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+            .expect("database opens"),
+        providers.previews.clone(),
+        providers.musicbrainz.fixed(
+            MbSource::Official {
+                base_url: "http://127.0.0.1:9/musicbrainz/ws/2".to_owned(),
+            },
+            RequestPriority::BackgroundSync,
+        ),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+    assert_eq!(
+        suggestions.ladder_some(10).await,
+        Ok(LadderTurn {
+            checked: 2,
+            linked: 0,
+            merges: 0,
+            deezer_only: 1
+        })
+    );
+    assert!(wire.sent().is_empty(), "everything was kept");
+    let link = |artist: &str| -> Option<String> {
+        db.query_row(
+            "SELECT provider_artist_id FROM local_artist_external_identities \
+             WHERE local_artist_id = ?1",
+            [artist],
+            |row| row.get(0),
+        )
+        .ok()
+    };
+    let stand_in = link(&teste).expect("linked to the stand-in");
+    assert!(stand_in.starts_with("d0ab1e00-50c3-8"), "{stand_in}");
+    let named: String = db
+        .query_row(
+            "SELECT name FROM source_artists WHERE provider = 'deezer' AND provider_artist_id = '77'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("deezer artist kept");
+    assert_eq!(named, "Teste");
+    assert_eq!(
+        link(&twice),
+        None,
+        "two Deezer artists of the name decide nothing"
+    );
+    let reason: String = db
+        .query_row(
+            "SELECT open_reason FROM library_artist_suggestions WHERE local_artist_id = ?1",
+            [&twice],
+            |row| row.get(0),
+        )
+        .expect("reason kept");
+    assert_eq!(
+        reason,
+        "No MusicBrainz artist named Twice; 2 Deezer artists share the name"
+    );
+    let (status, page) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/artists/{teste}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+
+    // MusicBrainz learns the artist: a new ISRC credits it.
+    let track: String = db
+        .query_row(
+            "SELECT id FROM local_tracks WHERE title = 'Night Drive 1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("track");
+    app.seed(format!(
+        "INSERT INTO local_entity_source_links (id, local_track_id, provider, \
+         external_entity_type, external_id, canonical_url, decision_source, verified_at, \
+         created_at, updated_at) VALUES ('i1', '{track}', 'isrc', 'recording', 'USBBB0000001', \
+         'isrc:USBBB0000001', 'automatic', 1, 1, 1)"
+    ))
+    .await;
+    app.seed(keep(
+        "isrc:USBBB0000001",
+        json!([[LATER, "Teste", "Teste"]]),
+    ))
+    .await;
+    let turn = suggestions.ladder_some(10).await.expect("second turn");
+    assert_eq!(turn.linked, 1, "{turn:?}");
+    assert_eq!(
+        link(&teste).as_deref(),
+        Some(LATER),
+        "handed over to MusicBrainz"
+    );
+    let moved: String = db
+        .query_row(
+            "SELECT reason_code FROM library_catalog_actions WHERE local_artist_id = ?1 \
+             ORDER BY created_at DESC LIMIT 1",
+            [&teste],
+            |row| row.get(0),
+        )
+        .expect("audited");
+    assert_eq!(moved, "ARTIST_LINK_FROM_ISRC");
+}
+
 /// Fork: an album nothing fits still shows its closest MusicBrainz
 /// candidate in Check albums, as a suggestion to take or pass on; one with
 /// no candidate shows none.

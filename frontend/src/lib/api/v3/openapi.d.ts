@@ -12039,6 +12039,11 @@ export interface components {
             musicbrainz?: null | components["schemas"]["SuggestedMusicBrainzArtistView"];
             name: string;
             /**
+             * @description Why nothing settled it yet, one short line (fork: the evidence
+             *     ladder); null until the ladder checked it.
+             */
+            open_reason?: string | null;
+            /**
              * Format: int64
              * @description Indexed tracks crediting the artist.
              */

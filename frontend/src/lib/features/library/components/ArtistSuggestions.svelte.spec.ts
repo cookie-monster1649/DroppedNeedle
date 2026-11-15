@@ -38,7 +38,8 @@ const suggestions = {
 			},
 			merge: null,
 			deezer_url: 'https://www.deezer.com/artist/55',
-			fans: 1234
+			fans: 1234,
+			open_reason: '3 MusicBrainz artists named Poppy Ajudha, no album or collaborator decides it'
 		},
 		{
 			artist_id: 'artist-merge',
@@ -54,7 +55,8 @@ const suggestions = {
 				musicbrainz_artist_id: 'f6beac20-5dfe-4d1f-ae02-0b0a740aafd6'
 			},
 			deezer_url: null,
-			fans: null
+			fans: null,
+			open_reason: null
 		}
 	]
 };
@@ -71,6 +73,13 @@ describe('Artist suggestions', () => {
 			.toBeVisible();
 		await expect.element(page.getByText('(UK singer) on MusicBrainz')).toBeVisible();
 		await expect.element(page.getByText('Same artist as')).toBeVisible();
+		await expect
+			.element(
+				page.getByText(
+					'3 MusicBrainz artists named Poppy Ajudha, no album or collaborator decides it'
+				)
+			)
+			.toBeVisible();
 		await expect
 			.element(page.getByRole('button', { name: 'Use this for Tyler The Creator' }))
 			.toBeVisible();
