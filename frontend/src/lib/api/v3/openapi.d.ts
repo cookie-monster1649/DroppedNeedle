@@ -4111,6 +4111,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/library/artist-suggestions/exact-name": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: how many open best guesses are exact-name and the only
+         *     MusicBrainz artist of their name. Ambiguous names are never counted.
+         */
+        get: operations["count_exact_guesses"];
+        put?: never;
+        /**
+         * Fork: link every exact-name best guess that is the only MusicBrainz
+         *     artist of its name, as the calling admin.
+         */
+        post: operations["accept_exact_guesses"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/library/artists": {
         parameters: {
             query?: never;
@@ -11881,6 +11905,11 @@ export interface components {
              */
             musicbrainz?: null | components["schemas"]["SuggestedMusicBrainzArtistView"];
             name: string;
+            /**
+             * Format: int64
+             * @description Indexed tracks crediting the artist.
+             */
+            track_count: number;
         };
         /** @description Fork: every open artist suggestion. */
         ArtistSuggestionsView: {
@@ -15177,6 +15206,13 @@ export interface components {
          * @enum {string}
          */
         EvidenceClass: "supported" | "unknown" | "contradictory";
+        /** @description Fork: what "Accept all exact-name best guesses" covers or did. */
+        ExactGuessesView: {
+            /** @description Guesses it covers (GET), or linked (POST). */
+            count: number;
+            /** @description Guesses left because another record holds the artist (POST only). */
+            left: number;
+        };
         /**
          * @description The built-in example albums a script is shown against: one disc, two
          *     discs with an edition note, and an album artist whose name another
@@ -35656,6 +35692,82 @@ export interface operations {
                 };
             };
             /** @description Curator role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    count_exact_guesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Guesses the bulk accept covers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExactGuessesView"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Admin role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    accept_exact_guesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Guesses linked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExactGuessesView"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Admin role required */
             403: {
                 headers: {
                     [name: string]: unknown;

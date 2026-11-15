@@ -13540,6 +13540,100 @@
         ]
       }
     },
+    "/api/v3/library/artist-suggestions/exact-name": {
+      "get": {
+        "tags": [
+          "library management"
+        ],
+        "summary": "Fork: how many open best guesses are exact-name and the only\nMusicBrainz artist of their name. Ambiguous names are never counted.",
+        "operationId": "count_exact_guesses",
+        "responses": {
+          "200": {
+            "description": "Guesses the bulk accept covers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExactGuessesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "library management"
+        ],
+        "summary": "Fork: link every exact-name best guess that is the only MusicBrainz\nartist of its name, as the calling admin.",
+        "operationId": "accept_exact_guesses",
+        "responses": {
+          "200": {
+            "description": "Guesses linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExactGuessesView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/library/artists": {
       "get": {
         "tags": [
@@ -40224,7 +40318,8 @@
           "artist_id",
           "name",
           "artist_revision",
-          "album_count"
+          "album_count",
+          "track_count"
         ],
         "properties": {
           "album_count": {
@@ -40279,6 +40374,11 @@
           },
           "name": {
             "type": "string"
+          },
+          "track_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Indexed tracks crediting the artist."
           }
         }
       },
@@ -47371,6 +47471,26 @@
           "unknown",
           "contradictory"
         ]
+      },
+      "ExactGuessesView": {
+        "type": "object",
+        "description": "Fork: what \"Accept all exact-name best guesses\" covers or did.",
+        "required": [
+          "count",
+          "left"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "description": "Guesses it covers (GET), or linked (POST).",
+            "minimum": 0
+          },
+          "left": {
+            "type": "integer",
+            "description": "Guesses left because another record holds the artist (POST only).",
+            "minimum": 0
+          }
+        }
       },
       "ExampleAlbum": {
         "type": "string",

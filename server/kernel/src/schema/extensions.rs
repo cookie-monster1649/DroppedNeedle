@@ -56,6 +56,7 @@ pub static CATALOG: ExtensionChain = ExtensionChain {
         extension!(15, "catalog/0015_spotify_rate_limits.sql"),
         extension!(16, "catalog/0016_spotify_quota.sql"),
         extension!(17, "catalog/0017_source_links.sql"),
+        extension!(18, "catalog/0018_artist_suggestion_candidates.sql"),
     ],
 };
 

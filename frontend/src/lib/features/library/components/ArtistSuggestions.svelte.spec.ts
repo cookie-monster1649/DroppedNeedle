@@ -30,6 +30,7 @@ const suggestions = {
 			name: 'Poppy Ajudha',
 			artist_revision: 1,
 			album_count: 2,
+			track_count: 14,
 			musicbrainz: {
 				musicbrainz_artist_id: '5b11f4ce-a62d-471e-81fc-a69a8278c7da',
 				name: 'Poppy Ajudha',
@@ -44,6 +45,7 @@ const suggestions = {
 			name: 'Tyler The Creator',
 			artist_revision: 3,
 			album_count: 1,
+			track_count: 9,
 			musicbrainz: null,
 			merge: {
 				artist_id: 'artist-kept',
@@ -64,7 +66,9 @@ describe('Artist suggestions', () => {
 
 		await renderWithQuery(ArtistSuggestions, {});
 
-		await expect.element(page.getByText('2 albums · 1,234 fans on Deezer')).toBeVisible();
+		await expect
+			.element(page.getByText('2 albums · 14 tracks · 1,234 fans on Deezer'))
+			.toBeVisible();
 		await expect.element(page.getByText('(UK singer) on MusicBrainz')).toBeVisible();
 		await expect.element(page.getByText('Same artist as')).toBeVisible();
 		await expect
@@ -83,6 +87,34 @@ describe('Artist suggestions', () => {
 			.toBeVisible();
 		await expect
 			.element(page.getByRole('button', { name: 'Use this for Tyler The Creator' }))
+			.not.toBeInTheDocument();
+	});
+
+	it('counts the exact-name best guesses before an admin links them all', async () => {
+		signIn('admin');
+		fakeApi({
+			'GET /api/v3/library/artist-suggestions': suggestions,
+			'GET /api/v3/library/artist-suggestions/exact-name': { count: 3, left: 0 }
+		});
+
+		await renderWithQuery(ArtistSuggestions, {});
+
+		await page.getByRole('button', { name: 'Accept all exact-name best guesses' }).click();
+		await expect.element(page.getByText(/Link 3 artists\?/)).toBeVisible();
+		await expect.element(page.getByRole('button', { name: 'Link them' })).toBeVisible();
+	});
+
+	it("doesn't offer the bulk accept to a curator", async () => {
+		signIn('trusted');
+		fakeApi({ 'GET /api/v3/library/artist-suggestions': suggestions });
+
+		await renderWithQuery(ArtistSuggestions, {});
+
+		await expect
+			.element(page.getByRole('button', { name: 'Use this for Poppy Ajudha' }))
+			.toBeVisible();
+		await expect
+			.element(page.getByRole('button', { name: 'Accept all exact-name best guesses' }))
 			.not.toBeInTheDocument();
 	});
 });

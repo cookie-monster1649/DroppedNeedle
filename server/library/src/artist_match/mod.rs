@@ -23,6 +23,8 @@
 //! link and the artist merge); "Not it" keeps the loop from offering it
 //! again. The picture and genres stay either way.
 
+pub mod credits;
+pub mod split;
 pub mod sql;
 
 use std::sync::Arc;
@@ -45,14 +47,16 @@ use self::sql::{
     PendingArtistRow,
 };
 use crate::identify::artist_links::{
-    ArtistLinkError, LINK_FROM_DEEZER, ProviderLinkOutcome, set_from_provider_link,
+    ArtistLinkError, LINK_BULK_EXACT_NAME, LINK_FROM_DEEZER, LINK_SOLE_NAME_DEEZER,
+    ProviderLinkOutcome, set_from_provider_link, set_from_provider_link_by,
 };
 
 /// How long an artist with nothing to offer waits before it is looked at
 /// again.
 const RECHECK_MS: i64 = 30 * 24 * 3600 * 1000;
-/// MusicBrainz hits read per artist.
-const SEARCH_HITS: u32 = 5;
+/// MusicBrainz hits read per artist: enough to see whether several
+/// artists share the name.
+const SEARCH_HITS: u32 = 10;
 /// The lowest MusicBrainz search score taken.
 const MB_MIN_SCORE: i64 = 90;
 /// Two folded names this alike (0 to 100) are one artist, when both are
@@ -149,6 +153,11 @@ struct Found {
     merge_artist_id: Option<String>,
     musicbrainz: Option<(String, String, Option<String>)>,
     deezer: Option<DeezerFound>,
+    /// MusicBrainz artists whose name or alias is the artist's name.
+    exact_count: Option<i64>,
+    /// The MusicBrainz artist to link outright: the only one of the name,
+    /// which MusicBrainz also links to the artist's Deezer artist.
+    corroborated: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,6 +175,8 @@ pub struct ArtistSuggestion {
     pub name: String,
     pub artist_revision: i64,
     pub album_count: i64,
+    /// Indexed tracks crediting the artist.
+    pub track_count: i64,
     /// The MusicBrainz artist to link: id, name and its short note.
     pub musicbrainz: Option<(String, String, Option<String>)>,
     /// The artist to merge into.
@@ -212,6 +223,7 @@ impl From<OpenSuggestionRow> for ArtistSuggestion {
             name: row.name,
             artist_revision: row.artist_revision,
             album_count: row.album_count,
+            track_count: row.track_count,
             deezer_artist_id: row.deezer_artist_id,
             deezer_url: row.link_url,
             fans: row.fans,
@@ -380,6 +392,7 @@ impl ArtistSuggestions {
                         None => (None, None, None),
                     };
                     let deezer = found.deezer;
+                    let corroborated = found.corroborated;
                     tx.prepare_cached(sql::PUT_SUGGESTION.text())?
                         .execute(params![
                             artist.artist_id,
@@ -392,8 +405,26 @@ impl ArtistSuggestions {
                             deezer.as_ref().and_then(|found| found.link.clone()),
                             deezer.as_ref().and_then(|found| found.fans),
                             now,
+                            found.exact_count,
                         ])?;
-                    Ok::<_, droppedneedle_kernel::db::DbError>(())
+                    if let Some(mbid) = corroborated {
+                        let declined: bool = tx
+                            .prepare_cached(sql::DECLINED_MUSICBRAINZ.text())?
+                            .exists([&artist.artist_id])?;
+                        if !declined {
+                            let outcome = set_from_provider_link(
+                                tx,
+                                &artist.artist_id,
+                                &mbid,
+                                LINK_SOLE_NAME_DEEZER,
+                                now,
+                            )?;
+                            if let ProviderLinkOutcome::Shared(others) = &outcome {
+                                credits::offer_shared(tx, &artist.artist_id, others, &mbid, now)?;
+                            }
+                        }
+                    }
+                    Ok::<_, ArtistLinkError>(())
                 })
                 .await
                 .map_err(|error| error.to_string())?;
@@ -493,24 +524,7 @@ impl ArtistSuggestions {
                     let outcome =
                         set_from_provider_link(tx, &artist, &mbid, LINK_FROM_DEEZER, now)?;
                     if let ProviderLinkOutcome::Shared(others) = &outcome {
-                        for (other, _) in others {
-                            let (left, right) = if artist.as_str() < other.as_str() {
-                                (artist.as_str(), other.as_str())
-                            } else {
-                                (other.as_str(), artist.as_str())
-                            };
-                            tx.prepare_cached(sql::OFFER_MERGE.text())?
-                                .execute(params![
-                                    format!("provider:{left}:{right}"),
-                                    left,
-                                    right,
-                                    now,
-                                ])?;
-                        }
-                        if let Some((target, _)) = others.first() {
-                            tx.prepare_cached(sql::SUGGEST_DEEZER_MERGE.text())?
-                                .execute(params![artist, target, mbid, now])?;
-                        }
+                        credits::offer_shared(tx, &artist, others, &mbid, now)?;
                     }
                     Ok::<_, ArtistLinkError>(outcome)
                 })
@@ -547,7 +561,8 @@ impl ArtistSuggestions {
         }
         if let Some(target) = merge_target(&artist.artist_id, &folded, live) {
             found.merge_artist_id = Some(target.id.clone());
-        } else if let Some(hit) = self.musicbrainz_artist(&artist.name, &folded).await? {
+        } else if let Some((hit, exact)) = self.musicbrainz_artist(&artist.name, &folded).await? {
+            found.exact_count = Some(exact);
             let owner = live.iter().find(|other| {
                 other.id != artist.artist_id
                     && other
@@ -561,31 +576,65 @@ impl ArtistSuggestions {
             }
         }
         found.deezer = self.deezer_artist(&folded, &artist.name, matched).await?;
+        // Fork: the only MusicBrainz artist of the name, which MusicBrainz
+        // itself links to the artist's Deezer artist, is linked outright.
+        if let (Some(1), Some((mbid, _, _)), Some(deezer)) = (
+            found.exact_count,
+            found.musicbrainz.as_ref(),
+            found.deezer.as_ref(),
+        ) {
+            let resolution = self
+                .musicbrainz
+                .resolve_url(
+                    &deezer_artist_url(&deezer.id),
+                    &["artist-rels"],
+                    Criticality::BestEffort,
+                )
+                .await;
+            match resolution {
+                Ok(resolution) => {
+                    if sole_artist(resolution.relations.iter()).as_deref() == Some(mbid.as_str()) {
+                        found.corroborated = Some(mbid.clone());
+                    }
+                }
+                Err(error) if error.is_retriable() => return Err(error),
+                Err(_) => {}
+            }
+        }
         Ok(found)
     }
 
     /// The MusicBrainz artist named `name`: the best-scored hit whose name
-    /// folds to the same.
+    /// folds to the same, with how many hits have the name as their name
+    /// or an alias (fork: several mean the name alone settles nothing).
     async fn musicbrainz_artist(
         &self,
         name: &str,
         folded: &str,
-    ) -> Result<Option<(String, String, Option<String>)>, ProviderError> {
+    ) -> Result<Option<((String, String, Option<String>), i64)>, ProviderError> {
         let page = self
             .musicbrainz
             .search_artists(name, SEARCH_HITS, Criticality::BestEffort)
             .await?;
-        Ok(page
+        let key = credits::name_key(name);
+        let hits: Vec<_> = page
             .items
             .into_iter()
             .filter(|hit| is_valid_mbid(&hit.id))
+            .collect();
+        let exact = exact_name_count(&key, &hits);
+        Ok(hits
+            .into_iter()
             .filter(|hit| hit.score.or(hit.ext_score).unwrap_or(0) >= MB_MIN_SCORE)
             .find(|hit| hit.name.as_deref().is_some_and(|got| norm(got) == folded))
             .map(|hit| {
                 (
-                    hit.id.to_ascii_lowercase(),
-                    hit.name.unwrap_or_default(),
-                    hit.disambiguation.filter(|note| !note.trim().is_empty()),
+                    (
+                        hit.id.to_ascii_lowercase(),
+                        hit.name.unwrap_or_default(),
+                        hit.disambiguation.filter(|note| !note.trim().is_empty()),
+                    ),
+                    exact,
                 )
             }))
     }
@@ -640,6 +689,77 @@ impl ArtistSuggestions {
         })
     }
 
+    /// Fork: one turn of the album-evidence and joined-credit backfill
+    /// ([`credits`]). Blocking; store only.
+    ///
+    /// # Errors
+    ///
+    /// A store fault.
+    pub fn backfill_turn(&self) -> Result<credits::PassTurn, String> {
+        credits::backfill_turn(&self.db, self.clock.now_ms())
+    }
+
+    /// Fork: the open best guesses "Accept all exact-name best guesses"
+    /// takes: the artist's name is the MusicBrainz artist's (folded), and
+    /// that artist is the only one of the name. Blocking.
+    ///
+    /// # Errors
+    ///
+    /// A store fault.
+    pub fn exact_guesses(&self) -> Result<Vec<(String, String)>, OperationError> {
+        self.db.read_blocking("artist_match.exact_guesses", |conn| {
+            let rows = conn
+                .prepare_cached(sql::EXACT_GUESSES.text())?
+                .query_map([], sql::ExactGuessRow::read)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok::<_, OperationError>(
+                rows.into_iter()
+                    .filter(|row| exact_guess(&row.name, &row.musicbrainz_name))
+                    .map(|row| (row.artist_id, row.musicbrainz_artist_id))
+                    .collect(),
+            )
+        })
+    }
+
+    /// Fork: link every exact-name best guess ([`Self::exact_guesses`]) on
+    /// behalf of administrator `user_id`. A guess another record holds is
+    /// left as a merge, as any link is. Answers how many were linked and
+    /// how many left. Blocking.
+    ///
+    /// # Errors
+    ///
+    /// A store fault.
+    pub fn accept_exact_guesses(&self, user_id: &str) -> Result<(usize, usize), OperationError> {
+        let guesses = self.exact_guesses()?;
+        let mut linked = 0;
+        let mut left = 0;
+        for (artist, mbid) in guesses {
+            let now = self.clock.now_ms();
+            let outcome = self
+                .db
+                .write_blocking(Lane::Foreground, "artist_match.accept_exact", |tx| {
+                    let outcome = set_from_provider_link_by(
+                        tx,
+                        &artist,
+                        &mbid,
+                        LINK_BULK_EXACT_NAME,
+                        user_id,
+                        now,
+                    )?;
+                    if let ProviderLinkOutcome::Shared(others) = &outcome {
+                        credits::offer_shared(tx, &artist, others, &mbid, now)?;
+                    }
+                    Ok::<_, ArtistLinkError>(outcome)
+                })
+                .map_err(|error| OperationError::Store(error.to_string()))?;
+            match outcome {
+                ProviderLinkOutcome::Linked => linked += 1,
+                _ => left += 1,
+            }
+        }
+        Ok((linked, left))
+    }
+
     /// A person says artist `artist_id`'s suggestion is not them.
     /// Blocking.
     ///
@@ -661,6 +781,31 @@ impl ArtistSuggestions {
                 Ok(())
             })
     }
+}
+
+/// Fork: how many search hits have the name (letters and digits, folded)
+/// `key` as their name or one of their aliases.
+fn exact_name_count(
+    key: &str,
+    hits: &[droppedneedle_providers::musicbrainz::models::ArtistSearchHit],
+) -> i64 {
+    if key.is_empty() {
+        return 0;
+    }
+    hits.iter()
+        .filter(|hit| {
+            hit.name
+                .iter()
+                .chain(hit.aliases.iter().flatten().map(|alias| &alias.name))
+                .any(|name| credits::name_key(name) == key)
+        })
+        .count() as i64
+}
+
+/// Fork: whether a best guess's name is the artist's, folded.
+fn exact_guess(name: &str, guess: &str) -> bool {
+    let key = credits::name_key(name);
+    !key.is_empty() && key == credits::name_key(guess)
 }
 
 #[cfg(test)]
@@ -710,6 +855,36 @@ mod tests {
             .into_iter(),
         );
         assert_eq!(got, vec!["R&B", "Pop", "Jazz"]);
+    }
+
+    fn hit(
+        id: &str,
+        name: &str,
+        aliases: &[&str],
+    ) -> droppedneedle_providers::musicbrainz::models::ArtistSearchHit {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": name,
+            "aliases": aliases.iter().map(|alias| serde_json::json!({"name": alias})).collect::<Vec<_>>(),
+        }))
+        .expect("hit")
+    }
+
+    #[test]
+    fn several_artists_of_one_name_are_counted_with_aliases() {
+        let hits = [
+            hit("5fdbe54d-7a81-410b-b734-85de65dba41b", "Willo", &[]),
+            hit(
+                "68cac857-3147-43d0-879e-c63dc9c82014",
+                "Someone Else",
+                &["WILLO"],
+            ),
+            hit("20a3f336-f78c-40c4-bc37-ef53cce4ae53", "Willow", &[]),
+        ];
+        assert_eq!(exact_name_count(&credits::name_key("Willo"), &hits), 2);
+        assert_eq!(exact_name_count(&credits::name_key("Willow"), &hits), 1);
+        assert!(exact_guess("Affkt", "AFFKT"));
+        assert!(!exact_guess("Mind Against", "Mind Against Twins"));
     }
 
     #[test]
