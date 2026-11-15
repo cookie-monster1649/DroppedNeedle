@@ -778,6 +778,11 @@ pub struct ArtistSearchHit {
     /// Home area.
     #[serde(default)]
     pub area: Option<AreaRef>,
+    /// Fork: the aliases a search hit carries (the search answer lists
+    /// them without asking), so a name known by an alias counts as the
+    /// artist's.
+    #[serde(default)]
+    pub aliases: Option<Vec<Alias>>,
 }
 
 /// Search page: items plus the envelope counters. The wire shape is

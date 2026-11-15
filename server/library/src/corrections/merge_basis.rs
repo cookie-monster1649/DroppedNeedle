@@ -88,6 +88,9 @@ enum Kind {
     V2Placeholder { name: String },
     /// An administrator chose the merge.
     PersonChose { user_id: String },
+    /// Fork: the retiree was a joined credit ("A/B") whose credits were
+    /// split into these artists; the survivor is the first.
+    SplitCredit { name: String, parts: Vec<String> },
 }
 
 #[derive(PartialEq)]
@@ -255,7 +258,7 @@ impl MergeBasis<'_> {
         match &self.kind {
             Kind::Proven { mbid, .. } => Some(mbid),
             Kind::SameName { .. } | Kind::V2Placeholder { .. } => Some(NAME_MERGE_MARK),
-            Kind::PersonChose { .. } => None,
+            Kind::PersonChose { .. } | Kind::SplitCredit { .. } => None,
         }
     }
 
@@ -319,6 +322,9 @@ impl MergeBasis<'_> {
             }),
             Kind::V2Placeholder { name } => json!({ "kind": "v2_placeholder", "name": name }),
             Kind::PersonChose { user_id } => json!({ "kind": "person", "user_id": user_id }),
+            Kind::SplitCredit { name, parts } => {
+                json!({ "kind": "split_credit", "name": name, "artist_ids": parts })
+            }
         }
     }
 
@@ -340,6 +346,7 @@ impl MergeBasis<'_> {
             (Kind::SameName { key: a, .. }, Kind::SameName { key: b, .. }) => a == b,
             (Kind::V2Placeholder { .. }, Kind::V2Placeholder { .. }) => true,
             (Kind::PersonChose { user_id: a }, Kind::PersonChose { user_id: b }) => a == b,
+            (Kind::SplitCredit { name: a, .. }, Kind::SplitCredit { name: b, .. }) => a == b,
             _ => false,
         }
     }
@@ -689,6 +696,38 @@ impl<'tx> MergeBasis<'tx> {
                 retiree,
                 Kind::PersonChose {
                     user_id: admin.user_id().to_owned(),
+                },
+            )
+        }))
+    }
+}
+
+impl<'tx> MergeBasis<'tx> {
+    /// Fork: joined credit row `retiree`, named `name`, whose credits were
+    /// split into `parts` (the survivor first), retired into the survivor.
+    /// None when either is not live or they are one row.
+    pub(crate) fn split_credit(
+        tx: &'tx Transaction<'_>,
+        name: &str,
+        parts: &[String],
+        retiree: &str,
+    ) -> rusqlite::Result<Option<Self>> {
+        let Some(survivor) = parts.first() else {
+            return Ok(None);
+        };
+        if survivor == retiree {
+            return Ok(None);
+        }
+        let live: i64 = tx
+            .prepare_cached(crate::corrections::sql::LIVE_ARTISTS_OF_PAIR.text())?
+            .query_row(params![survivor, retiree], |row| row.get(0))?;
+        Ok((live == 2).then(|| {
+            Self::new(
+                survivor,
+                retiree,
+                Kind::SplitCredit {
+                    name: name.to_owned(),
+                    parts: parts.to_vec(),
                 },
             )
         }))

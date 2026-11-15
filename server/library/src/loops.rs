@@ -993,6 +993,21 @@ pub(crate) fn start_loops(
             Err(error) => Err(TickError::new(ARTIST_SUGGESTION_FAILED, error)),
         },
     )?;
+    // Fork: unlinked artists their matched albums settle, and joined
+    // credits ("A/B") split into their artists: soon after boot, then a
+    // batch every two minutes until nothing is left (store only).
+    let backfill = services.artist_suggestions.clone();
+    supervisor.periodic_blocking(
+        crate::artist_match::credits::SPLIT_JOB,
+        Schedule::new(Duration::from_secs(120))
+            .with_initial_delay(Duration::from_secs(90))
+            .with_jitter(Duration::from_secs(10))
+            .with_backoff(Duration::from_secs(300), Duration::from_secs(3600)),
+        move |_ctx| match caught("artist credit splits", || backfill.backfill_turn())? {
+            Ok(_) => Ok(Next::Continue),
+            Err(error) => Err(TickError::new(ARTIST_SUGGESTION_FAILED, error)),
+        },
+    )?;
     let publish = services.publishing.clone();
     supervisor.periodic_blocking(
         PUBLISH_JOB,

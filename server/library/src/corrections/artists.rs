@@ -366,3 +366,46 @@ pub(super) fn retarget_retired(
     )? as u64;
     Ok(moved)
 }
+
+/// Fork: the audit reason of a joined credit row ("A/B") whose credits
+/// were split into its artists and which was retired into the first.
+pub(crate) const SPLIT_CREDIT_RETIRED: &str = "AUTOMATIC_JOINED_CREDIT_SPLIT";
+
+/// Fork: retire joined credit row `retiree` (named `name`), whose credits
+/// now name `parts` (the first is the survivor), and write the merge's one
+/// audit row. Anything still pointing at it (favorites, ratings, plays,
+/// a stray credit) moves to the survivor. Answers whether it was retired.
+pub(crate) fn retire_split_credit(
+    tx: &Transaction<'_>,
+    name: &str,
+    parts: &[String],
+    retiree: &str,
+    now: f64,
+) -> rusqlite::Result<bool> {
+    let Some(basis) = MergeBasis::split_credit(tx, name, parts, retiree)? else {
+        return Ok(false);
+    };
+    let survivor = basis.survivor().to_owned();
+    let audit = basis.audit();
+    retire_artist(tx, basis, now)?;
+    crate::catalog_actions::record_artist_action(
+        tx,
+        crate::catalog_actions::ArtistAction {
+            actor: "system",
+            kind: crate::catalog_actions::ActionKind::MergeArtist,
+            artist_id: &survivor,
+            before: serde_json::json!({ "artist_ids": [retiree] }),
+            after: serde_json::json!({
+                "kind": "split_credit",
+                "surviving_artist_id": survivor,
+                "retired_artist_ids": [retiree],
+                "filesystem_writes": 0,
+                "basis": audit,
+            }),
+            reason: SPLIT_CREDIT_RETIRED,
+        },
+        now,
+    )?;
+    crate::catalog_revision::bump_catalog(tx)?;
+    Ok(true)
+}

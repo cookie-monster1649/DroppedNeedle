@@ -329,3 +329,9 @@ impl TagReader for NullTagReader {
         Ok(ScannedTags::default())
     }
 }
+
+/// Fork: the input hash a stored release document is filed under, for tests
+/// that plant one.
+pub fn release_input_hash() -> String {
+    crate::identity::reads::release_input_hash()
+}
