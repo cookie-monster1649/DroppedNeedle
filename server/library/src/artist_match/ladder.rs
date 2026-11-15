@@ -130,8 +130,11 @@ pub fn search_texts(name: &str) -> Vec<String> {
             texts.push(text);
         }
     };
-    if name.len() > 4 && name[..4].eq_ignore_ascii_case("the ") {
-        push(name[4..].to_owned());
+    if let (Some(head), Some(tail)) = (name.get(..4), name.get(4..))
+        && !tail.is_empty()
+        && head.eq_ignore_ascii_case("the ")
+    {
+        push(tail.to_owned());
     }
     if name.contains('&') {
         push(name.replace('&', " and "));
@@ -827,6 +830,14 @@ fn write_verdict(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_texts_take_names_with_multibyte_starts() {
+        let texts = super::search_texts("\u{be48}\u{c13c}\u{d2b8} \u{be14}\u{b8e8}(Vincent Blue)");
+        assert_eq!(texts[0], "\u{be48}\u{c13c}\u{d2b8} \u{be14}\u{b8e8}(Vincent Blue)");
+        assert!(super::search_texts("The Trip").contains(&"Trip".to_owned()));
+        assert_eq!(super::search_texts("The"), vec!["The".to_owned()]);
+    }
+
     use super::*;
 
     const A: &str = "aaaaaaaa-0000-4000-8000-000000000001";
