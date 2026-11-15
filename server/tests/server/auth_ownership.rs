@@ -563,20 +563,20 @@ const PATH_ID_ROWS: &[(Owned, &str, &str, u16, u16)] = &[
         404,
         ADMITTED,
     ),
-    // Search jobs: the owner; an admin may only dismiss another user's.
+    // Search jobs: owner or admin (a pick downloads under the job's owner).
     (
         Owned::SearchJob,
         "GET",
         "/api/v3/downloads/search/{job_id}",
         403,
-        403,
+       ADMITTED,
     ),
     (
         Owned::SearchJob,
         "POST",
         "/api/v3/downloads/search/{job_id}/pick",
         403,
-        403,
+       ADMITTED,
     ),
     (
         Owned::SearchJob,
@@ -590,7 +590,7 @@ const PATH_ID_ROWS: &[(Owned, &str, &str, u16, u16)] = &[
         "POST",
         "/api/v3/downloads/search/{job_id}/cancel",
         403,
-        403,
+       ADMITTED,
     ),
     // An edition's tag write, between two trusted users: writer or admin.
     (

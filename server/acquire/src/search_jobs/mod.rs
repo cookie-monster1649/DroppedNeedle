@@ -398,7 +398,7 @@ impl SearchJobs {
         principal: &Principal,
         job_id: &str,
     ) -> Result<JobView, SearchJobError> {
-        let mut row = self.owned(principal, job_id, false).await?;
+        let mut row = self.owned(principal, job_id, true).await?;
         if row.status == JobStatus::Searching && !self.running().contains_key(job_id) {
             // Nothing runs it any more: the server restarted mid-search.
             let reason = SearchReason::Interrupted.code();
@@ -418,7 +418,7 @@ impl SearchJobs {
             } else {
                 // The run stored its result and left between the read and
                 // the check: answer what it stored.
-                row = self.owned(principal, job_id, false).await?;
+                row = self.owned(principal, job_id, true).await?;
             }
         }
         let payload = JobPayload::decode(&row.blob);
@@ -467,7 +467,7 @@ impl SearchJobs {
         confirm_policy_break: bool,
         edition: Option<String>,
     ) -> Result<String, SearchJobError> {
-        let row = self.owned(principal, job_id, false).await?;
+        let row = self.owned(principal, job_id, true).await?;
         if row.status != JobStatus::Completed {
             return Err(SearchJobError::Conflict(not_open(Some(row.status))));
         }
@@ -578,7 +578,7 @@ impl SearchJobs {
     /// Close a job without downloading anything. A download parked on it
     /// waiting for a pick is cancelled with it.
     pub async fn cancel(&self, principal: &Principal, job_id: &str) -> Result<(), SearchJobError> {
-        let row = self.owned(principal, job_id, false).await?;
+        let row = self.owned(principal, job_id, true).await?;
         self.close(&row).await
     }
 
