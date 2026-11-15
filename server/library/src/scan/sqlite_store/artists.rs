@@ -117,6 +117,27 @@ pub(super) fn credits(
             mbid,
         });
     }
+    // Fork: one joined credit ("A/B", "A, B") is split into its artists.
+    if let [only] = out.as_slice()
+        && only.mbid.is_none()
+        && !UNKEYED_NAMES.contains(&artist_name_key(&only.name).as_str())
+    {
+        let parts = crate::artist_match::split::split_credit(&only.name, &|folded: &str| {
+            crate::artist_match::credits::known_folded(tx, folded).unwrap_or(true)
+        });
+        if parts.len() > 1 {
+            out = parts
+                .into_iter()
+                .map(|part| Credit {
+                    credited_name: part.name.clone(),
+                    name: part.name,
+                    sort_name: None,
+                    join_phrase: part.join_phrase,
+                    mbid: None,
+                })
+                .collect();
+        }
+    }
     if out.is_empty() {
         out.push(Credit {
             name: fallback.to_owned(),
@@ -571,4 +592,18 @@ pub(super) fn resolve(
         }
     }
     Ok((album_rows, track_rows.into_iter().flatten().collect()))
+}
+
+/// Fork: the live row a credit named `name` (no sort name, no id) lands
+/// on, made when there is none: the row a split joined credit's part
+/// takes (`artist_match::credits`), as indexing the file again would.
+pub(crate) fn row_for_name(tx: &Connection, name: &str, now: f64) -> rusqlite::Result<String> {
+    let credit = Credit {
+        name: name.to_owned(),
+        sort_name: None,
+        credited_name: name.to_owned(),
+        join_phrase: String::new(),
+        mbid: None,
+    };
+    Ok(name_row(tx, &credit, now)?.live)
 }

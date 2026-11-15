@@ -4047,6 +4047,11 @@ mod extension_chains {
                 "catalog/0017_source_links.sql",
                 "6d1b098d5d485ad3969096047fc399ba9e269ee49bf29e916cc9f7c4d7ccd12f",
             ),
+            (
+                "catalog",
+                "catalog/0018_artist_suggestion_candidates.sql",
+                "a25e14e026b4427c4d35027e69229e62e19141bf2868646f5fee13ec9034b4ac",
+            ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {

@@ -832,6 +832,14 @@ pub const LINK_CLEARED_BY_PERSON: &str = "ARTIST_LINK_CLEARED_BY_PERSON";
 /// Fork: the app linked an unlinked row to the one MusicBrainz artist that
 /// links to the Deezer artist of the row's accepted album matches.
 pub const LINK_FROM_DEEZER: &str = "ARTIST_LINK_FROM_DEEZER";
+/// Fork: the app linked an unlinked row to the one MusicBrainz artist its
+/// matched albums' release credits name under the row's name.
+pub const LINK_FROM_ALBUMS: &str = "ARTIST_LINK_FROM_ALBUM_CREDITS";
+/// Fork: the app linked an unlinked row to the only MusicBrainz artist of
+/// its name, which MusicBrainz also links to the row's Deezer artist.
+pub const LINK_SOLE_NAME_DEEZER: &str = "ARTIST_LINK_SOLE_NAME_AND_DEEZER";
+/// Fork: an administrator accepted the row's exact-name best guess in bulk.
+pub const LINK_BULK_EXACT_NAME: &str = "ARTIST_LINK_BULK_EXACT_NAME";
 
 /// The ids row `artist` is proven to be, when it is a row that can be:
 /// live, not a sentinel and not a Various Artists row.
@@ -1422,6 +1430,20 @@ pub fn set_from_provider_link(
     reason: &str,
     now_ms: i64,
 ) -> Result<ProviderLinkOutcome, ArtistLinkError> {
+    set_from_provider_link_by(tx, artist, raw_mbid, reason, "", now_ms)
+}
+
+/// Fork: [`set_from_provider_link`] on behalf of person `user_id` (empty
+/// for the app), who is recorded on the link and its audit row: a bulk
+/// accept an administrator chose.
+pub fn set_from_provider_link_by(
+    tx: &Transaction<'_>,
+    artist: &str,
+    raw_mbid: &str,
+    reason: &str,
+    user_id: &str,
+    now_ms: i64,
+) -> Result<ProviderLinkOutcome, ArtistLinkError> {
     let mbid = raw_mbid.trim().to_ascii_lowercase();
     if mbid.len() != 36 || uuid::Uuid::parse_str(&mbid).is_err() {
         return Ok(ProviderLinkOutcome::Skipped);
@@ -1449,9 +1471,9 @@ pub fn set_from_provider_link(
     }
     let now = now_ms as f64 / 1000.0;
     tx.prepare_cached(crate::identify::sql::SET_BY_PERSON.text())?
-        .execute(params![artist, mbid, "", crate::clock::ms(now)])?;
+        .execute(params![artist, mbid, user_id, crate::clock::ms(now)])?;
     touch_artist(tx, artist, now)?;
-    audit_link(tx, "", artist, None, Some(&mbid), reason, now)?;
+    audit_link(tx, user_id, artist, None, Some(&mbid), reason, now)?;
     bump_catalog(tx)?;
     Ok(ProviderLinkOutcome::Linked)
 }

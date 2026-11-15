@@ -29,7 +29,10 @@
 //!   does (fork).
 //! - `GET /library/artist-suggestions`: artists with no MusicBrainz link,
 //!   each with an artist to merge into or a MusicBrainz artist to link
-//!   (fork); `DELETE /library/artists/{id}/suggestion` turns one down.
+//!   (fork); `DELETE /library/artists/{id}/suggestion` turns one down;
+//!   `GET`/`POST /library/artist-suggestions/exact-name` count and accept
+//!   every exact-name best guess that is the only artist of its name
+//!   (admins).
 //! - `PUT /library/albums/{id}/looks-wrong`: mark the album's match as
 //!   looking wrong, or take your own mark back (any signed-in user).
 //! - `DELETE /library/albums/{id}/looks-wrong`: a curator finds nothing
@@ -100,6 +103,7 @@ pub fn routes() -> Routes<LibraryServices> {
         .curator(routes!(decide_provider_match))
         .curator(routes!(list_artist_suggestions))
         .curator(routes!(decline_artist_suggestion))
+        .admin(routes!(count_exact_guesses, accept_exact_guesses))
         .user(routes!(mark_looks_wrong))
         .curator(routes!(clear_looks_wrong))
 }
@@ -1865,6 +1869,8 @@ pub struct ArtistSuggestionView {
     pub artist_revision: i64,
     /// Albums the artist leads.
     pub album_count: i64,
+    /// Indexed tracks crediting the artist.
+    pub track_count: i64,
     /// Link the artist to this MusicBrainz artist; null when a merge is
     /// suggested instead.
     pub musicbrainz: Option<SuggestedMusicBrainzArtistView>,
@@ -1883,6 +1889,7 @@ impl From<crate::artist_match::ArtistSuggestion> for ArtistSuggestionView {
             name: found.name,
             artist_revision: found.artist_revision,
             album_count: found.album_count,
+            track_count: found.track_count,
             musicbrainz: found.musicbrainz.map(|(id, name, disambiguation)| {
                 SuggestedMusicBrainzArtistView {
                     musicbrainz_artist_id: id,
@@ -1954,4 +1961,54 @@ pub async fn decline_artist_suggestion(
     let user = caller.user_id().to_owned();
     blocking(move || suggestions.decline(&artist_id, &user)).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// Fork: what "Accept all exact-name best guesses" covers or did.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ExactGuessesView {
+    /// Guesses it covers (GET), or linked (POST).
+    pub count: usize,
+    /// Guesses left because another record holds the artist (POST only).
+    pub left: usize,
+}
+
+/// Fork: how many open best guesses are exact-name and the only
+/// MusicBrainz artist of their name. Ambiguous names are never counted.
+#[utoipa::path(
+    get,
+    tag = "library management",
+    path = "/api/v3/library/artist-suggestions/exact-name",
+    responses(
+        (status = 200, description = "Guesses the bulk accept covers", body = ExactGuessesView),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "Admin role required"),
+    )
+)]
+pub async fn count_exact_guesses(
+    State(suggestions): State<crate::artist_match::ArtistSuggestions>,
+    _caller: Admin,
+) -> Result<Json<ExactGuessesView>, ApiError> {
+    let count = blocking(move || suggestions.exact_guesses().map(|found| found.len())).await?;
+    Ok(Json(ExactGuessesView { count, left: 0 }))
+}
+
+/// Fork: link every exact-name best guess that is the only MusicBrainz
+/// artist of its name, as the calling admin.
+#[utoipa::path(
+    post,
+    tag = "library management",
+    path = "/api/v3/library/artist-suggestions/exact-name",
+    responses(
+        (status = 200, description = "Guesses linked", body = ExactGuessesView),
+        (status = 401, description = "Not authenticated"),
+        (status = 403, description = "Admin role required"),
+    )
+)]
+pub async fn accept_exact_guesses(
+    State(suggestions): State<crate::artist_match::ArtistSuggestions>,
+    caller: Admin,
+) -> Result<Json<ExactGuessesView>, ApiError> {
+    let user = caller.user_id().to_owned();
+    let (count, left) = blocking(move || suggestions.accept_exact_guesses(&user)).await?;
+    Ok(Json(ExactGuessesView { count, left }))
 }

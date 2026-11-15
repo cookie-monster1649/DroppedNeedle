@@ -31946,3 +31946,219 @@ async fn a_catalogue_album_reads_its_track_list_once() {
         .expect("artist reads");
     assert_eq!(doc["name"], json!("Searched Singer"));
 }
+
+/// Fork: a joined credit ("A/B") is split into its artists and retired
+/// into the first, once; the bulk accept takes only an exact-name best
+/// guess that is the only MusicBrainz artist of its name; album evidence
+/// links an artist its matched release credits under its name, but never
+/// one whose suggestion a person turned down.
+#[tokio::test]
+async fn joined_credits_split_and_unlinked_artists_settle() {
+    use droppedneedle_library::artist_match::ArtistSuggestions;
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::RequestPriority;
+    use droppedneedle_providers::musicbrainz::MbSource;
+    use droppedneedle_providers::test_support::ScriptedWire;
+
+    let rig = Rig::start("lib-artist-splits").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-a/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-a/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    let joined: String = app
+        .db()
+        .query_row(
+            "SELECT album_artist_id FROM local_albums WHERE id = ?1",
+            [&album],
+            |row| row.get(0),
+        )
+        .expect("album artist");
+    let writer = droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+        .expect("database opens");
+    writer
+        .run_sql(&format!(
+            "UPDATE local_artists SET display_name = 'Jamie xx/Robyn', \
+             folded_name = 'jamie xx/robyn' WHERE id = '{joined}'"
+        ))
+        .expect("artist renamed");
+
+    let wire = Arc::new(ScriptedWire::new());
+    let providers = Providers::unpaced(wire.clone());
+    let suggestions = ArtistSuggestions::new(
+        droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+            .expect("database opens"),
+        providers.previews.clone(),
+        providers.musicbrainz.fixed(
+            MbSource::Official {
+                base_url: "http://127.0.0.1:9/musicbrainz/ws/2".to_owned(),
+            },
+            RequestPriority::BackgroundSync,
+        ),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+
+    // The joined row is split: its credits name both artists, Jamie xx
+    // leads, and the joined row is retired into Jamie xx.
+    let turn = suggestions.backfill_turn().expect("backfill turn");
+    assert_eq!(turn.split, 1, "{turn:?}");
+    let credited = |sql: &str, subject: &str| -> Vec<String> {
+        let db = app.db();
+        let mut stmt = db.prepare(sql).expect("prepare");
+        stmt.query_map([subject], |row| row.get::<_, String>(0))
+            .expect("query")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("rows")
+    };
+    let track_names = credited(
+        "SELECT r.display_name FROM local_track_artists t JOIN local_artists r \
+         ON r.id = t.local_artist_id WHERE t.local_track_id = ?1 ORDER BY t.position",
+        &track,
+    );
+    assert_eq!(track_names, ["Jamie xx", "Robyn"]);
+    let lead: (String, String) = app
+        .db()
+        .query_row(
+            "SELECT r.id, r.display_name FROM local_albums a JOIN local_artists r \
+             ON r.id = a.album_artist_id WHERE a.id = ?1",
+            [&album],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("lead");
+    assert_eq!(lead.1, "Jamie xx");
+    let retired: Option<String> = app
+        .db()
+        .query_row(
+            "SELECT retired_into_artist_id FROM local_artists WHERE id = ?1",
+            [&joined],
+            |row| row.get(0),
+        )
+        .expect("joined row");
+    assert_eq!(retired.as_deref(), Some(lead.0.as_str()));
+    let robyn: String = app
+        .db()
+        .query_row(
+            "SELECT t.local_artist_id FROM local_track_artists t WHERE t.local_track_id = ?1 \
+             AND t.position = 1",
+            [&track],
+            |row| row.get(0),
+        )
+        .expect("robyn");
+
+    // Again: nothing more to split, the credits stay as they are.
+    let turn = suggestions.backfill_turn().expect("second turn");
+    assert_eq!(turn.split, 0, "{turn:?}");
+    assert_eq!(
+        credited(
+            "SELECT r.display_name FROM local_track_artists t JOIN local_artists r \
+             ON r.id = t.local_artist_id WHERE t.local_track_id = ?1 ORDER BY t.position",
+            &track,
+        ),
+        ["Jamie xx", "Robyn"]
+    );
+
+    // Bulk accept: Jamie xx's guess is the only artist of the name;
+    // Robyn's name is shared by three, so it is skipped.
+    let jamie_mbid = "11111111-1111-4111-8111-111111111111";
+    let shared_mbid = "22222222-2222-4222-8222-222222222222";
+    for (artist, mbid, name, count) in [
+        (lead.0.as_str(), jamie_mbid, "Jamie xx", 1),
+        (robyn.as_str(), shared_mbid, "Robyn", 3),
+    ] {
+        writer
+            .run_sql(&format!(
+                "INSERT INTO library_artist_suggestions (local_artist_id, musicbrainz_artist_id, \
+                 musicbrainz_name, suggestion_state, checked_at, updated_at, \
+                 musicbrainz_exact_count) VALUES ('{artist}', '{mbid}', '{name}', 'open', 1, 1, \
+                 {count}) ON CONFLICT (local_artist_id) DO UPDATE SET \
+                 musicbrainz_artist_id = excluded.musicbrainz_artist_id, \
+                 musicbrainz_name = excluded.musicbrainz_name, \
+                 musicbrainz_exact_count = excluded.musicbrainz_exact_count"
+            ))
+            .expect("suggestion planted");
+    }
+    let path = "/api/v3/library/artist-suggestions/exact-name";
+    let (status, body) = app.call("GET", path, &headers, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["count"], json!(1), "{body}");
+    let (status, body) = app.call("POST", path, &headers, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["count"], json!(1), "{body}");
+    let link = |artist: &str| -> Option<String> {
+        app.db()
+            .query_row(
+                "SELECT provider_artist_id FROM local_artist_external_identities \
+                 WHERE local_artist_id = ?1",
+                [artist],
+                |row| row.get(0),
+            )
+            .ok()
+    };
+    assert_eq!(link(&lead.0).as_deref(), Some(jamie_mbid));
+    assert_eq!(link(&robyn), None);
+
+    // Album evidence: the album's release credits Robyn under her name.
+    let robyn_mbid = "33333333-3333-4333-8333-333333333333";
+    let release_mbid = "44444444-4444-4444-8444-444444444444";
+    let release = Release {
+        id: release_mbid.to_owned(),
+        release_group_id: "55555555-5555-4555-8555-555555555555".to_owned(),
+        title: "Album".to_owned(),
+        artists: vec![
+            CreditedArtist {
+                id: jamie_mbid.to_owned(),
+                name: "Jamie xx".to_owned(),
+                sort_name: None,
+                join: " & ".to_owned(),
+                disambiguation: None,
+            },
+            CreditedArtist {
+                id: robyn_mbid.to_owned(),
+                name: "Robyn".to_owned(),
+                sort_name: None,
+                join: String::new(),
+                disambiguation: None,
+            },
+        ],
+        ..Release::default()
+    };
+    writer
+        .run_sql(&format!(
+            "INSERT INTO local_album_external_identities (local_album_id, release_group_mbid, \
+             release_mbid, decision_source, selected_at) VALUES ('{album}', \
+             '55555555-5555-4555-8555-555555555555', '{release_mbid}', 'manual', 1) \
+             ON CONFLICT (local_album_id, provider) DO UPDATE SET release_mbid = excluded.release_mbid; \
+             INSERT INTO library_management_metadata_snapshots (id, provider, entity_kind, \
+             entity_id, input_hash, canonical_payload_json, payload_sha256, fetched_at) VALUES \
+             ('test-release', 'musicbrainz', 'release', '{release_mbid}', '{hash}', '{json}', \
+             lower(hex(randomblob(32))), 1); \
+             UPDATE library_artist_suggestions SET suggestion_state = 'declined', \
+             album_evidence_checked_at = NULL WHERE local_artist_id = '{robyn}';",
+            hash = droppedneedle_library::test_support::release_input_hash(),
+            json = serde_json::to_string(&release).expect("release").replace('\'', "''"),
+        ))
+        .expect("album matched");
+    // Declined: untouched.
+    suggestions.backfill_turn().expect("declined turn");
+    assert_eq!(link(&robyn), None);
+    // Open again: the release credit links her.
+    writer
+        .run_sql(&format!(
+            "UPDATE library_artist_suggestions SET suggestion_state = 'open', \
+             album_evidence_checked_at = NULL WHERE local_artist_id = '{robyn}'"
+        ))
+        .expect("reopened");
+    let turn = suggestions.backfill_turn().expect("evidence turn");
+    assert_eq!(turn.linked, 1, "{turn:?}");
+    assert_eq!(link(&robyn).as_deref(), Some(robyn_mbid));
+    // A link a person (or the bulk accept) set is never moved.
+    assert_eq!(link(&lead.0).as_deref(), Some(jamie_mbid));
+}
