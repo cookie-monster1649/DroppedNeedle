@@ -1,5 +1,6 @@
 //! The playlist-folder import's admin routes: start a dry run or the real
-//! import, read what it is doing, stop it, and release the download hold.
+//! import, read what it is doing, stop it, release the download hold, and
+//! (fork) write the provider links again.
 
 use std::sync::Arc;
 
@@ -99,6 +100,24 @@ pub async fn playlist_import_release_hold_handler(
     Ok(Json(import.progress()))
 }
 
+/// Fork: link the files an earlier import put in (or found) to their
+/// Spotify ids and ISRCs again, over the saved state, with no re-import;
+/// the import report is written again with the section. The link loop does
+/// the same on its own.
+/// `POST /api/v3/admin/playlist-import/link-ids`.
+#[utoipa::path(
+    post,
+    tag = "settings",
+    path = "/api/v3/admin/playlist-import/link-ids",
+    responses((status = 200, body = Progress))
+)]
+pub async fn playlist_import_link_ids_handler(
+    State(import): State<Arc<PlaylistImport>>,
+    _admin: Admin,
+) -> Result<Json<Progress>, ApiError> {
+    start(&import, Mode::LinkIds)
+}
+
 /// The playlist import's routes, for admins.
 pub fn routes() -> Routes<Arc<PlaylistImport>> {
     Routes::new()
@@ -107,4 +126,5 @@ pub fn routes() -> Routes<Arc<PlaylistImport>> {
         .admin(routes!(playlist_import_status_handler))
         .admin(routes!(playlist_import_stop_handler))
         .admin(routes!(playlist_import_release_hold_handler))
+        .admin(routes!(playlist_import_link_ids_handler))
 }

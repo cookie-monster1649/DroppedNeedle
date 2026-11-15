@@ -28,6 +28,8 @@ pub fn statement_files() -> Vec<StatementFile> {
         crate::held::sql::registered(),
         crate::imports::sql::registered(),
         crate::landing::sql::registered(),
+        // Fork: the playlist import's provider links.
+        crate::playlist_import::sql::registered(),
         crate::requests::sql::registered(),
         // Fork: the source-album leftover sweep.
         crate::requests::source_leftovers::sql::registered(),
