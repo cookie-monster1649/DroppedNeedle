@@ -81,6 +81,9 @@ This fork is based on upstream `v3.0.0-beta.5` and lives on the branch `nuc/v3.0
 **Artists**
 - **Linking to MusicBrainz:** an artist with no MusicBrainz ID is linked through its Deezer artist's MusicBrainz URL relation.
 - **Shared IDs:** if another artist already holds that MusicBrainz ID, a merge is suggested in the Artists tab.
+- **Settling unlinked artists:** an artist with no MusicBrainz ID is linked when its matched albums' release credits name one MusicBrainz artist under its name, or when its name belongs to only one MusicBrainz artist and that artist links to the same Deezer artist. A name several MusicBrainz artists share is never settled automatically, and a person's link or "Not it" is never overridden.
+- **Splitting joined credits:** tags that join several artists in one string ("A/B", "A; B") are split into the individual artists when files are indexed, and a one-time background job re-credits rows already in the library, retiring the joined artist into the first. Commas, "&", "x", "vs" and "feat." split only when every part is an artist the library already knows, so duos and band names such as "Earth, Wind & Fire" stay whole.
+- **Bulk accept:** admins can accept every exact-name best guess in the Artists tab at once, after seeing the count. Names shared by several MusicBrainz artists are skipped. The list shows artists with the most albums and tracks first.
 
 **Other**
 - **Login:** `OIDC_NEW_USER_ROLE` sets the role for new SSO accounts.
