@@ -24,6 +24,7 @@
 //!   so a run stopped by a restart or an outage picks up where it was and
 //!   a second run imports nothing twice.
 
+pub mod csv_source;
 pub mod hold;
 pub mod http;
 pub mod report;
@@ -246,8 +247,12 @@ pub struct Progress {
     pub reports: String,
     /// Whether a source folder is set.
     pub configured: bool,
-    /// Fork: whether the public Spotify playlist match is set.
+    /// Fork: whether the public playlist match is set (the Spotify API or
+    /// the playlist CSV folder).
     pub spotify_match: bool,
+    /// Fork: the playlist CSV folder, when set (it takes the Spotify API's
+    /// place).
+    pub playlist_csvs: Option<String>,
     /// Fork: the download hold on synced playlists the import covers.
     pub hold: HoldStatus,
 }
@@ -303,6 +308,13 @@ pub fn reports_dir(db: &AcquireDb) -> PathBuf {
 }
 
 impl PlaylistImport {
+    /// Fork: the playlist CSV folder, when there is one (it takes the
+    /// Spotify match's place): `PLAYLIST_IMPORT_PLAYLIST_CSVS`, else the
+    /// source folder when it holds top-level `.csv` files.
+    pub(crate) fn csv_dir(&self) -> Option<PathBuf> {
+        csv_source::dir_for(self.source.as_deref())
+    }
+
     /// The import over the environment's folders; the public-playlist
     /// match is on when the environment names a source.
     pub fn new(
@@ -377,7 +389,9 @@ impl PlaylistImport {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone();
-        progress.spotify_match = self.public.is_some();
+        let csvs = self.csv_dir();
+        progress.spotify_match = self.public.is_some() || csvs.is_some();
+        progress.playlist_csvs = csvs.map(|dir| dir.display().to_string());
         progress.hold = self.hold.status();
         progress
     }
@@ -557,7 +571,7 @@ impl PlaylistImport {
         let asks: Vec<(String, String, String)> = state
             .files
             .iter()
-            .filter(|(_, file)| file.duplicate_of.is_none() && file.outcome.is_none())
+            .filter(|(_, file)| file.duplicate_of.is_none() && !settled(file.outcome.as_deref()))
             .filter_map(|(rel, file)| {
                 let tags = file.tags.as_ref()?;
                 Some((rel.clone(), tags.artist.clone(), tags.title.clone()))
@@ -714,8 +728,10 @@ impl PlaylistImport {
     /// Import the resolved songs, album by album.
     async fn import_all(&self, source: &Path, state: &mut State) -> Result<(), String> {
         let mut albums: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut recordings: HashMap<String, String> = HashMap::new();
         for (rel, file) in &state.files {
-            if file.duplicate_of.is_some() || file.in_library || file.outcome.is_some() {
+            // Fork: an `unmatched:` outcome is tried again.
+            if file.duplicate_of.is_some() || file.in_library || settled(file.outcome.as_deref()) {
                 continue;
             }
             if let Some(Resolution::Found(found)) = &file.resolved {
@@ -723,6 +739,9 @@ impl PlaylistImport {
                     .entry(found.album.to_ascii_lowercase())
                     .or_default()
                     .push(rel.clone());
+                if !found.recording.is_empty() {
+                    recordings.insert(rel.clone(), found.recording.to_ascii_lowercase());
+                }
             }
         }
         let total = albums.len();
@@ -731,7 +750,9 @@ impl PlaylistImport {
                 return Err(STOPPED_BY_ADMIN.to_owned());
             }
             self.set("importing", index, total);
-            let outcomes = self.import_album(source, &album, &rels).await?;
+            let outcomes = self
+                .import_album(source, &album, &rels, &recordings)
+                .await?;
             for (rel, outcome) in outcomes {
                 if let Some(file) = state.files.get_mut(&rel) {
                     file.outcome = Some(outcome);
@@ -746,15 +767,175 @@ impl PlaylistImport {
 
     /// Place one album's files. Answers each file's outcome; an outage
     /// stops the run (the album is tried again on the next).
+    ///
+    /// Fork: the files the first try leaves unpaired (the edition carrying
+    /// their recording was not among the editions read, or the edition
+    /// listing came back empty) are tried once more, guided by the
+    /// recording the resolver found ([`Self::guide`]).
     async fn import_album(
         &self,
         source: &Path,
         album: &str,
         rels: &[String],
+        recordings: &HashMap<String, String>,
+    ) -> Result<Vec<(String, String)>, String> {
+        let mut outcomes = self.place_album(source, album, rels, None, None).await?;
+        let unsettled = |outcomes: &[(String, String)]| -> Vec<String> {
+            outcomes
+                .iter()
+                .filter(|(_, outcome)| !settled(Some(outcome)))
+                .map(|(rel, _)| rel.clone())
+                .collect()
+        };
+        let mut retry = unsettled(&outcomes);
+        if retry.is_empty() {
+            return Ok(outcomes);
+        }
+        let Some(guide) = self.guide(album, &retry, recordings).await else {
+            return Ok(outcomes);
+        };
+        tracing::info!(
+            album,
+            files = retry.len(),
+            editions = guide.asked.len(),
+            "playlist import: unpaired files tried again on the editions of their recordings"
+        );
+        let tries: Vec<Option<&str>> = if guide.asked.is_empty() {
+            vec![None]
+        } else {
+            guide.asked.iter().map(|id| Some(id.as_str())).collect()
+        };
+        for asked in tries {
+            if retry.is_empty() {
+                break;
+            }
+            let again = self
+                .place_album(source, album, &retry, Some(&guide.recordings), asked)
+                .await?;
+            for (rel, outcome) in &again {
+                if let Some(known) = outcomes.iter_mut().find(|(known, _)| known == rel) {
+                    known.1 = outcome.clone();
+                } else {
+                    outcomes.push((rel.clone(), outcome.clone()));
+                }
+            }
+            retry = unsettled(&again);
+        }
+        Ok(outcomes)
+    }
+
+    /// Fork: the guide for files of `album` that did not pair: the
+    /// editions of the group that carry their recordings (read from the
+    /// recordings themselves, not from the group's edition listing), then
+    /// the editions the group's own page lists, at most [`GUIDE_TRIES`];
+    /// and the recordings, set on the files that name none. No edition is
+    /// asked when the library keeps the album on one already (that edition
+    /// is followed). `None` when there is nothing to go on. A
+    /// failed read is no guide (the files stay unmatched and a re-run
+    /// tries again).
+    async fn guide(
+        &self,
+        album: &str,
+        rels: &[String],
+        recordings: &HashMap<String, String>,
+    ) -> Option<Guide> {
+        let virtual_album = is_virtual(album);
+        // A stand-in recording only pairs on a stand-in album.
+        let known: HashMap<String, String> = rels
+            .iter()
+            .filter_map(|rel| Some((rel.clone(), recordings.get(rel)?.clone())))
+            .filter(|(_, recording)| is_virtual(recording) == virtual_album)
+            .collect();
+        let mut asked: Vec<String> = Vec::new();
+        let kept = matches!(self.library.chosen_edition(album).await, Ok(Some(_)));
+        if !virtual_album && !kept {
+            let view = match self.lookups.musicbrainz() {
+                Ok(view) => view,
+                Err(error) => {
+                    tracing::warn!(%error, "playlist import: no MusicBrainz for the edition guide");
+                    return None;
+                }
+            };
+            let mut mb: Vec<&String> = known.values().collect();
+            mb.sort();
+            mb.dedup();
+            let mut carried: Vec<Vec<String>> = Vec::new();
+            for recording in mb.into_iter().take(GUIDE_RECORDINGS) {
+                match view
+                    .lookup_recording(
+                        recording,
+                        &["releases", "release-groups"],
+                        droppedneedle_providers::musicbrainz::Criticality::IdentityCritical,
+                    )
+                    .await
+                {
+                    Ok(Some(found)) => carried.push(
+                        found
+                            .entity
+                            .releases
+                            .iter()
+                            .filter(|release| {
+                                release
+                                    .release_group
+                                    .as_ref()
+                                    .is_some_and(|group| group.id.eq_ignore_ascii_case(album))
+                            })
+                            .map(|release| release.id.to_ascii_lowercase())
+                            .collect(),
+                    ),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, recording, "playlist import: recording did not read");
+                        return None;
+                    }
+                }
+            }
+            asked = pick_editions(&carried);
+            if asked.len() < GUIDE_TRIES {
+                match view
+                    .lookup_release_group(
+                        album,
+                        &["releases"],
+                        droppedneedle_providers::musicbrainz::Criticality::IdentityCritical,
+                    )
+                    .await
+                {
+                    Ok(Some(group)) => {
+                        for release in &group.entity.releases {
+                            let id = release.id.to_ascii_lowercase();
+                            if !asked.contains(&id) {
+                                asked.push(id);
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(%error, album, "playlist import: release group did not read");
+                        return None;
+                    }
+                }
+            }
+        }
+        asked.truncate(GUIDE_TRIES);
+        (!asked.is_empty() || !known.is_empty()).then_some(Guide {
+            asked,
+            recordings: known,
+        })
+    }
+
+    /// Place `rels` on `album`, with `asked` tried first and the
+    /// `recordings` set on files that name none.
+    async fn place_album(
+        &self,
+        source: &Path,
+        album: &str,
+        rels: &[String],
+        recordings: Option<&HashMap<String, String>>,
+        asked: Option<&str>,
     ) -> Result<Vec<(String, String)>, String> {
         let paths: Vec<PathBuf> = rels.iter().map(|rel| source.join(rel)).collect();
         let beneath = source.to_path_buf();
-        let landing =
+        let mut landing =
             tokio::task::spawn_blocking(move || probe_beneath(&paths, &[], Some(&beneath)))
                 .await
                 .map_err(|error| error.to_string())?;
@@ -763,6 +944,15 @@ impl PlaylistImport {
                 .map(|rel| rel.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default()
         };
+        if let Some(recordings) = recordings {
+            for file in &mut landing.audio {
+                if file.tag.musicbrainz_recording_id.is_none()
+                    && let Some(recording) = recordings.get(&rel_of(&file.path))
+                {
+                    file.tag.musicbrainz_recording_id = Some(recording.clone());
+                }
+            }
+        }
         let mut out: Vec<(String, String)> = landing
             .unreadable
             .iter()
@@ -773,29 +963,29 @@ impl PlaylistImport {
         if landing.audio.is_empty() {
             return Ok(out);
         }
-        let summary = match identify::assigned(self.library.as_ref(), &landing, album, None).await {
-            Identified::Matched(summary) => summary,
-            Identified::Review { reason, .. } => {
-                out.extend(
-                    landing
-                        .audio
-                        .iter()
-                        .map(|file| (rel_of(&file.path), format!("unmatched:{}", reason.code()))),
-                );
-                return Ok(out);
-            }
-            Identified::Unavailable(detail) => {
-                return Err(format!(
-                    "MusicBrainz unavailable (run again to go on): {detail}"
-                ));
-            }
-            Identified::AcoustidUnavailable => {
-                return Err("AcoustID unavailable (run again to go on)".to_owned());
-            }
-            Identified::Busy | Identified::Closed => {
-                return Err("the database is busy or closing (run again to go on)".to_owned());
-            }
-        };
+        let summary =
+            match identify::assigned(self.library.as_ref(), &landing, album, asked).await {
+                Identified::Matched(summary) => summary,
+                Identified::Review { reason, .. } => {
+                    out.extend(
+                        landing.audio.iter().map(|file| {
+                            (rel_of(&file.path), format!("unmatched:{}", reason.code()))
+                        }),
+                    );
+                    return Ok(out);
+                }
+                Identified::Unavailable(detail) => {
+                    return Err(format!(
+                        "MusicBrainz unavailable (run again to go on): {detail}"
+                    ));
+                }
+                Identified::AcoustidUnavailable => {
+                    return Err("AcoustID unavailable (run again to go on)".to_owned());
+                }
+                Identified::Busy | Identified::Closed => {
+                    return Err("the database is busy or closing (run again to go on)".to_owned());
+                }
+            };
         let Some((_, _, pairing)) =
             crate::drop_import::album_pairing(&summary, landing.audio.len(), true, false)
         else {
@@ -901,6 +1091,50 @@ impl PlaylistImport {
     }
 }
 
+/// Fork: recordings read per album for the edition guide.
+const GUIDE_RECORDINGS: usize = 4;
+/// Fork: editions a second try asks, one after another, at most.
+const GUIDE_TRIES: usize = 4;
+
+/// Fork: what a second try of an album's unpaired files goes on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Guide {
+    /// The editions to ask, in turn.
+    asked: Vec<String>,
+    /// The resolver's recording, by file path below the source.
+    recordings: HashMap<String, String>,
+}
+
+/// Fork: whether an import outcome is final. An `unmatched:` one is not:
+/// the files did not pair with the editions read (often the edition that
+/// carries them was not among them, or the edition listing came back
+/// empty), so a re-run tries them again.
+pub fn settled(outcome: Option<&str>) -> bool {
+    outcome.is_some_and(|outcome| !outcome.starts_with("unmatched:"))
+}
+
+/// Fork: the editions carrying the files' recordings, the one carrying
+/// the most first (each entry is the editions of the group one recording
+/// is on); the first listed wins a tie.
+fn pick_editions(carried: &[Vec<String>]) -> Vec<String> {
+    let mut votes: Vec<(String, usize)> = Vec::new();
+    for editions in carried {
+        let mut seen = std::collections::HashSet::new();
+        for edition in editions {
+            if !seen.insert(edition) {
+                continue;
+            }
+            match votes.iter_mut().find(|(known, _)| known == edition) {
+                Some((_, count)) => *count += 1,
+                None => votes.push((edition.clone(), 1)),
+            }
+        }
+    }
+    // A stable sort keeps the first listed ahead in a tie.
+    votes.sort_by(|a, b| b.1.cmp(&a.1));
+    votes.into_iter().map(|(edition, _)| edition).collect()
+}
+
 /// A short, path-safe key for an album's import staging.
 fn album_key(album: &str) -> String {
     album
@@ -966,7 +1200,7 @@ pub fn mark_duplicates(state: &mut State) {
         let key = song_key(tags);
         let rate = tags.bitrate.unwrap_or(0);
         // An imported copy stays the one kept.
-        let rate = if file.outcome.is_some() {
+        let rate = if settled(file.outcome.as_deref()) {
             u32::MAX
         } else {
             rate

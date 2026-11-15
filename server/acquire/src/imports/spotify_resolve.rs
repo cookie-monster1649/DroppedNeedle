@@ -632,6 +632,19 @@ impl Live {
         }
     }
 
+    /// Fork: the MusicBrainz view these lookups ask, at their priority
+    /// (the playlist import's edition guide reads recordings and groups
+    /// through it).
+    ///
+    /// # Errors
+    ///
+    /// The MusicBrainz settings do not read.
+    pub fn musicbrainz(
+        &self,
+    ) -> Result<droppedneedle_providers::musicbrainz::MusicBrainzView, ProviderError> {
+        self.albums.view(self.priority)
+    }
+
     /// The same lookups at another priority.
     pub fn at(&self, priority: RequestPriority) -> Self {
         Self {

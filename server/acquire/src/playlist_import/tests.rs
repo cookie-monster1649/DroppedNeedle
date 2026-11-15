@@ -320,3 +320,165 @@ fn the_report_lists_a_refused_lookup_with_its_reason() {
         "lookup refused: deezer refused the request (403)"
     );
 }
+
+#[test]
+fn an_unmatched_outcome_is_tried_again_and_the_rest_are_final() {
+    assert!(!settled(None));
+    assert!(!settled(Some("unmatched:not_paired")));
+    assert!(!settled(Some("unmatched:album_not_found")));
+    assert!(settled(Some("imported")));
+    assert!(settled(Some("already_owned")));
+    assert!(settled(Some("held:tag_mismatch")));
+    assert!(settled(Some("refused:x")));
+    assert!(settled(Some("unreadable")));
+}
+
+#[test]
+fn an_imported_copy_stays_the_kept_one_but_an_unmatched_copy_does_not() {
+    let tags = |bitrate| {
+        Some(Tags {
+            title: "Song".to_owned(),
+            artist: "A".to_owned(),
+            isrc: Some("GBABC2400001".to_owned()),
+            bitrate: Some(bitrate),
+            ..Tags::default()
+        })
+    };
+    let mut state = State::default();
+    state.files.insert(
+        "p1/low.mp3".to_owned(),
+        FileState {
+            tags: tags(128),
+            outcome: Some("unmatched:not_paired".to_owned()),
+            ..FileState::default()
+        },
+    );
+    state.files.insert(
+        "p2/high.mp3".to_owned(),
+        FileState {
+            tags: tags(320),
+            ..FileState::default()
+        },
+    );
+    mark_duplicates(&mut state);
+    assert_eq!(
+        state.files["p1/low.mp3"].duplicate_of.as_deref(),
+        Some("p2/high.mp3")
+    );
+    state.files.get_mut("p1/low.mp3").unwrap().outcome = Some("imported".to_owned());
+    mark_duplicates(&mut state);
+    assert_eq!(
+        state.files["p2/high.mp3"].duplicate_of.as_deref(),
+        Some("p1/low.mp3")
+    );
+}
+
+#[test]
+fn the_guide_asks_the_editions_carrying_the_most_recordings_first() {
+    let editions = |ids: &[&str]| ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+    assert!(pick_editions(&[]).is_empty());
+    assert!(pick_editions(&[Vec::new()]).is_empty());
+    assert_eq!(
+        pick_editions(&[editions(&["r1", "r2"]), editions(&["r2", "r3"])]),
+        editions(&["r2", "r1", "r3"])
+    );
+    // A tie: the first listed first.
+    assert_eq!(
+        pick_editions(&[editions(&["r9", "r1"])]),
+        editions(&["r9", "r1"])
+    );
+    // An edition listed twice for one recording counts once.
+    assert_eq!(
+        pick_editions(&[
+            editions(&["r1", "r1"]),
+            editions(&["r2"]),
+            editions(&["r2"])
+        ]),
+        editions(&["r2", "r1"])
+    );
+}
+
+#[test]
+fn a_playlist_csv_match_is_recorded_and_reported_as_playlist_csv() {
+    use crate::playlist_import::spotify_match::{Cached, Catalogue, Item, find, map_folders};
+    // The state keeps the new via under its own name.
+    assert_eq!(
+        serde_json::to_string(&Via::PlaylistCsv).unwrap(),
+        "\"playlist_csv\""
+    );
+    // A CSV playlist named like its folder (Exportify's underscores) maps
+    // and matches a leftover in its own folder first.
+    let text = "\u{feff}Track URI,ISRC,Track Name,Album Name,Artist Name(s),Release Date,Duration (ms),Popularity,Explicit,Added By,Added At,Genres,Record Label\n\
+spotify:track:t1,USUM70905526,\"Strobe - Radio Edit\",\"For Lack Of A Better Name\",\"deadmau5\",2009,214000,61,false,me,2020-01-01T00:00:00Z,\"\",\"\"\n";
+    let items: Vec<Item> = csv_source::items(text).unwrap();
+    let mut playlists = std::collections::BTreeMap::new();
+    playlists.insert(
+        "csv:6PM_Sunset".to_owned(),
+        Cached {
+            name: "6PM_Sunset".to_owned(),
+            items: Some(items),
+            ..Cached::default()
+        },
+    );
+    let folders: std::collections::BTreeSet<String> =
+        ["6PM Sunset".to_owned(), "D&B".to_owned()].into();
+    let unmapped = map_folders(&mut playlists, &folders);
+    assert_eq!(unmapped, vec!["D&B".to_owned()]);
+    let catalogue = Catalogue {
+        source: "csv:/data/tom_music_import_playlists".to_owned(),
+        playlists,
+        ..Catalogue::default()
+    };
+    assert!(csv_source::is_csv(&catalogue));
+    let tags = Tags {
+        title: "Strobe (Radio Edit)".to_owned(),
+        artist: "Deadmau5".to_owned(),
+        seconds: Some(212.0),
+        ..Tags::default()
+    };
+    let (id, item, own) = find(&catalogue, "6PM Sunset", &tags).unwrap();
+    assert_eq!(
+        (id.as_str(), item.id.as_str(), own),
+        ("csv:6PM_Sunset", "t1", true)
+    );
+    // The report: its own column and notes.
+    let mut state = State {
+        spotify: Some(catalogue),
+        ..State::default()
+    };
+    state.files.insert(
+        "6PM Sunset/x.mp3".to_owned(),
+        FileState {
+            playlist: "6PM Sunset".to_owned(),
+            tags: Some(tags),
+            resolved: Some(Resolution::Found(Resolved {
+                via: Via::PlaylistCsv,
+                album: "ea8e626f-520f-4f54-9fab-8004e702afef".to_owned(),
+                stand_in: None,
+                recording: String::new(),
+            })),
+            ..FileState::default()
+        },
+    );
+    state.files.insert(
+        "D&B/y.mp3".to_owned(),
+        FileState {
+            playlist: "D&B".to_owned(),
+            tags: Some(Tags::default()),
+            resolved: Some(Resolution::NotFound),
+            ..FileState::default()
+        },
+    );
+    let report = Report::of(&state, Mode::DryRun, None, 0);
+    assert_eq!(report.total.playlist_csv, 1);
+    assert_eq!(report.total.spotify_playlist, 0);
+    let summary = report.spotify.as_ref().unwrap();
+    assert_eq!(summary.source, "playlist_csv");
+    assert_eq!(summary.folders["6PM Sunset"].matched, 1);
+    let text = report.text();
+    assert!(text.contains("pl-csv"));
+    assert!(text.contains("Playlist CSV match"));
+    assert!(text.contains("6PM_Sunset.csv"));
+    assert!(text.contains("Folders with no CSV file: D&B"));
+    assert!(report.headline().contains("1 resolved"));
+}
