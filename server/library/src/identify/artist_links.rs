@@ -840,6 +840,23 @@ pub const LINK_FROM_ALBUMS: &str = "ARTIST_LINK_FROM_ALBUM_CREDITS";
 pub const LINK_SOLE_NAME_DEEZER: &str = "ARTIST_LINK_SOLE_NAME_AND_DEEZER";
 /// Fork: an administrator accepted the row's exact-name best guess in bulk.
 pub const LINK_BULK_EXACT_NAME: &str = "ARTIST_LINK_BULK_EXACT_NAME";
+/// Fork: the app linked an unlinked row to the one MusicBrainz artist its
+/// tracks' ISRCs credit under the row's name.
+pub const LINK_FROM_ISRC: &str = "ARTIST_LINK_FROM_ISRC";
+/// Fork: the app linked an unlinked row to the one MusicBrainz artist that
+/// links to the Deezer artist its tracks or albums link to.
+pub const LINK_FROM_DEEZER_TRACKS: &str = "ARTIST_LINK_FROM_DEEZER_TRACKS";
+/// Fork: the app linked an unlinked row to the one MusicBrainz artist of
+/// its name who shares a recording or release with an artist the row
+/// shares credits with here.
+pub const LINK_FROM_COARTIST: &str = "ARTIST_LINK_FROM_COARTIST";
+/// Fork: the app linked an unlinked row to the one MusicBrainz artist of
+/// its name with a release on its albums' label.
+pub const LINK_FROM_LABEL: &str = "ARTIST_LINK_FROM_LABEL";
+/// Fork: MusicBrainz has no artist of the row's name, so the app linked it
+/// to the stand-in of the one Deezer artist of the name whose catalogue
+/// holds the row's albums or tracks.
+pub const LINK_DEEZER_ONLY: &str = "ARTIST_LINK_DEEZER_ONLY";
 
 /// The ids row `artist` is proven to be, when it is a row that can be:
 /// live, not a sentinel and not a Various Artists row.
@@ -1474,6 +1491,56 @@ pub fn set_from_provider_link_by(
         .execute(params![artist, mbid, user_id, crate::clock::ms(now)])?;
     touch_artist(tx, artist, now)?;
     audit_link(tx, user_id, artist, None, Some(&mbid), reason, now)?;
+    bump_catalog(tx)?;
+    Ok(ProviderLinkOutcome::Linked)
+}
+
+/// Fork: move row `artist` from the source stand-in artist the app linked
+/// it to ([`LINK_DEEZER_ONLY`]: `manual`, no person) to MusicBrainz artist
+/// `raw_mbid`, once MusicBrainz knows the artist. A row with no link is
+/// linked as [`set_from_provider_link`] does. Any other link (a person's,
+/// the app's own from album proofs, a real MusicBrainz id) is left alone,
+/// and a move that would group the row with another record is answered
+/// with the records, for a merge.
+pub fn hand_over_stand_in(
+    tx: &Transaction<'_>,
+    artist: &str,
+    raw_mbid: &str,
+    reason: &str,
+    now_ms: i64,
+) -> Result<ProviderLinkOutcome, ArtistLinkError> {
+    let mbid = raw_mbid.trim().to_ascii_lowercase();
+    if mbid.len() != 36
+        || uuid::Uuid::parse_str(&mbid).is_err()
+        || droppedneedle_providers::virtual_ids::is_virtual(&mbid)
+    {
+        return Ok(ProviderLinkOutcome::Skipped);
+    }
+    let Some(current) = artist_link(tx, artist)? else {
+        return Ok(ProviderLinkOutcome::Skipped);
+    };
+    let Some(link) = current.link else {
+        return set_from_provider_link(tx, artist, &mbid, reason, now_ms);
+    };
+    if link.source != LinkSource::Person
+        || link.selected_by.is_some()
+        || !droppedneedle_providers::virtual_ids::is_virtual(&link.mbid)
+    {
+        return Ok(ProviderLinkOutcome::Skipped);
+    }
+    let mbid = merged_ids::current_id(tx, &mbid)?;
+    if placeholder(&mbid) {
+        return Ok(ProviderLinkOutcome::Skipped);
+    }
+    let others = would_group(tx, artist, &mbid)?;
+    if !others.is_empty() {
+        return Ok(ProviderLinkOutcome::Shared(others));
+    }
+    let now = now_ms as f64 / 1000.0;
+    tx.prepare_cached(crate::identify::sql::SET_BY_PERSON.text())?
+        .execute(params![artist, mbid, "", crate::clock::ms(now)])?;
+    touch_artist(tx, artist, now)?;
+    audit_link(tx, "", artist, Some(&link.mbid), Some(&mbid), reason, now)?;
     bump_catalog(tx)?;
     Ok(ProviderLinkOutcome::Linked)
 }

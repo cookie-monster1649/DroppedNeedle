@@ -78,6 +78,8 @@ const ARTIST_SUGGESTION_FAILED: &str = "ARTIST_SUGGESTION_FAILED";
 /// Fork: artists whose Deezer artist is asked of MusicBrainz a turn (at
 /// most three URL lookups each, at MusicBrainz's pace).
 const DEEZER_LINK_BATCH: u32 = 10;
+/// Fork: artists the evidence ladder checks a turn.
+const ARTIST_LADDER_BATCH: u32 = 10;
 
 /// Fork: best guesses from Deezer for albums MusicBrainz has nothing for,
 /// a batch a turn. An album costs at most five Deezer calls (an ISRC, a
@@ -870,7 +872,11 @@ pub(crate) fn start_loops(
                 // Fork: the Deezer artist's own MusicBrainz link first,
                 // so a row it links leaves the name search out.
                 artists.link_some(DEEZER_LINK_BATCH).await?;
-                artists.suggest_some(ARTIST_SUGGESTION_BATCH).await
+                let looked = artists.suggest_some(ARTIST_SUGGESTION_BATCH).await?;
+                // Fork: then the evidence ladder (ISRCs, Deezer links,
+                // co-credits, Deezer only) for those still unlinked.
+                artists.ladder_some(ARTIST_LADDER_BATCH).await?;
+                Ok::<_, String>(looked)
             }
         })? {
             Ok(_) => Ok(Next::Continue),

@@ -527,14 +527,14 @@ const PATH_ID_ROWS: &[(Owned, &str, &str, u16, u16)] = &[
         "GET",
         "/api/v3/downloads/search/{job_id}",
         403,
-       ADMITTED,
+        ADMITTED,
     ),
     (
         Owned::SearchJob,
         "POST",
         "/api/v3/downloads/search/{job_id}/pick",
         403,
-       ADMITTED,
+        ADMITTED,
     ),
     (
         Owned::SearchJob,
@@ -548,7 +548,7 @@ const PATH_ID_ROWS: &[(Owned, &str, &str, u16, u16)] = &[
         "POST",
         "/api/v3/downloads/search/{job_id}/cancel",
         403,
-       ADMITTED,
+        ADMITTED,
     ),
     // An edition's tag write, between two trusted users: writer or admin.
     (

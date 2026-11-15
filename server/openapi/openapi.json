@@ -1299,6 +1299,34 @@
         ]
       }
     },
+    "/api/v3/admin/playlist-import/link-ids": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Fork: link the files an earlier import put in (or found) to their\nSpotify ids and ISRCs again, over the saved state, with no re-import;\nthe import report is written again with the section. The link loop does\nthe same on its own.\n`POST /api/v3/admin/playlist-import/link-ids`.",
+        "operationId": "playlist_import_link_ids_handler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/admin/playlist-import/release-hold": {
       "post": {
         "tags": [
@@ -40375,6 +40403,13 @@
           "name": {
             "type": "string"
           },
+          "open_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why nothing settled it yet, one short line (fork: the evidence\nladder); null until the ladder checked it."
+          },
           "track_count": {
             "type": "integer",
             "format": "int64",
@@ -54963,7 +54998,8 @@
         "description": "Which run.",
         "enum": [
           "dry_run",
-          "import"
+          "import",
+          "link_ids"
         ]
       },
       "MoreByArtistResponse": {
@@ -60254,7 +60290,7 @@
           },
           "step": {
             "type": "string",
-            "description": "`walking`, `reading`, `resolving`, `spotify`, `matching`,\n`importing`, `done`, `stopped`, `failed`."
+            "description": "`walking`, `reading`, `resolving`, `spotify`, `matching`,\n`importing`, `tags` (fork: the import by tags), `linking` (fork: the\nprovider links), `done`, `stopped`, `failed`."
           },
           "total": {
             "type": "integer",

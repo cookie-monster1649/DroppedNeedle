@@ -24,6 +24,7 @@
 //! again. The picture and genres stay either way.
 
 pub mod credits;
+pub mod ladder;
 pub mod split;
 pub mod sql;
 
@@ -184,6 +185,8 @@ pub struct ArtistSuggestion {
     pub deezer_artist_id: Option<String>,
     pub deezer_url: Option<String>,
     pub fans: Option<i64>,
+    /// Fork: why the evidence ladder left it open, one line.
+    pub open_reason: Option<String>,
 }
 
 /// The live artist a suggestion merges into.
@@ -227,6 +230,7 @@ impl From<OpenSuggestionRow> for ArtistSuggestion {
             deezer_artist_id: row.deezer_artist_id,
             deezer_url: row.link_url,
             fans: row.fans,
+            open_reason: row.open_reason,
         }
     }
 }

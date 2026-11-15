@@ -74,7 +74,8 @@ droppedneedle_kernel::sql! {
          s.musicbrainz_disambiguation AS musicbrainz_disambiguation, \
          m.id AS merge_artist_id, m.display_name AS merge_name, \
          m.row_revision AS merge_revision, me.provider_artist_id AS merge_mbid, \
-         s.deezer_artist_id AS deezer_artist_id, s.link_url AS link_url, s.fans AS fans \
+         s.deezer_artist_id AS deezer_artist_id, s.link_url AS link_url, s.fans AS fans, \
+         s.open_reason AS open_reason \
          FROM library_artist_suggestions s \
          JOIN local_artists r ON r.id = s.local_artist_id \
          LEFT JOIN local_artists m ON m.id = s.merge_artist_id \
@@ -244,6 +245,132 @@ droppedneedle_kernel::sql! {
            AND NOT EXISTS (SELECT 1 FROM local_artists m WHERE m.id = s.merge_artist_id \
              AND m.retired_into_artist_id IS NULL AND m.id != r.id) \
          ORDER BY r.id";
+    /// Fork: the ladder's artists: live, nobody turned them down, with no
+    /// MusicBrainz link (or on the Deezer stand-in the ladder itself
+    /// linked, which MusicBrainz may know by now), credited on a track or
+    /// an album. Each with what evidence it has now (counts of ISRC and
+    /// Deezer links, linked co-credited artists and accepted Deezer
+    /// matches), never checked, checked before `?2`, or checked with other
+    /// evidence than it has now, the never-checked first, at most `?1`.
+    pub(super) LADDER_PENDING = "WITH c AS (SELECT r.id AS artist_id, r.display_name AS name, \
+         e.provider_artist_id AS stand_in, s.ladder_checked_at AS checked_at, \
+         s.ladder_evidence AS seen, \
+         (SELECT COUNT(*) FROM local_track_artists t JOIN local_entity_source_links l \
+           ON l.local_track_id = t.local_track_id AND l.provider IN ('isrc', 'deezer') \
+           WHERE t.local_artist_id = r.id) || ':' || \
+         (SELECT COUNT(*) FROM local_track_artists t JOIN local_track_artists o \
+           ON o.local_track_id = t.local_track_id AND o.local_artist_id != t.local_artist_id \
+           JOIN local_artist_external_identities oe ON oe.local_artist_id = o.local_artist_id \
+           WHERE t.local_artist_id = r.id) || ':' || \
+         (SELECT COUNT(*) FROM local_album_artists x JOIN local_album_artists o \
+           ON o.local_album_id = x.local_album_id AND o.local_artist_id != x.local_artist_id \
+           JOIN local_artist_external_identities oe ON oe.local_artist_id = o.local_artist_id \
+           WHERE x.local_artist_id = r.id) || ':' || \
+         (SELECT COUNT(*) FROM local_albums a JOIN library_album_provider_matches m \
+           ON m.local_album_id = a.id AND m.match_state = 'confirmed' \
+           WHERE a.album_artist_id = r.id) AS evidence \
+         FROM local_artists r \
+         LEFT JOIN library_artist_suggestions s ON s.local_artist_id = r.id \
+         LEFT JOIN local_artist_external_identities e ON e.local_artist_id = r.id \
+         WHERE r.retired_into_artist_id IS NULL AND r.kind != 'various_artists' \
+           AND r.id NOT IN ('00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002') \
+           AND COALESCE(s.suggestion_state, 'open') = 'open' \
+           AND (e.local_artist_id IS NULL OR (e.selected_by_user_id IS NULL \
+             AND substr(e.provider_artist_id, 1, 15) = 'd0ab1e00-50c3-8' \
+             AND (SELECT k.reason_code FROM library_catalog_actions k \
+               WHERE k.local_artist_id = r.id AND k.reason_code LIKE 'ARTIST_LINK_%' \
+               ORDER BY k.created_at DESC LIMIT 1) = 'ARTIST_LINK_DEEZER_ONLY')) \
+           AND (EXISTS (SELECT 1 FROM local_track_artists t WHERE t.local_artist_id = r.id) \
+             OR EXISTS (SELECT 1 FROM local_albums a WHERE a.album_artist_id = r.id) \
+             OR EXISTS (SELECT 1 FROM local_album_artists x WHERE x.local_artist_id = r.id))) \
+         SELECT artist_id, name, stand_in, evidence FROM c \
+         WHERE checked_at IS NULL OR checked_at < ?2 OR COALESCE(seen, '') != evidence \
+         ORDER BY checked_at IS NOT NULL, checked_at, artist_id LIMIT ?1";
+    /// Fork: the ISRCs of the indexed tracks crediting artist `?1`.
+    pub(super) LADDER_ISRCS = "SELECT DISTINCT l.external_id FROM local_track_artists t \
+         CROSS JOIN local_tracks lt ON lt.id = t.local_track_id AND lt.availability = 'indexed' \
+         JOIN local_entity_source_links l ON l.local_track_id = lt.id AND l.provider = 'isrc' \
+         WHERE t.local_artist_id = ?1 ORDER BY l.external_id";
+    /// Fork: the Deezer artists the tracks crediting artist `?1` link to,
+    /// and those of the accepted Deezer matches of the albums it leads,
+    /// with the name the library knows each by (empty when none).
+    pub(super) LADDER_DEEZER_ARTISTS = "SELECT l.external_id AS deezer_artist_id, \
+         COALESCE((SELECT sa.name FROM source_artists sa WHERE sa.provider = 'deezer' \
+           AND sa.provider_artist_id = l.external_id), '') AS name \
+         FROM local_track_artists t JOIN local_entity_source_links l \
+           ON l.local_track_id = t.local_track_id AND l.provider = 'deezer' \
+           AND l.external_entity_type = 'artist' \
+         WHERE t.local_artist_id = ?1 \
+         UNION SELECT m.provider_artist_id, m.artist_name FROM local_albums a \
+         JOIN library_album_provider_matches m ON m.local_album_id = a.id \
+         WHERE a.album_artist_id = ?1 AND m.provider = 'deezer' AND m.match_state = 'confirmed' \
+           AND COALESCE(m.provider_artist_id, '') != '' \
+         ORDER BY 1";
+    /// Fork: the Deezer albums the tracks and albums of artist `?1` link
+    /// to, or that accepted matches of its albums name.
+    pub(super) LADDER_DEEZER_ALBUMS = "SELECT l.external_id FROM local_track_artists t \
+         JOIN local_tracks lt ON lt.id = t.local_track_id \
+         JOIN local_entity_source_links l ON (l.local_track_id = lt.id OR l.local_album_id = lt.local_album_id) \
+           AND l.provider = 'deezer' AND l.external_entity_type = 'album' \
+         WHERE t.local_artist_id = ?1 \
+         UNION SELECT m.provider_album_id FROM local_albums a \
+         JOIN library_album_provider_matches m ON m.local_album_id = a.id \
+         WHERE (a.album_artist_id = ?1 OR a.id IN (SELECT local_album_id FROM local_album_artists \
+           WHERE local_artist_id = ?1)) AND m.provider = 'deezer' AND m.match_state = 'confirmed'";
+    /// Fork: the titles of the albums artist `?1` leads or is credited on,
+    /// and of the tracks crediting it.
+    pub(super) LADDER_TITLES = "SELECT a.title FROM local_albums a WHERE a.retired_into_album_id IS NULL \
+           AND (a.album_artist_id = ?1 OR a.id IN (SELECT local_album_id FROM local_album_artists \
+             WHERE local_artist_id = ?1)) \
+         UNION SELECT lt.title FROM local_track_artists t CROSS JOIN local_tracks lt ON lt.id = t.local_track_id \
+         WHERE t.local_artist_id = ?1 AND lt.availability = 'indexed'";
+    /// Fork: the MusicBrainz artists (never a stand-in) of the linked
+    /// artists credited with artist `?1` on one track or album.
+    pub(super) LADDER_COARTISTS = "SELECT DISTINCT lower(oe.provider_artist_id) FROM local_track_artists t \
+         JOIN local_track_artists o ON o.local_track_id = t.local_track_id \
+           AND o.local_artist_id != t.local_artist_id \
+         JOIN local_artist_external_identities oe ON oe.local_artist_id = o.local_artist_id \
+         WHERE t.local_artist_id = ?1 AND substr(oe.provider_artist_id, 1, 15) != 'd0ab1e00-50c3-8' \
+         UNION SELECT lower(oe.provider_artist_id) FROM local_album_artists x \
+         JOIN local_album_artists o ON o.local_album_id = x.local_album_id \
+           AND o.local_artist_id != x.local_artist_id \
+         JOIN local_artist_external_identities oe ON oe.local_artist_id = o.local_artist_id \
+         WHERE x.local_artist_id = ?1 AND substr(oe.provider_artist_id, 1, 15) != 'd0ab1e00-50c3-8' \
+         ORDER BY 1";
+    /// Fork: the record labels Deezer names for the albums artist `?1`'s
+    /// tracks and albums link to.
+    pub(super) LADDER_LABELS = "SELECT DISTINCT sc.label FROM source_catalogue sc \
+         WHERE sc.provider = 'deezer' AND COALESCE(sc.label, '') != '' \
+           AND sc.provider_album_id IN (SELECT l.external_id FROM local_track_artists t \
+             JOIN local_tracks lt ON lt.id = t.local_track_id \
+             JOIN local_entity_source_links l ON (l.local_track_id = lt.id \
+               OR l.local_album_id = lt.local_album_id) \
+               AND l.provider = 'deezer' AND l.external_entity_type = 'album' \
+             WHERE t.local_artist_id = ?1) ORDER BY 1";
+    /// Fork: the answer kept for lookup `?1`, when it was fetched after `?2`.
+    pub(super) EVIDENCE_CACHED = "SELECT answer FROM library_artist_evidence_cache \
+         WHERE lookup = ?1 AND fetched_at >= ?2";
+    /// Fork: keep answer `?2` to lookup `?1`, fetched at `?3`.
+    pub(super) PUT_EVIDENCE = "INSERT INTO library_artist_evidence_cache (lookup, answer, fetched_at) \
+         VALUES (?1, ?2, ?3) ON CONFLICT (lookup) DO UPDATE SET answer = excluded.answer, \
+           fetched_at = excluded.fetched_at";
+    /// Fork: artist `?1` went through the ladder at `?2` with evidence `?3`;
+    /// `?4` is why it is still open (null once settled).
+    pub(super) MARK_LADDER = "INSERT INTO library_artist_suggestions \
+         (local_artist_id, suggestion_state, checked_at, updated_at, ladder_checked_at, \
+          ladder_evidence, open_reason) VALUES (?1, 'open', 0, ?2, ?2, ?3, ?4) \
+         ON CONFLICT (local_artist_id) DO UPDATE SET ladder_checked_at = excluded.ladder_checked_at, \
+           ladder_evidence = excluded.ladder_evidence, open_reason = excluded.open_reason";
+    pub(super) row LadderPendingRow for [LADDER_PENDING] {
+        artist_id: String,
+        name: String,
+        stand_in: Option<String>,
+        evidence: String,
+    }
+    pub(super) row LadderDeezerRow for [LADDER_DEEZER_ARTISTS] {
+        deezer_artist_id: String,
+        name: String,
+    }
     pub(super) row NamedArtistRow for [EVIDENCE_PENDING, SPLIT_PENDING] {
         artist_id: String,
         name: String,
@@ -301,5 +428,6 @@ droppedneedle_kernel::sql! {
         deezer_artist_id: Option<String>,
         link_url: Option<String>,
         fans: Option<i64>,
+        open_reason: Option<String>,
     }
 }

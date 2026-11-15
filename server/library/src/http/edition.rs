@@ -1880,6 +1880,9 @@ pub struct ArtistSuggestionView {
     pub deezer_url: Option<String>,
     /// Deezer fans, a hint of who this is.
     pub fans: Option<i64>,
+    /// Why nothing settled it yet, one short line (fork: the evidence
+    /// ladder); null until the ladder checked it.
+    pub open_reason: Option<String>,
 }
 
 impl From<crate::artist_match::ArtistSuggestion> for ArtistSuggestionView {
@@ -1905,6 +1908,7 @@ impl From<crate::artist_match::ArtistSuggestion> for ArtistSuggestionView {
             }),
             deezer_url: found.deezer_url,
             fans: found.fans,
+            open_reason: found.open_reason,
         }
     }
 }
