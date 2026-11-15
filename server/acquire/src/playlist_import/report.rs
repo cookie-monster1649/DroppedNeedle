@@ -36,6 +36,13 @@ pub struct Counts {
     pub import_already_owned: usize,
     pub import_unmatched: usize,
     pub import_held: usize,
+    /// Fork: imported by their tags ([`super::tags_fallback`]).
+    #[serde(default)]
+    pub tags: usize,
+    /// Fork: imported by their tags on an earlier run, resolved since; the
+    /// tag-only copy is left as it is.
+    #[serde(default)]
+    pub tags_resolved_later: usize,
 }
 
 /// One file nothing resolved, or the import left out.
@@ -64,6 +71,10 @@ pub struct Report {
     pub albums: usize,
     pub unresolved: Vec<Listed>,
     pub not_imported: Vec<Listed>,
+    /// Fork: files imported by their tags that a later run resolved; left
+    /// as they are.
+    #[serde(default)]
+    pub resolved_after_tags: Vec<Listed>,
     /// Fork: the public Spotify playlist match, when it is set.
     pub spotify: Option<SpotifySummary>,
 }
@@ -154,6 +165,7 @@ impl Report {
         let mut playlists: BTreeMap<String, Counts> = BTreeMap::new();
         let mut unresolved = Vec::new();
         let mut not_imported = Vec::new();
+        let mut resolved_after_tags = Vec::new();
         let mut albums = std::collections::BTreeSet::new();
         for (rel, file) in &state.files {
             let counts = playlists.entry(file.playlist.clone()).or_default();
@@ -182,8 +194,32 @@ impl Report {
                 counts.already_in_library += 1;
                 continue;
             }
+            let tags_only = super::tags_fallback::is_tags_only(file.outcome.as_deref());
+            let where_tags = || {
+                format!(
+                    "imported by tags (via tags_only) at {}",
+                    file.library_path.as_deref().unwrap_or("?")
+                )
+            };
             match &file.resolved {
                 None => counts.pending += 1,
+                Some(Resolution::Found(_))
+                    if tags_only && super::tags_fallback::was_unresolved(file) =>
+                {
+                    counts.tags += 1;
+                    counts.tags_resolved_later += 1;
+                    resolved_after_tags.push(listed(&format!(
+                        "resolved since; left as is: {}",
+                        where_tags()
+                    )));
+                    continue;
+                }
+                Some(Resolution::NotFound | Resolution::Refused { .. }) if tags_only => {
+                    counts.unresolved += 1;
+                    counts.tags += 1;
+                    unresolved.push(listed(&where_tags()));
+                    continue;
+                }
                 Some(Resolution::NotFound) => {
                     counts.unresolved += 1;
                     if file.playlist_match.is_some() {
@@ -219,6 +255,7 @@ impl Report {
                 None => {}
                 Some("imported") => counts.imported += 1,
                 Some("already_owned") => counts.import_already_owned += 1,
+                Some(super::tags_fallback::OUTCOME) => counts.tags += 1,
                 Some(other) if other.starts_with("held:") => {
                     counts.import_held += 1;
                     not_imported.push(listed(other));
@@ -251,6 +288,8 @@ impl Report {
                 t.import_already_owned += counts.import_already_owned;
                 t.import_unmatched += counts.import_unmatched;
                 t.import_held += counts.import_held;
+                t.tags += counts.tags;
+                t.tags_resolved_later += counts.tags_resolved_later;
             });
         }
         let spotify = SpotifySummary::of(state, &playlists);
@@ -264,6 +303,7 @@ impl Report {
             albums: albums.len(),
             unresolved,
             not_imported,
+            resolved_after_tags,
         }
     }
 
@@ -278,8 +318,14 @@ impl Report {
             + t.spotify_playlist
             + t.playlist_csv;
         format!(
-            "{} files: {resolved} resolved on {} albums, {} unresolved, {} duplicates, {} already in the library, {} imported",
-            t.files, self.albums, t.unresolved, t.duplicates, t.already_in_library, t.imported
+            "{} files: {resolved} resolved on {} albums, {} unresolved, {} duplicates, {} already in the library, {} imported, {} imported by tags",
+            t.files,
+            self.albums,
+            t.unresolved,
+            t.duplicates,
+            t.already_in_library,
+            t.imported,
+            t.tags
         )
     }
 
@@ -296,7 +342,7 @@ impl Report {
         }
         out.push_str(&format!("{}\n\n", self.headline()));
         let header = format!(
-            "{:<32} {:>6} {:>8} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>9}\n",
+            "{:<32} {:>6} {:>8} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>9} {:>5}\n",
             "playlist",
             "files",
             "isrc-mb",
@@ -311,12 +357,13 @@ impl Report {
             "inlib",
             "unread",
             "imported",
-            "not-in"
+            "not-in",
+            "tags"
         );
         out.push_str(&header);
         let row = |name: &str, c: &Counts| {
             format!(
-                "{:<32} {:>6} {:>8} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>9}\n",
+                "{:<32} {:>6} {:>8} {:>8} {:>8} {:>7} {:>7} {:>7} {:>7} {:>6} {:>6} {:>5} {:>6} {:>8} {:>9} {:>5}\n",
                 name.chars().take(32).collect::<String>(),
                 c.files,
                 c.isrc_musicbrainz,
@@ -332,6 +379,7 @@ impl Report {
                 c.unreadable,
                 c.imported + c.import_already_owned,
                 c.import_unmatched + c.import_held,
+                c.tags,
             )
         };
         for (name, counts) in &self.playlists {
@@ -357,6 +405,18 @@ impl Report {
         if !self.not_imported.is_empty() {
             out.push_str(&format!("\nNot imported ({}):\n", self.not_imported.len()));
             for item in &self.not_imported {
+                out.push_str(&format!(
+                    "  [{}] {} - {} :: {} [{}]\n",
+                    item.playlist, item.artist, item.title, item.path, item.why
+                ));
+            }
+        }
+        if !self.resolved_after_tags.is_empty() {
+            out.push_str(&format!(
+                "\nImported by tags, resolved since (left as is; match them in the library) ({}):\n",
+                self.resolved_after_tags.len()
+            ));
+            for item in &self.resolved_after_tags {
                 out.push_str(&format!(
                     "  [{}] {} - {} :: {} [{}]\n",
                     item.playlist, item.artist, item.title, item.path, item.why
