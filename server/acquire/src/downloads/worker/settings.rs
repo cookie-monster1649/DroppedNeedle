@@ -24,6 +24,7 @@ pub struct WorkerSettings {
     usenet: Live<DownloadClients>,
     library: Live<TypedLibrary>,
     musicbrainz: Live<MusicBrainzSettings>,
+    store: ConfigStore,
 }
 
 impl WorkerSettings {
@@ -36,6 +37,7 @@ impl WorkerSettings {
             usenet: store.live(),
             library: store.live(),
             musicbrainz: store.live(),
+            store: store.clone(),
         }
     }
 
@@ -179,5 +181,6 @@ fn worker_config(
         orphan_roots,
         worker_id: "download-worker".to_owned(),
         review: crate::search_jobs::review::ReviewMode::from_setting(&policy.search_review),
+        settings_mark: 0,
     }
 }

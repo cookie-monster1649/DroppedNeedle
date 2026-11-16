@@ -370,6 +370,65 @@ async fn failed_retry_insert_retries_next_pass() {
     assert_eq!(task_count(&db), 2, "the next pass spawns the successor");
 }
 
+// Fork: a retry whose outcome repeats under unchanged settings waits
+// instead of adding another failed row; a settings change lets it go.
+#[tokio::test]
+async fn a_repeated_outcome_waits_for_a_settings_change() {
+    let db = AcquireDb::scratch().unwrap();
+    db.add_user("u-ada", "Ada", "user").await.unwrap();
+    let journal = Arc::new(Journal::new(db.clone(), quiet_ticks()));
+    let settings = settings_beside(&journal);
+    let mark: i64 = ["download_policy", "source_priority", "plugins"]
+        .iter()
+        .map(|key| settings.revision(key))
+        .sum();
+    let now = now_f64();
+    journal
+        .run("test.seed", move |store| {
+            store.insert_task(&task("t-first"), now - 14_400.0)?;
+            store.transition_task(
+                "t-first",
+                TaskStatus::Failed,
+                now - 14_000.0,
+                Some(TaskOutcome::new(Reason::TrackNotFound, "nobody shares it")),
+            )?;
+            let retry = NewTask {
+                origin: "retry".to_owned(),
+                retry_count: 1,
+                ..task("t-second")
+            };
+            store.insert_task(&retry, now - 10_800.0)?;
+            let mut plan = store.task_plan("t-second")?;
+            plan.settings_mark = Some(mark);
+            store.set_task_plan("t-second", &plan, now - 10_800.0)?;
+            store.transition_task(
+                "t-second",
+                TaskStatus::Failed,
+                now - 10_000.0,
+                Some(TaskOutcome::new(Reason::TrackNotFound, "nobody shares it")),
+            )
+        })
+        .await
+        .unwrap();
+    let (worker, _) = worker_over(
+        journal.db(),
+        journal.clone(),
+        &settings,
+        staging_for(&journal).join("slskd"),
+        Arc::new(FixedAlbums::default()),
+        None,
+        droppedneedle_kernel::events::EventHub::new(),
+    )
+    .await;
+    // Hours past the backoff ladder's step; only the pause holds it.
+    worker.run_once(1).await;
+    assert_eq!(task_count(&db), 2, "the same outcome twice: no third row");
+
+    review_off_in(&settings);
+    worker.run_once(2).await;
+    assert_eq!(task_count(&db), 3, "the settings changed: the retry goes");
+}
+
 // One live download per album, retries included: a failed task whose
 // album another user's download already fetches, or the library already
 // holds, spawns no retry. It stops, and its row says why. A failed task
