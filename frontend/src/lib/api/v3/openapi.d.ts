@@ -485,6 +485,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/admin/bulk-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The latest bulk requests, newest first.
+         *     `GET /api/v3/admin/bulk-requests`.
+         */
+        get: operations["bulk_runs_handler"];
+        put?: never;
+        /**
+         * Estimate, or start, a bulk request of a playlist's missing songs.
+         *     `POST /api/v3/admin/bulk-requests`.
+         */
+        post: operations["bulk_start_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/admin/bulk-requests/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One bulk request with each song and what became of it.
+         *     `GET /api/v3/admin/bulk-requests/{run_id}`.
+         */
+        get: operations["bulk_status_handler"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/admin/bulk-requests/{run_id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause, resume or cancel a bulk request.
+         *     `POST /api/v3/admin/bulk-requests/{run_id}/state`.
+         */
+        post: operations["bulk_state_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/admin/cache/clear": {
         parameters: {
             query?: never;
@@ -594,6 +658,29 @@ export interface paths {
          *     `POST /api/v3/admin/playlist-import/dry-run`.
          */
         post: operations["playlist_import_dry_run_handler"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/admin/playlist-import/link-ids": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork: link the files an earlier import put in (or found) to their
+         *     Spotify ids and ISRCs again, over the saved state, with no re-import;
+         *     the import report is written again with the section. The link loop does
+         *     the same on its own.
+         *     `POST /api/v3/admin/playlist-import/link-ids`.
+         */
+        post: operations["playlist_import_link_ids_handler"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12458,6 +12545,32 @@ export interface components {
          * @enum {string}
          */
         BulkAction: "keep_tagged" | "exclude" | "accept";
+        /** @description Start a bulk request of a playlist's missing songs. */
+        BulkStartRequest: {
+            /** @description Only estimate what would be sent; nothing is started. */
+            dry_run?: boolean;
+            /**
+             * Format: int64
+             * @description Songs sent per hour at most (default 60).
+             */
+            per_hour?: number | null;
+            /**
+             * Format: int64
+             * @description Stop after this many songs for a look (default 0: no pilot).
+             */
+            pilot?: number | null;
+            playlist_id: string;
+        };
+        /** @description The estimate, and the run when one started. */
+        BulkStartResponse: {
+            estimate: components["schemas"]["Estimate"];
+            status?: null | components["schemas"]["RunStatus"];
+        };
+        /** @description Change a bulk request's state. */
+        BulkStateRequest: {
+            /** @description `running` (resume, also past a pilot), `paused` or `cancelled`. */
+            state: components["schemas"]["RunState"];
+        };
         /** @description Cache-clear request. No scope clears everything. */
         CacheClearBody: {
             /** @description What to clear. */
@@ -15099,6 +15212,19 @@ export interface components {
         ErrorEnvelope: {
             /** @description The single error payload. */
             error: components["schemas"]["ErrorBody"];
+        };
+        /** @description What a run of a playlist would send, read before anything is sent. */
+        Estimate: {
+            /** @description Albums with two or more of them, each one album download. */
+            album_groups: number;
+            /** @description Songs asked for on their own, by name (no recording known). */
+            by_name: number;
+            /** @description Songs asked for on their own, by recording. */
+            by_recording: number;
+            /** @description Songs in those albums. */
+            grouped_songs: number;
+            /** @description Songs the library does not play. */
+            missing: number;
         };
         /** @description The caller's saved cities, in picker order. */
         EventCitiesResponse: {
@@ -18581,7 +18707,7 @@ export interface components {
          * @description Which run.
          * @enum {string}
          */
-        Mode: "dry_run" | "import";
+        Mode: "dry_run" | "import" | "link_ids";
         /** @description `GET /albums/{album_id}/more-by-artist`. */
         MoreByArtistResponse: {
             /** @description Other release groups by the artist, in MusicBrainz browse order. */
@@ -20946,7 +21072,8 @@ export interface components {
             spotify_match: boolean;
             /**
              * @description `walking`, `reading`, `resolving`, `spotify`, `matching`,
-             *     `importing`, `done`, `stopped`, `failed`.
+             *     `importing`, `tags` (fork: the import by tags), `linking` (fork: the
+             *     provider links), `done`, `stopped`, `failed`.
              */
             step: string;
             total: number;
@@ -22984,6 +23111,31 @@ export interface components {
             /** @description New role. */
             role: components["schemas"]["Role"];
         };
+        /** @description One run as stored. */
+        Run: {
+            /**
+             * Format: int64
+             * @description Epoch milliseconds.
+             */
+            created_at: number;
+            id: string;
+            /**
+             * Format: int64
+             * @description Songs sent per hour at most.
+             */
+            per_hour: number;
+            /**
+             * Format: int64
+             * @description Songs in the pilot; 0 for none.
+             */
+            pilot: number;
+            playlist_id: string;
+            state: components["schemas"]["RunState"];
+            /** Format: int64 */
+            updated_at: number;
+            /** @description The playlist's owner, whom the songs are asked for. */
+            user_id: string;
+        };
         /** @description Run detail: the run, its scopes, and its discovered files. */
         RunDetailResponse: {
             /** @description Discovered files (bounded to the latest 500). */
@@ -22992,6 +23144,25 @@ export interface components {
             run: components["schemas"]["ScanRunView"];
             /** @description Scopes in the run. */
             scopes: components["schemas"]["ScanScopeView"][];
+        };
+        /**
+         * @description A run's state.
+         * @enum {string}
+         */
+        RunState: "running" | "pilot_done" | "paused" | "done" | "cancelled";
+        /** @description A run with its songs and their counts. */
+        RunStatus: {
+            done: number;
+            failed: number;
+            in_progress: number;
+            queued: number;
+            /** @description Songs in review or failed, by reason. */
+            reasons: {
+                [key: string]: number;
+            };
+            review: number;
+            run: components["schemas"]["Run"];
+            songs: components["schemas"]["Song"][];
         };
         /**
          * @description SABnzbd connection. The key is the full key (the add-only nzbkey cannot
@@ -24191,6 +24362,29 @@ export interface components {
             /** @description slskd version, when the probe reached it. */
             version?: string | null;
         };
+        /** @description One song of a run, with what became of it. */
+        Song: {
+            /** @description Sent within one album download for several songs. */
+            album_group: boolean;
+            album_title: string;
+            artist_name: string;
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            position: number;
+            /**
+             * @description Why, for a song in review or failed: the outcome code, else what
+             *     the request said.
+             */
+            reason?: string | null;
+            state: components["schemas"]["SongState"];
+            track_title: string;
+        };
+        /**
+         * @description What became of one song.
+         * @enum {string}
+         */
+        SongState: "queued" | "in_progress" | "done" | "review" | "failed";
         /**
          * @description Which remote source a view or id belongs to.
          * @enum {string}
@@ -27145,6 +27339,96 @@ export interface operations {
             };
         };
     };
+    bulk_runs_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Run"][];
+                };
+            };
+        };
+    };
+    bulk_start_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkStartRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkStartResponse"];
+                };
+            };
+        };
+    };
+    bulk_status_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Bulk request id */
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunStatus"];
+                };
+            };
+        };
+    };
+    bulk_state_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Bulk request id */
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkStateRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunStatus"];
+                };
+            };
+        };
+    };
     clear_cache: {
         parameters: {
             query?: never;
@@ -27272,6 +27556,25 @@ export interface operations {
         };
     };
     playlist_import_dry_run_handler: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Progress"];
+                };
+            };
+        };
+    };
+    playlist_import_link_ids_handler: {
         parameters: {
             query?: never;
             header?: never;

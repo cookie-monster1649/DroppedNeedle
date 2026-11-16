@@ -45,6 +45,10 @@ pub struct TaskPlan {
     /// (`landing::specs` proven_album_copy), instead of waiting for a person.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub playlist_song: bool,
+    /// Fork: sent by a bulk playlist request (`bulk_requests`): searched
+    /// straight away, never parked in the search review.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bulk_request: bool,
     /// For a single-track download: the album it was resolved to. The
     /// album's release, title and year are on the task row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +88,7 @@ impl TaskPlan {
             planned_album: self.planned_album.clone(),
             album_version: self.album_version,
             playlist_song: self.playlist_song,
+            bulk_request: self.bulk_request,
             ..Self::default()
         }
     }

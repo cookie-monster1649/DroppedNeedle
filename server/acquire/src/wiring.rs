@@ -251,6 +251,8 @@ pub struct AcquireSetup {
     pub background_lookups: Arc<crate::imports::spotify_resolve::Live>,
     /// Fork: the admin-run import of a folder of playlist folders.
     pub playlist_import: Arc<crate::playlist_import::PlaylistImport>,
+    /// Fork: an admin's bulk request of a playlist's missing songs.
+    pub bulk_requests: Arc<crate::bulk_requests::BulkRequests>,
 }
 
 /// The drop-import service over the landing's library port, a staging
@@ -594,6 +596,7 @@ impl AcquireSetup {
             platform.settings.clone(),
         );
         let http = platform.http.shared().clone();
+        let album_lookup = ports.album_lookup.clone();
         let staging_root = config.imports_dir();
         let quota = Arc::new(QuotaLedger::new(config_store.live(), db.clone()));
         let clients = Arc::new(LiveClients::new(
@@ -604,7 +607,7 @@ impl AcquireSetup {
             ClientLives::new(&config_store),
             config.slskd_downloads_path.clone(),
             stores.journal.clone(),
-            Arc::new(Targets::new(stores.journal.clone(), ports.album_lookup)),
+            Arc::new(Targets::new(stores.journal.clone(), album_lookup.clone())),
             ports.plugins.clone(),
         ));
         let events = platform.events.clone();
@@ -813,6 +816,13 @@ impl AcquireSetup {
             playlist_spotify,
         ));
 
+        let bulk_requests = Arc::new(crate::bulk_requests::BulkRequests::new(
+            db.clone(),
+            core.requests.clone(),
+            core.journal.clone(),
+            album_lookup,
+        ));
+
         Ok(Self {
             db,
             requests: core.requests,
@@ -839,6 +849,7 @@ impl AcquireSetup {
             spotify_sync,
             background_lookups,
             playlist_import,
+            bulk_requests,
         })
     }
 
@@ -920,6 +931,8 @@ impl AcquireSetup {
         crate::imports::spotify_sync::spawn_spotify_sync(supervisor, self.spotify_sync.clone())?;
         // Fork: the playlist import's provider links, over its saved state.
         crate::playlist_import::spawn_link_loop(supervisor, self.playlist_import.clone())?;
+        // Fork: bulk playlist requests, sent at their rate.
+        crate::bulk_requests::spawn_bulk_requests(supervisor, self.bulk_requests.clone())?;
         // Fork: a source album's leftovers asked for one by one.
         crate::requests::source_leftovers::spawn_source_leftovers(
             supervisor,

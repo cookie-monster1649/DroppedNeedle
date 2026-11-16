@@ -21,6 +21,8 @@ use crate::imports::handlers::ImportsDeps;
 /// Every `sql.rs` of this crate, one line each, for the schema test.
 pub fn statement_files() -> Vec<StatementFile> {
     vec![
+        // Fork: bulk playlist requests.
+        crate::bulk_requests::sql::registered(),
         crate::downloads::sql::registered(),
         crate::drop_import::sql::registered(),
         crate::flows::sql::registered(),
