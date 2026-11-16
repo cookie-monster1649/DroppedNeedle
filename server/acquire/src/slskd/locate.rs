@@ -103,11 +103,28 @@ impl Locator {
         {
             return Some(leaf);
         }
+        // 1b. slskd never overwrites: a file whose name is taken in the
+        // folder lands as `{stem}_{ticks}.{ext}`, so a song fetched again
+        // into a folder that still holds an earlier copy is found under
+        // that name.
+        if parts.len() >= 2
+            && let Some(copy) = collision_copy(
+                &mount.join(parts[parts.len() - 2]),
+                &mount,
+                basename,
+                expected_size,
+            )
+        {
+            return Some(copy);
+        }
         // 2. Flat layout: {mount}/{filename}.
         if let Some(flat) = find_direct_exact(&mount)
             && direct_hit_usable(&flat)
         {
             return Some(flat);
+        }
+        if let Some(copy) = collision_copy(&mount, &mount, basename, expected_size) {
+            return Some(copy);
         }
         // 3. Peers that file by username: walk {mount}/{username}/ at any
         // depth (scoped so a same-named track from another peer cannot
@@ -439,6 +456,64 @@ impl Locator {
         }
         aliased.into_iter().next()
     }
+}
+
+/// Digits slskd appends to a name already taken in its folder (the
+/// transfer's start time in .NET ticks, 18 digits today).
+const COLLISION_DIGITS: std::ops::RangeInclusive<usize> = 15..=20;
+
+/// Whether `name` is `basename` as slskd renames it when the folder already
+/// holds a file of that name: `{stem}_{digits}.{ext}`.
+fn is_collision_copy(name: &str, basename: &str) -> bool {
+    let (stem, extension) = match basename.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, Some(extension)),
+        _ => (basename, None),
+    };
+    let Some(rest) = name
+        .strip_prefix(stem)
+        .and_then(|rest| rest.strip_prefix('_'))
+    else {
+        return false;
+    };
+    let digits = match extension {
+        Some(extension) => match rest.rsplit_once('.') {
+            Some((digits, found)) if found.eq_ignore_ascii_case(extension) => digits,
+            _ => return false,
+        },
+        None => rest,
+    };
+    COLLISION_DIGITS.contains(&digits.len()) && digits.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// The newest collision copy of `basename` directly in `directory`, inside
+/// the mount and never through a link. With a known size only copies of
+/// exactly that size count; copies of one transfer are the same bytes, so
+/// the newest stands for them all.
+fn collision_copy(
+    directory: &Path,
+    mount: &Path,
+    basename: &str,
+    expected_size: Option<i64>,
+) -> Option<PathBuf> {
+    let children = sorted_children(directory).ok()?;
+    children
+        .into_iter()
+        .filter(|child| {
+            child
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| is_collision_copy(name, basename))
+        })
+        .filter_map(|child| confined_file(mount, &child))
+        .filter_map(|file| {
+            let meta = file.metadata().ok()?;
+            if expected_size.is_some_and(|want| meta.len() as i64 != want) {
+                return None;
+            }
+            Some((meta.modified().ok(), file))
+        })
+        .max_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)))
+        .map(|(_, file)| file)
 }
 
 fn normalised_filename(value: &str) -> String {

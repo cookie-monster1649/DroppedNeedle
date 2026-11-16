@@ -698,6 +698,54 @@ fn status_counts_audio_tracks_and_accounts_for_sidecar_transfers() {
 
 // Locator tests.
 
+/// slskd never overwrites: a song fetched again into a folder that still
+/// holds an earlier copy lands as `{stem}_{ticks}.{ext}`. The locator finds
+/// that copy (the one of the transfer's size, the newest when several
+/// are), and never a name that only looks like one.
+#[tokio::test]
+async fn locator_finds_a_copy_slskd_renamed_on_a_name_clash() {
+    let mount = temp_mount("clash");
+    let folder = mount.join("Hard Groove (2003)");
+    std::fs::create_dir_all(&folder).expect("leaf dir");
+    std::fs::write(folder.join("03 - I’ll Stay.flac"), b"other peer").expect("old copy");
+    std::fs::write(folder.join("03 - I’ll Stay_639298102583247336.flac"), b"short")
+        .expect("first copy");
+    std::fs::write(folder.join("03 - I’ll Stay_639299414252100613.flac"), b"this transfer")
+        .expect("second copy");
+    std::fs::write(folder.join("03 - I’ll Stay_live.flac"), b"this transfer").expect("lookalike");
+    let locator = Locator::new(mount.to_path_buf(), None);
+    let remote = "@@music\\RH Factor\\Hard Groove (2003)\\03 - I’ll Stay.flac";
+
+    let found = locator
+        .locate_file("alice", remote, Some(13))
+        .expect("the renamed copy of this transfer's size");
+    assert!(
+        found.ends_with("03 - I’ll Stay_639299414252100613.flac"),
+        "{found:?}"
+    );
+    assert_eq!(
+        locator.locate_file("alice", remote, Some(999)),
+        None,
+        "no copy of the transfer's size"
+    );
+    // The name itself, where it holds the transfer's bytes, still wins.
+    assert!(
+        locator
+            .locate_file("alice", remote, Some(10))
+            .expect("the exact name")
+            .ends_with("03 - I’ll Stay.flac")
+    );
+
+    // Flat layout too.
+    std::fs::write(mount.join("flat_123456789012345678.mp3"), b"flat").expect("flat copy");
+    assert!(
+        locator
+            .locate_file("alice", "flat.mp3", Some(4))
+            .expect("flat renamed copy")
+            .ends_with("flat_123456789012345678.mp3")
+    );
+}
+
 /// The locator finds only this transfer's file: the leaf, flat and
 /// username layouts, never through traversal or a link, never another
 /// peer's same-named leftover, and partial files only by basename inside
