@@ -10,6 +10,8 @@ use crate::downloads::store::{NewTask, TaskRow};
 enum Retried {
     Spawned,
     Stopped(RetryStop),
+    /// Fork: the outcome repeated and nothing changed.
+    Paused,
     Nothing,
 }
 
@@ -72,6 +74,7 @@ impl DownloadWorker {
                 return;
             }
         };
+        let mark = pass.config.settings_mark;
         for task in retryable {
             let anchor = task.completed_at.unwrap_or(task.updated_at);
             let due = pass.config.retry.next_retry_at(
@@ -97,6 +100,14 @@ impl DownloadWorker {
                     });
                     if !still_failed {
                         return Ok(Retried::Nothing);
+                    }
+                    // Fork: the same failure twice under the same settings
+                    // waits for a change or the long pause.
+                    let history = store.ask_history(&source.id)?;
+                    if crate::downloads::retry_pause::resume_at(&history, mark)
+                        .is_some_and(|at| at > now)
+                    {
+                        return Ok(Retried::Paused);
                     }
                     // Held tracks gate their task: re-downloading a held
                     // track loops.
@@ -138,6 +149,9 @@ impl DownloadWorker {
                     }
                     // The request follows its download onto the retry.
                     Ok(if store.spawn_successor(&source, &row, now)? {
+                        let mut plan = store.task_plan(&row.id)?;
+                        plan.settings_mark = Some(mark);
+                        store.set_task_plan(&row.id, &plan, now)?;
                         Retried::Spawned
                     } else {
                         Retried::Nothing
@@ -154,6 +168,10 @@ impl DownloadWorker {
                     task_id = %task.id,
                     ?stop,
                     "download auto-retry stopped: the album is already on its way or in"
+                ),
+                Some(Retried::Paused) => tracing::debug!(
+                    task_id = %task.id,
+                    "download auto-retry waits: the same outcome twice and nothing changed"
                 ),
                 Some(Retried::Nothing) | None => {}
             }

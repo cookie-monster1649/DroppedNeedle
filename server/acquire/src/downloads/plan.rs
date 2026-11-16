@@ -49,6 +49,11 @@ pub struct TaskPlan {
     /// attempt that fetched that candidate only (its handle is `pinned`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quality_waived: bool,
+    /// Fork: the download settings' mark when the retry pass started this
+    /// task ([`crate::downloads::retry_pause`]). A retry whose outcome
+    /// repeats waits while the mark is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_mark: Option<i64>,
 }
 
 impl TaskPlan {

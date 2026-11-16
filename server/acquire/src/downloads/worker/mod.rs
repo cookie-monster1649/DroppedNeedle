@@ -110,6 +110,9 @@ pub struct WorkerConfig {
     pub worker_id: String,
     /// When an album waits for a hand pick instead of the best guess.
     pub review: ReviewMode,
+    /// Fork: changes whenever the download settings, the source order or
+    /// the plugins change ([`crate::downloads::retry_pause`]).
+    pub settings_mark: i64,
 }
 
 impl Default for WorkerConfig {
@@ -123,6 +126,7 @@ impl Default for WorkerConfig {
             orphan_roots: Vec::new(),
             worker_id: "download-worker".to_owned(),
             review: ReviewMode::default(),
+            settings_mark: 0,
         }
     }
 }

@@ -24,6 +24,7 @@ pub struct WorkerSettings {
     sabnzbd: Live<DownloadClients>,
     library: Live<TypedLibrary>,
     musicbrainz: Live<MusicBrainzSettings>,
+    store: ConfigStore,
 }
 
 impl WorkerSettings {
@@ -36,6 +37,7 @@ impl WorkerSettings {
             sabnzbd: store.live(),
             library: store.live(),
             musicbrainz: store.live(),
+            store: store.clone(),
         }
     }
 
@@ -89,7 +91,12 @@ impl WorkerSettings {
         let source_priority = self.source_priority.read()?;
         let sab = self.sabnzbd.read().unwrap_or_default();
         let sab_mount = sabnzbd_mount(&sab);
-        Some(worker_config(&policy, &source_priority, sab_mount))
+        let mut config = worker_config(&policy, &source_priority, sab_mount);
+        config.settings_mark = ["download_policy", "source_priority", "plugins"]
+            .iter()
+            .map(|key| self.store.revision(key))
+            .sum();
+        Some(config)
     }
 }
 
@@ -138,5 +145,6 @@ fn worker_config(
         orphan_roots,
         worker_id: "download-worker".to_owned(),
         review: crate::search_jobs::review::ReviewMode::from_setting(&policy.search_review),
+        settings_mark: 0,
     }
 }
