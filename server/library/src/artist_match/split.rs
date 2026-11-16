@@ -97,7 +97,7 @@ fn soft_pieces(text: &str) -> (Vec<String>, Vec<String>) {
     let mut start = 0;
     let mut at = 0;
     while at < hay.len() {
-        if !hay.is_char_boundary(at) {
+        if !hay.is_char_boundary(at) || !text.is_char_boundary(at) {
             at += 1;
             continue;
         }
