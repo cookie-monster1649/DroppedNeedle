@@ -2125,14 +2125,8 @@ impl HeldService {
                     } else {
                         AutoMatch::Copies
                     };
-                    self.match_download(
-                        &entry,
-                        held,
-                        &group.to_ascii_lowercase(),
-                        None,
-                        Some(mode),
-                    )
-                    .await
+                    self.match_download(&entry, held, &group.to_ascii_lowercase(), None, Some(mode))
+                        .await
                 }
                 None => Ok(Acted::default()),
             };
