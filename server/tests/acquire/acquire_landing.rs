@@ -7080,6 +7080,8 @@ struct SingleCase {
     group_tag: Option<&'static str>,
     /// Fork: an album artist tag (a label, as some shares tag it).
     album_artist: Option<&'static str>,
+    /// Fork: a playlist song, whose album copy imports on proof.
+    playlist_song: bool,
 }
 
 impl SingleCase {
@@ -7094,6 +7096,7 @@ impl SingleCase {
             release_track_tag: None,
             group_tag: None,
             album_artist: None,
+            playlist_song: false,
         }
     }
 }
@@ -7217,6 +7220,7 @@ impl SingleRig {
                     &id,
                     &TaskPlan {
                         album_version: case.from_album,
+                        playlist_song: case.playlist_song,
                         ..TaskPlan::default()
                     },
                     1.0,
@@ -7329,6 +7333,42 @@ async fn a_single_lands_as_the_song_only_on_proof() {
                     ..SingleCase::titled("Love Me", "Dummy")
                 },
                 imported(),
+            )],
+        ),
+        // Fork: a playlist song's album copy at the single's length is the
+        // song; a few seconds off, it is not proven and still waits.
+        (
+            0,
+            None,
+            vec![
+                (
+                    "t-playlist-album",
+                    SingleCase {
+                        playlist_song: true,
+                        ..SingleCase::titled("Love Me", "Dummy")
+                    },
+                    imported(),
+                ),
+                (
+                    "t-playlist-singles",
+                    SingleCase {
+                        playlist_song: true,
+                        ..SingleCase::titled("Love Me", "Singles 2020")
+                    },
+                    imported(),
+                ),
+            ],
+        ),
+        (
+            5_000,
+            None,
+            vec![(
+                "t-playlist-off",
+                SingleCase {
+                    playlist_song: true,
+                    ..SingleCase::titled("Love Me", "Dummy")
+                },
+                held_as("album_version_only"),
             )],
         ),
         // Fork: AcoustID hears the single itself in a copy from another

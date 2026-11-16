@@ -143,6 +143,9 @@ pub struct Target {
     /// song on an album of that name by the artist). Without it the file
     /// is a weak match and the next source is tried.
     pub album_copy_proven: bool,
+    /// Fork: a playlist song; its album's copy may stand for it on proof
+    /// ([`proven_album_copy`]).
+    pub playlist_song: bool,
     /// For a track download: the album release acquisition resolved the
     /// track to and the track's (disc, track) position on it.
     pub album_positions: Option<(String, Vec<crate::downloads::TrackPosition>)>,
@@ -1046,6 +1049,14 @@ impl ImportSpec for CloseAlbumMatch {
             if subject.target.album_version {
                 return Verdict::note(format!("the track from '{album}', taken as this song"));
             }
+            // Fork: the album's copy shown to be the song asked for: its
+            // own recording tag names it, or it plays within a few seconds
+            // of the requested track (title and artist already agree).
+            if subject.target.playlist_song
+                && let Some(why) = proven_album_copy(subject, found)
+            {
+                return Verdict::note(format!("the track from '{album}': {why}"));
+            }
             if subject.target.album_copy_proven {
                 return Verdict::hold(
                     Reason::AlbumVersionOnly,
@@ -1095,6 +1106,33 @@ fn the_song_itself(subject: &Subject<'_>, found: &FoundRelease) -> Option<String
         && (string_dist(artist, &release_artist) <= NAME_GATE
             || artist_subset(artist, &release_artist));
     named.then(|| format!("the song '{}' by {artist}, at its length", track.title))
+}
+
+/// Fork: how close a file's length must be to the requested track for its
+/// album's copy to stand for the song.
+pub const ALBUM_COPY_DRIFT_SECS: f64 = 3.0;
+
+/// Fork: why the file paired with the requested track is the requested
+/// song though it comes from another album: its MusicBrainz recording tag
+/// is the requested recording, or its length is within
+/// [`ALBUM_COPY_DRIFT_SECS`] of the track's.
+fn proven_album_copy(subject: &Subject<'_>, found: &FoundRelease) -> Option<String> {
+    let pair = found.requested_pair(subject.target)?;
+    let file = subject.landing.audio.get(pair.local)?;
+    if let (Some(tagged), Some(wanted)) = (
+        file.tag.musicbrainz_recording_id.as_deref(),
+        subject.target.recording_mbid.as_deref(),
+    ) && tagged.trim().eq_ignore_ascii_case(wanted)
+    {
+        return Some("its recording tag is the requested recording".to_owned());
+    }
+    let track = found.release.tracks.get(pair.track)?;
+    let (Some(length_ms), Some(seconds)) = (track.length_ms, file.header.duration_seconds) else {
+        return None;
+    };
+    let expected = length_ms as f64 / 1000.0;
+    ((seconds - expected).abs() <= ALBUM_COPY_DRIFT_SECS)
+        .then(|| format!("{seconds:.0}s against the requested {expected:.0}s"))
 }
 
 /// Fork: whether AcoustID heard the requested recording in the file paired

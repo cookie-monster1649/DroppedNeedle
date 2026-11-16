@@ -1358,6 +1358,7 @@ pub fn target_for(task: &TaskRow, details: &TaskDetails, plan: &TaskPlan) -> Tar
         origin: task.origin.as_str().to_owned(),
         album_version: task.download_type == "track" && plan.album_version,
         album_copy_proven: false,
+        playlist_song: task.download_type == "track" && plan.playlist_song,
         album_positions: plan.track_album.as_ref().map(|album| {
             (
                 plan.release_mbid

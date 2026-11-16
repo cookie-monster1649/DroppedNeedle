@@ -40,6 +40,11 @@ pub struct TaskPlan {
     /// it is the right track.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub album_version: bool,
+    /// Fork: a playlist song (bulk or synced): its album's copy imports as
+    /// the song when its recording tag or length confirms it
+    /// (`landing::specs` proven_album_copy), instead of waiting for a person.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub playlist_song: bool,
     /// For a single-track download: the album it was resolved to. The
     /// album's release, title and year are on the task row.
     #[serde(default, skip_serializing_if = "Option::is_none")]
