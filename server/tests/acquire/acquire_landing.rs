@@ -2894,6 +2894,130 @@ async fn a_held_album_with_copies_is_matched_by_the_held_list_itself() {
     }
 }
 
+/// Fork: a stand-in album download held as `no_release` (the landing
+/// once had no release to check it against) is checked against the
+/// stand-in's Deezer tracklist by the held loop and imported when the
+/// files agree with it; files of other songs stay held.
+#[tokio::test]
+async fn a_stand_in_album_held_for_no_release_files_itself_when_it_agrees() {
+    use droppedneedle_providers::virtual_ids::{self, Kind};
+    let group = virtual_ids::mint("deezer", Kind::ReleaseGroup, "777");
+    let edition = virtual_ids::mint("deezer", Kind::Release, "777");
+    for agrees in [true, false] {
+        let db = AcquireDb::scratch().expect("scratch db");
+        db.add_user("u-ada", "Ada", "user").await.expect("user");
+        let dir = db.path().parent().expect("scratch dir").to_path_buf();
+        let config = Arc::new(
+            ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+                .expect("config"),
+        );
+        let platform = TestPlatform::on(db.db(), &dir)
+            .settings(config)
+            .build()
+            .await;
+        let (library, _) = library_at(&platform);
+        let music = dir.join("music");
+        std::fs::create_dir_all(&music).expect("music root");
+        library
+            .scans
+            .add_root(
+                Some("music".to_owned()),
+                music.to_string_lossy().into_owned(),
+                EffectivePolicy::Automatic,
+            )
+            .expect("root adds");
+        let staging = dir.join("staging");
+        let copies: Vec<PathBuf> = TITLES
+            .iter()
+            .zip(FIXTURES)
+            .zip(1u32..)
+            .map(|((title, fixture), number)| {
+                land_file(
+                    &staging,
+                    &format!("{number:02} - {title}.flac"),
+                    fixture,
+                    title,
+                    number,
+                )
+            })
+            .collect();
+        let lengths: Vec<_> = copies.iter().map(|track| length_ms(track)).collect();
+        let listed: &[&str] = if agrees {
+            &TITLES
+        } else {
+            &["Glory Box", "Roads"]
+        };
+        let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(vec![release(
+            &edition, &group, listed, &lengths,
+        )]));
+        let acquire = acquire_over(
+            &platform,
+            &library,
+            Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+        );
+        acquire
+            .journal
+            .run("test.seed", {
+                let group = group.clone();
+                move |store| store.insert_task(&new_task("t-held", &group), 1.0)
+            })
+            .await
+            .expect("task");
+        let held_dir = acquire.held.folders().held.clone();
+        std::fs::create_dir_all(&held_dir).expect("held folder");
+        let mut rows = Vec::new();
+        for (index, copy) in copies.iter().enumerate() {
+            let name = copy.file_name().unwrap().to_string_lossy().into_owned();
+            std::fs::copy(copy, held_dir.join(&name)).expect("held copy");
+            let seconds = length_ms(copy).map(|ms| ms as f64 / 1000.0);
+            rows.push((name, TITLES[index].to_owned(), seconds));
+        }
+        let seed_group = group.clone();
+        acquire
+            .db
+            .write("test.held", move |tx| {
+                tx.execute(
+                    "INSERT INTO source_identities (uuid, provider, kind, provider_id, \
+                     provider_album_id, created_at) \
+                     VALUES (?1, 'deezer', 'release_group', '777', '777', 1)",
+                    rusqlite::params![seed_group],
+                )?;
+                tx.execute(
+                    "INSERT INTO acquire_held_entries (id, user_id, origin, group_key, \
+                     release_group_mbid, artist_name, album_title, state, created_at, \
+                     expires_at) VALUES (1, 'u-ada', 'download', ?1, ?2, 'Portishead', \
+                     'Dummy', 'held', 1, 9999999999999)",
+                    rusqlite::params![format!("album:{seed_group}"), seed_group],
+                )?;
+                for (name, title, seconds) in &rows {
+                    tx.execute(
+                        "INSERT INTO acquire_held_files (entry_id, root, path, original_name, \
+                         track_title, duration_seconds, reason, reason_detail, source, \
+                         source_task_id, state, created_at) VALUES (1, 'held', ?1, ?1, ?2, ?3, \
+                         'no_release', 'MusicBrainz has no release', 'soulseek', \
+                         't-held', 'held', 1)",
+                        rusqlite::params![name, title, seconds],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("held rows");
+        acquire.held.tend().await;
+        let states: Vec<String> = acquire
+            .db
+            .db()
+            .column("SELECT state FROM acquire_held_files ORDER BY id", []);
+        if agrees {
+            assert_eq!(files_under(&music, "flac").len(), TITLES.len());
+            assert!(states.iter().all(|state| state == "imported"), "{states:?}");
+        } else {
+            assert!(files_under(&music, "flac").is_empty());
+            assert!(states.iter().all(|state| state == "held"), "{states:?}");
+        }
+    }
+}
+
 /// A person confirmed a pick outside the quality band: the attempt that
 /// fetched exactly that pick imports its files, while the same files from
 /// any other attempt of the task (a failover) are refused on quality.
