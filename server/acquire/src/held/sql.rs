@@ -100,6 +100,16 @@ droppedneedle_kernel::sql! {
              AND COALESCE(e.recording_mbid, '') NOT LIKE 'want-%' \
              GROUP BY e.id HAVING SUM(f.reason != 'weak_match') = 0 \
              ORDER BY e.id LIMIT ?1";
+    /// Fork: album download entries on a Deezer stand-in album whose held
+    /// files are all `no_release` (the landing found no release to check
+    /// them against), at most `?1`: id, owner and held file count.
+    pub(super) NO_RELEASE_ALBUMS = "SELECT e.id, e.user_id, COUNT(*) FROM acquire_held_entries e \
+             JOIN acquire_held_files f ON f.entry_id = e.id AND f.state = 'held' \
+             WHERE e.state = 'held' AND e.origin = 'download' \
+             AND e.release_group_mbid LIKE 'd0ab1e00-50c3-8%' \
+             AND COALESCE(e.recording_mbid, '') = '' \
+             GROUP BY e.id HAVING SUM(f.reason != 'no_release') = 0 \
+             ORDER BY e.id LIMIT ?1";
     pub(super) UNPAIRED_WANTS = "SELECT DISTINCT e.id FROM acquire_held_entries e \
              JOIN acquire_held_files f ON f.entry_id = e.id \
              WHERE e.state = 'held' AND e.origin = 'download' \

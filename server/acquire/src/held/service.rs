@@ -517,7 +517,7 @@ impl HeldService {
                     })
                     .map_err(HeldError::from),
                 EntryOrigin::Download => {
-                    self.match_download(&entry, files, &group, Some(actor), false)
+                    self.match_download(&entry, files, &group, Some(actor), None)
                         .await
                 }
             },
@@ -1683,8 +1683,9 @@ impl HeldService {
         files: Vec<HeldFile>,
         group: &str,
         actor: Option<&str>,
-        auto: bool,
+        by_itself: Option<AutoMatch>,
     ) -> Result<Acted, HeldError> {
+        let auto = by_itself.is_some();
         let library = self.library();
         let mut groups: Vec<Vec<HeldFile>> = Vec::new();
         for file in files {
@@ -1716,8 +1717,11 @@ impl HeldService {
             // best copy of each track; the other copies stay held.
             // Files held as they are scored as they were: only a set with
             // copies to set aside is worth scoring again.
-            if auto && crate::landing::matching::set_aside_copies(&mut landing, |_| true).is_empty()
-            {
+            let set_aside = match by_itself {
+                Some(_) => crate::landing::matching::set_aside_copies(&mut landing, |_| true),
+                None => Vec::new(),
+            };
+            if by_itself == Some(AutoMatch::Copies) && set_aside.is_empty() {
                 return Err(refused(Reason::WeakMatch));
             }
             // Files that no longer read are left as they are.
@@ -2040,6 +2044,7 @@ impl HeldService {
         self.pair_wants().await;
         self.retry_due().await;
         self.match_weak_albums().await;
+        self.match_no_release_albums().await;
         expired
     }
 
@@ -2059,6 +2064,39 @@ impl HeldService {
                 return;
             }
         };
+        self.match_albums_by_itself(entries, false).await;
+    }
+
+    /// Fork: stand-in album downloads held because the landing found no
+    /// release to check them against (the stand-in's Deezer tracklist was
+    /// not offered then) are scored against it now, and imported only on a
+    /// clear match (`clear_album_match`). Each entry is tried once per set
+    /// of held files.
+    async fn match_no_release_albums(&self) {
+        let entries = match self
+            .read("held.no_release_albums", |rows| {
+                rows.no_release_albums(WEAK_BATCH)
+            })
+            .await
+        {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(%error, "held no-release albums unreadable");
+                return;
+            }
+        };
+        self.match_albums_by_itself(entries, true).await;
+    }
+
+    /// Match each entry to its own album as a person's Match would, by
+    /// itself. `unscored` entries' files were never scored against a
+    /// release; the others are only worth scoring again with copies to
+    /// set aside.
+    async fn match_albums_by_itself(
+        &self,
+        entries: Vec<(i64, Option<String>, i64)>,
+        unscored: bool,
+    ) {
         for (entry_id, owner, files) in entries {
             {
                 let mut tried = self.weak_tried.lock().unwrap_or_else(|p| p.into_inner());
@@ -2079,11 +2117,22 @@ impl HeldService {
                 }
             };
             let result = match entry.release_group_mbid.clone() {
-                Some(_) if !holds_copies(&entry.files) => Ok(Acted::default()),
+                Some(_) if !unscored && !holds_copies(&entry.files) => Ok(Acted::default()),
                 Some(group) => {
                     let held: Vec<HeldFile> = entry.files.clone();
-                    self.match_download(&entry, held, &group.to_ascii_lowercase(), None, true)
-                        .await
+                    let mode = if unscored {
+                        AutoMatch::Unscored
+                    } else {
+                        AutoMatch::Copies
+                    };
+                    self.match_download(
+                        &entry,
+                        held,
+                        &group.to_ascii_lowercase(),
+                        None,
+                        Some(mode),
+                    )
+                    .await
                 }
                 None => Ok(Acted::default()),
             };
@@ -2939,6 +2988,15 @@ pub(crate) fn spawn_held_prune(
 /// the one the download asked for, else the closest by track count, so
 /// editions that fit as well are settled the way a person's Match settles
 /// them. Answers why not otherwise.
+/// Fork: why the app matches a held album by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoMatch {
+    /// Weak-match files with copies of a track to set aside.
+    Copies,
+    /// Files never scored against a release (held as `no_release`).
+    Unscored,
+}
+
 fn clear_album_match(summary: &crate::landing::matching::MatchSummary) -> Result<(), &'static str> {
     use crate::landing::matching::MatchState;
     use droppedneedle_library::matching::decide::{ACCEPT_ALBUM, ACCEPT_TRACK};
