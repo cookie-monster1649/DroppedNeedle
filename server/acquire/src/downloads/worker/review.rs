@@ -117,6 +117,21 @@ impl DownloadWorker {
                 return Reviewed::Search;
             }
         };
+        // Fork: a bulk playlist request's album download, sent for the
+        // songs it names, is not parked for a person.
+        {
+            let task_id = task.id.clone();
+            let bulk = self
+                .journal
+                .read("downloads.review.plan", move |store| {
+                    store.task_plan(&task_id)
+                })
+                .await
+                .is_ok_and(|plan| plan.bulk_request);
+            if bulk {
+                return Reviewed::Search;
+            }
+        }
         let release_mbid = {
             let task_id = task.id.clone();
             match self

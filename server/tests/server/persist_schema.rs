@@ -1881,6 +1881,8 @@ fn artist_join_undo_upgrade_keeps_the_action_log() {
 /// changes in the same commit, on purpose.
 #[rustfmt::skip]
 const FOREIGN_KEYS: &[(&str, &str, &str, &str)] = &[
+    ("acquire_bulk_items", "run_id", "acquire_bulk_runs", "CASCADE"),
+    ("acquire_bulk_runs", "user_id", "auth_users", "CASCADE"),
     ("acquire_discovery_batch_items", "batch_id", "acquire_discovery_batches", "CASCADE"),
     ("acquire_discovery_batches", "user_id", "auth_users", "CASCADE"),
     ("acquire_edition_acquires", "task_id", "download_tasks", "CASCADE"),
@@ -2453,6 +2455,18 @@ fn state_columns() -> Vec<StateColumn> {
 
     vec![
         // acquire
+        state(
+            "acquire_bulk_items",
+            "state",
+            &droppedneedle_acquire::bulk_requests::ItemState::ALL,
+            droppedneedle_acquire::bulk_requests::ItemState::as_str,
+        ),
+        state(
+            "acquire_bulk_runs",
+            "state",
+            &droppedneedle_acquire::bulk_requests::RunState::ALL,
+            droppedneedle_acquire::bulk_requests::RunState::as_str,
+        ),
         state("acquire_discovery_batch_items", "outcome", &BatchOutcome::ALL, BatchOutcome::as_str),
         state("acquire_held_entries", "origin", &EntryOrigin::ALL, EntryOrigin::as_str),
         state(
@@ -4319,6 +4333,11 @@ mod extension_chains {
                 "catalog",
                 "catalog/0019_artist_evidence_ladder.sql",
                 "47de225ec77acbdfd519e6d83b17862268f40012c17c8c68e99eb01e56521265",
+            ),
+            (
+                "catalog",
+                "catalog/0020_bulk_requests.sql",
+                "711500c6153dbf69fa63383a9f6b3d85a93ec412845c3e99729e04122988cbf6",
             ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {

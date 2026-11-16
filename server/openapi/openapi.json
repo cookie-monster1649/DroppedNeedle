@@ -1070,6 +1070,161 @@
         ]
       }
     },
+    "/api/v3/admin/bulk-requests": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "The latest bulk requests, newest first.\n`GET /api/v3/admin/bulk-requests`.",
+        "operationId": "bulk_runs_handler",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Run"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Estimate, or start, a bulk request of a playlist's missing songs.\n`POST /api/v3/admin/bulk-requests`.",
+        "operationId": "bulk_start_handler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkStartResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/admin/bulk-requests/{run_id}": {
+      "get": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "One bulk request with each song and what became of it.\n`GET /api/v3/admin/bulk-requests/{run_id}`.",
+        "operationId": "bulk_status_handler",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Bulk request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/admin/bulk-requests/{run_id}/state": {
+      "post": {
+        "tags": [
+          "requests"
+        ],
+        "summary": "Pause, resume or cancel a bulk request.\n`POST /api/v3/admin/bulk-requests/{run_id}/state`.",
+        "operationId": "bulk_state_handler",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Bulk request id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkStateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/admin/cache/clear": {
       "post": {
         "tags": [
@@ -41996,6 +42151,75 @@
           "accept"
         ]
       },
+      "BulkStartRequest": {
+        "type": "object",
+        "description": "Start a bulk request of a playlist's missing songs.",
+        "required": [
+          "playlist_id"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Only estimate what would be sent; nothing is started."
+          },
+          "per_hour": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Songs sent per hour at most (default 60)."
+          },
+          "pilot": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Stop after this many songs for a look (default 0: no pilot)."
+          },
+          "playlist_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BulkStartResponse": {
+        "type": "object",
+        "description": "The estimate, and the run when one started.",
+        "required": [
+          "estimate"
+        ],
+        "properties": {
+          "estimate": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunStatus"
+              }
+            ]
+          }
+        }
+      },
+      "BulkStateRequest": {
+        "type": "object",
+        "description": "Change a bulk request's state.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/RunState",
+            "description": "`running` (resume, also past a pilot), `paused` or `cancelled`."
+          }
+        },
+        "additionalProperties": false
+      },
       "CacheClearBody": {
         "type": "object",
         "description": "Cache-clear request. No scope clears everything.",
@@ -47912,6 +48136,44 @@
           "error": {
             "$ref": "#/components/schemas/ErrorBody",
             "description": "The single error payload."
+          }
+        }
+      },
+      "Estimate": {
+        "type": "object",
+        "description": "What a run of a playlist would send, read before anything is sent.",
+        "required": [
+          "missing",
+          "album_groups",
+          "grouped_songs",
+          "by_recording",
+          "by_name"
+        ],
+        "properties": {
+          "album_groups": {
+            "type": "integer",
+            "description": "Albums with two or more of them, each one album download.",
+            "minimum": 0
+          },
+          "by_name": {
+            "type": "integer",
+            "description": "Songs asked for on their own, by name (no recording known).",
+            "minimum": 0
+          },
+          "by_recording": {
+            "type": "integer",
+            "description": "Songs asked for on their own, by recording.",
+            "minimum": 0
+          },
+          "grouped_songs": {
+            "type": "integer",
+            "description": "Songs in those albums.",
+            "minimum": 0
+          },
+          "missing": {
+            "type": "integer",
+            "description": "Songs the library does not play.",
+            "minimum": 0
           }
         }
       },
@@ -65790,6 +66052,54 @@
           }
         }
       },
+      "Run": {
+        "type": "object",
+        "description": "One run as stored.",
+        "required": [
+          "id",
+          "playlist_id",
+          "user_id",
+          "state",
+          "per_hour",
+          "pilot",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Epoch milliseconds."
+          },
+          "id": {
+            "type": "string"
+          },
+          "per_hour": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Songs sent per hour at most."
+          },
+          "pilot": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Songs in the pilot; 0 for none."
+          },
+          "playlist_id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_id": {
+            "type": "string",
+            "description": "The playlist's owner, whom the songs are asked for."
+          }
+        }
+      },
       "RunDetailResponse": {
         "type": "object",
         "description": "Run detail: the run, its scopes, and its discovered files.",
@@ -65816,6 +66126,73 @@
               "$ref": "#/components/schemas/ScanScopeView"
             },
             "description": "Scopes in the run."
+          }
+        }
+      },
+      "RunState": {
+        "type": "string",
+        "description": "A run's state.",
+        "enum": [
+          "running",
+          "pilot_done",
+          "paused",
+          "done",
+          "cancelled"
+        ]
+      },
+      "RunStatus": {
+        "type": "object",
+        "description": "A run with its songs and their counts.",
+        "required": [
+          "run",
+          "queued",
+          "in_progress",
+          "done",
+          "review",
+          "failed",
+          "reasons",
+          "songs"
+        ],
+        "properties": {
+          "done": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "in_progress": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "queued": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reasons": {
+            "type": "object",
+            "description": "Songs in review or failed, by reason.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "review": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "run": {
+            "$ref": "#/components/schemas/Run"
+          },
+          "songs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Song"
+            }
           }
         }
       },
@@ -68550,6 +68927,63 @@
             "description": "slskd version, when the probe reached it."
           }
         }
+      },
+      "Song": {
+        "type": "object",
+        "description": "One song of a run, with what became of it.",
+        "required": [
+          "id",
+          "position",
+          "artist_name",
+          "track_title",
+          "album_title",
+          "state",
+          "album_group"
+        ],
+        "properties": {
+          "album_group": {
+            "type": "boolean",
+            "description": "Sent within one album download for several songs."
+          },
+          "album_title": {
+            "type": "string"
+          },
+          "artist_name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, for a song in review or failed: the outcome code, else what\nthe request said."
+          },
+          "state": {
+            "$ref": "#/components/schemas/SongState"
+          },
+          "track_title": {
+            "type": "string"
+          }
+        }
+      },
+      "SongState": {
+        "type": "string",
+        "description": "What became of one song.",
+        "enum": [
+          "queued",
+          "in_progress",
+          "done",
+          "review",
+          "failed"
+        ]
       },
       "SourceName": {
         "type": "string",

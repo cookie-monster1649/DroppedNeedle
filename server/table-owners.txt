@@ -120,6 +120,8 @@ import_progress
 import_runs
 
 [acquire]
+acquire_bulk_items
+acquire_bulk_runs
 acquire_discovery_batch_items
 acquire_discovery_batches
 acquire_edition_acquires

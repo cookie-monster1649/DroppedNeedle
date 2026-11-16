@@ -225,6 +225,10 @@ fn mount(m: Mount<'_>) -> Mount<'_> {
             droppedneedle_acquire::playlist_import::http::routes(),
             |state| state.acquire.playlist_import.clone(),
         )
+        .area(
+            droppedneedle_acquire::bulk_requests::http::routes(),
+            |state| state.acquire.bulk_requests.clone(),
+        )
         .area(droppedneedle_compat::user_settings::routes(), |state| {
             state.compat.user_settings()
         })
