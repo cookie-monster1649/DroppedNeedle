@@ -651,10 +651,16 @@ async fn locator_finds_a_copy_slskd_renamed_on_a_name_clash() {
     let folder = mount.join("Hard Groove (2003)");
     std::fs::create_dir_all(&folder).expect("leaf dir");
     std::fs::write(folder.join("03 - I’ll Stay.flac"), b"other peer").expect("old copy");
-    std::fs::write(folder.join("03 - I’ll Stay_639298102583247336.flac"), b"short")
-        .expect("first copy");
-    std::fs::write(folder.join("03 - I’ll Stay_639299414252100613.flac"), b"this transfer")
-        .expect("second copy");
+    std::fs::write(
+        folder.join("03 - I’ll Stay_639298102583247336.flac"),
+        b"short",
+    )
+    .expect("first copy");
+    std::fs::write(
+        folder.join("03 - I’ll Stay_639299414252100613.flac"),
+        b"this transfer",
+    )
+    .expect("second copy");
     std::fs::write(folder.join("03 - I’ll Stay_live.flac"), b"this transfer").expect("lookalike");
     let locator = Locator::new(mount.to_path_buf(), None);
     let remote = "@@music\\RH Factor\\Hard Groove (2003)\\03 - I’ll Stay.flac";

@@ -2947,9 +2947,8 @@ async fn a_stand_in_album_held_for_no_release_files_itself_when_it_agrees() {
         } else {
             &["Glory Box", "Roads"]
         };
-        let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(vec![release(
-            &edition, &group, listed, &lengths,
-        )]));
+        let releases: Arc<dyn ReleaseSource> =
+            Arc::new(Releases(vec![release(&edition, &group, listed, &lengths)]));
         let acquire = acquire_over(
             &platform,
             &library,
