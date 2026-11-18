@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn a_copy_is_placed_once_and_a_different_file_gets_its_own_name() {
-        let base = std::env::temp_dir().join(format!("dn-pi-tags-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("dn-pi-tagsfb-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         let (src, root) = (base.join("src"), base.join("lib"));
         std::fs::create_dir_all(&src).unwrap();
