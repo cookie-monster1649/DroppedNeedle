@@ -833,7 +833,10 @@ mod tests {
     #[test]
     fn search_texts_take_names_with_multibyte_starts() {
         let texts = super::search_texts("\u{be48}\u{c13c}\u{d2b8} \u{be14}\u{b8e8}(Vincent Blue)");
-        assert_eq!(texts[0], "\u{be48}\u{c13c}\u{d2b8} \u{be14}\u{b8e8}(Vincent Blue)");
+        assert_eq!(
+            texts[0],
+            "\u{be48}\u{c13c}\u{d2b8} \u{be14}\u{b8e8}(Vincent Blue)"
+        );
         assert!(super::search_texts("The Trip").contains(&"Trip".to_owned()));
         assert_eq!(super::search_texts("The"), vec!["The".to_owned()]);
     }
