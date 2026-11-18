@@ -864,11 +864,7 @@ impl BulkRequests {
 
     /// An edition of `group` holding two or more of `songs`, with each held
     /// song's (disc, position) on it; the edition holding the most wins.
-    async fn edition_for(
-        &self,
-        group: &str,
-        songs: &[Queued],
-    ) -> Option<Edition> {
+    async fn edition_for(&self, group: &str, songs: &[Queued]) -> Option<Edition> {
         let first = songs[0].recording_mbid.as_deref()?;
         let candidates = match self.lookup.recording_releases(first).await {
             Ok(Some(candidates)) => candidates,

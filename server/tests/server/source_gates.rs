@@ -907,7 +907,7 @@ const SPAWN_SITES: &[(&str, usize, &str)] = &[
         SPOTIFY_LIBRARY_PAUSED,
     ),
     ("acquire/src/imports/spotify_sync.rs", 1, SPOTIFY_SYNC_ALL),
-    ("acquire/src/playlist_import/mod.rs", 7, AWAITED),
+    ("acquire/src/playlist_import/mod.rs", 9, AWAITED),
     ("acquire/src/playlist_import/mod.rs", 1, PLAYLIST_IMPORT),
     ("acquire/src/playlist_import/spotify_match.rs", 1, AWAITED),
     ("acquire/src/requests/service/edition.rs", 1, AWAITED),
@@ -1072,6 +1072,10 @@ const SETTINGS_STORE: &[Place] = &[
     place(
         "acquire/src/wiring.rs",
         "acquire's composition point, which makes its live handles",
+    ),
+    place(
+        "acquire/src/downloads/worker/settings.rs",
+        "reads the download sections' revisions (plugins included) to tell a retry the settings changed",
     ),
     place(
         "acquire/src/settings.rs",

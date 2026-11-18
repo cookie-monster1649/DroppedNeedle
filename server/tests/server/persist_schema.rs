@@ -3110,6 +3110,8 @@ fn every_registered_statement_prepares() {
 /// The playlist import's one read: every live track once, to build the index
 /// it matches the file's entries against, on a request a person started.
 const TRACK_WALKS: &[&str] = &[
+    // The link loop reads every indexed path once per pass, off the request path.
+    "droppedneedle_acquire::playlist_import::sql::INDEXED_TRACK_PATHS",
     "droppedneedle_library::scan::sql::ALBUM_TRACKS",
     "droppedneedle_library::corrections::sql::CANDIDATE_ALBUMS",
     "droppedneedle_library::corrections::sql::CANDIDATES",

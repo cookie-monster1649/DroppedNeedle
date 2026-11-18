@@ -217,7 +217,10 @@ async fn two_songs_of_an_album_go_as_one_album_download_at_the_rate() {
     .expect("album fails");
     assert_eq!(bulk.tick().await, 0, "still within the hour's rate");
     let status = bulk.status(&run).await.unwrap();
-    assert_eq!(status.queued, 3, "the album's two songs and the by-name song");
+    assert_eq!(
+        status.queued, 3,
+        "the album's two songs and the by-name song"
+    );
     assert!(
         status.songs[..2]
             .iter()
