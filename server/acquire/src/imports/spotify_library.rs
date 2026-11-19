@@ -62,9 +62,10 @@ use super::spotify_resolve::{
 use super::spotify_usage::{RefusalKind, RefusalNote};
 use super::sql::{
     ALBUMS_CHECKED, ARTISTS_CHECKED, ATTEMPT_ARTIST, COOLDOWN_UNTIL, DROP_ALBUM, DROP_ARTIST,
-    ENSURE_LIBRARY, FAVORITED_ALBUM, FOLLOWED, FOLLOWED_COUNT, KEEP_COOLDOWN, LIBRARY_FAILED,
-    LIBRARY_ROW, LIBRARY_USERS, MATCH_ALBUM, MATCH_ARTIST, NEW_ALBUMS, REQUESTED, REVIEW_ALBUMS,
-    SAVED_ALBUMS, SAVED_COUNT, SET_LIBRARY, UPSERT_ALBUM, UPSERT_ARTIST,
+    DROP_LIKED_HEART, ENSURE_LIBRARY, FAVORITED_ALBUM, FOLLOWED, FOLLOWED_COUNT, KEEP_COOLDOWN,
+    KEEP_LIKED_HEART, LIBRARY_FAILED, LIBRARY_ROW, LIBRARY_USERS, LIKED_HEARTS, MATCH_ALBUM,
+    MATCH_ARTIST, NEW_ALBUMS, REQUESTED, REVIEW_ALBUMS, SAVED_ALBUMS, SAVED_COUNT, SET_LIBRARY,
+    UPSERT_ALBUM, UPSERT_ARTIST,
 };
 use crate::db::AcquireDb;
 use crate::follows::Follows;
@@ -199,6 +200,54 @@ pub struct AlbumScan {
     pub new: usize,
     pub removed: usize,
     pub favorited: usize,
+}
+
+/// What a Liked Songs heart pass will do, decided over the tracks the
+/// playlist links now, the tracks seen before (with whether the sync
+/// hearted them) and the tracks the user has hearted.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct HeartPlan {
+    /// Newly liked tracks to heart, recorded as hearted by the sync.
+    pub heart: Vec<String>,
+    /// Newly liked tracks hearted already, recorded so they are never
+    /// unhearted.
+    pub keep: Vec<String>,
+    /// Unliked tracks whose heart the sync added: the heart goes.
+    pub unheart: Vec<String>,
+    /// Unliked tracks to forget.
+    pub forget: Vec<String>,
+}
+
+/// Plan a heart pass. A track seen before is left alone while it stays
+/// liked, so a heart taken off by hand stays off.
+pub fn heart_plan(
+    linked: &HashSet<String>,
+    seen: &HashMap<String, bool>,
+    hearted: &HashSet<String>,
+) -> HeartPlan {
+    let mut plan = HeartPlan::default();
+    for id in linked.iter().filter(|id| !seen.contains_key(*id)) {
+        if hearted.contains(id) {
+            plan.keep.push(id.clone());
+        } else {
+            plan.heart.push(id.clone());
+        }
+    }
+    for (id, by_sync) in seen.iter().filter(|(id, _)| !linked.contains(*id)) {
+        if *by_sync && hearted.contains(id) {
+            plan.unheart.push(id.clone());
+        }
+        plan.forget.push(id.clone());
+    }
+    for list in [
+        &mut plan.heart,
+        &mut plan.keep,
+        &mut plan.unheart,
+        &mut plan.forget,
+    ] {
+        list.sort();
+    }
+    plan
 }
 
 #[derive(Debug, Clone)]
@@ -1079,6 +1128,73 @@ impl SpotifyLibrary {
             .collect())
     }
 
+    /// Heart the library tracks a synced Liked Songs playlist links, and
+    /// take off the hearts it added for songs unliked since. Answers how
+    /// many hearts went on and off.
+    pub async fn heart_liked(
+        &self,
+        user_id: &str,
+        linked: &HashSet<String>,
+    ) -> Result<(usize, usize), LibraryError> {
+        let store = |error| LibraryError::Store(format!("{error:?}"));
+        let user = user_id.to_owned();
+        let seen: HashMap<String, bool> = self
+            .db
+            .db()
+            .read("spotify.library.liked_hearts", move |conn| {
+                let rows = conn
+                    .prepare(LIKED_HEARTS.text())?
+                    .query_map(params![user], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+                    })?
+                    .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+                Ok::<_, DbError>(rows)
+            })
+            .await?;
+        let mut asked: Vec<String> = linked.iter().cloned().collect();
+        asked.extend(seen.keys().cloned());
+        let hearted: HashSet<String> = self
+            .favorites
+            .starred_at(user_id, "track", &asked)
+            .await
+            .map_err(store)?
+            .into_keys()
+            .collect();
+        let plan = heart_plan(linked, &seen, &hearted);
+        let targets = |ids: &[String]| -> Vec<(String, String, Option<String>)> {
+            ids.iter()
+                .map(|id| ("track".to_owned(), id.clone(), None))
+                .collect()
+        };
+        self.favorites
+            .apply(user_id, &targets(&plan.heart), true)
+            .await
+            .map_err(store)?;
+        self.favorites
+            .apply(user_id, &targets(&plan.unheart), false)
+            .await
+            .map_err(store)?;
+        let counts = (plan.heart.len(), plan.unheart.len());
+        let (user, now) = (user_id.to_owned(), self.now());
+        self.db
+            .write("spotify.library.liked_hearts_record", move |tx| {
+                let mut keep = tx.prepare(KEEP_LIKED_HEART.text())?;
+                for id in &plan.heart {
+                    keep.execute(params![user, id, 1, now])?;
+                }
+                for id in &plan.keep {
+                    keep.execute(params![user, id, 0, now])?;
+                }
+                let mut drop = tx.prepare(DROP_LIKED_HEART.text())?;
+                for id in &plan.forget {
+                    drop.execute(params![user, id])?;
+                }
+                Ok(())
+            })
+            .await?;
+        Ok(counts)
+    }
+
     /// Read the saved albums again: match new ones, flag them for review,
     /// favourite held matches and forget un-saved ones.
     ///
@@ -1421,6 +1537,41 @@ mod tests {
 
     fn set(ids: &[&str]) -> HashSet<String> {
         ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    fn seen(rows: &[(&str, bool)]) -> HashMap<String, bool> {
+        rows.iter()
+            .map(|(id, by)| ((*id).to_owned(), *by))
+            .collect()
+    }
+
+    #[test]
+    fn a_newly_liked_track_is_hearted_unless_it_already_is() {
+        let plan = heart_plan(&set(&["new", "mine"]), &HashMap::new(), &set(&["mine"]));
+        assert_eq!(plan.heart, vec!["new".to_owned()]);
+        assert_eq!(plan.keep, vec!["mine".to_owned()]);
+        assert!(plan.unheart.is_empty() && plan.forget.is_empty());
+    }
+
+    #[test]
+    fn a_heart_taken_off_by_hand_stays_off_while_liked() {
+        let plan = heart_plan(&set(&["t"]), &seen(&[("t", true)]), &HashSet::new());
+        assert_eq!(plan, HeartPlan::default());
+    }
+
+    #[test]
+    fn unliking_removes_only_hearts_the_sync_added() {
+        let plan = heart_plan(
+            &HashSet::new(),
+            &seen(&[("sync", true), ("hand", false), ("gone", true)]),
+            &set(&["sync", "hand"]),
+        );
+        assert_eq!(plan.unheart, vec!["sync".to_owned()]);
+        assert_eq!(
+            plan.forget,
+            vec!["gone".to_owned(), "hand".to_owned(), "sync".to_owned()]
+        );
+        assert!(plan.heart.is_empty() && plan.keep.is_empty());
     }
 
     #[test]

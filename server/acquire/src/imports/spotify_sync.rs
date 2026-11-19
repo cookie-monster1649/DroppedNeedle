@@ -500,6 +500,9 @@ impl SpotifySync {
                     if let Err(error) = self.syncs.record(&row.playlist_id, None, None).await {
                         tracing::warn!(%error, "playlist sync not recorded");
                     }
+                    if row.spotify_playlist_id == LIKED_SONGS {
+                        self.heart_liked(&row).await;
+                    }
                 }
                 Err(failure) => {
                     let message = self.failure(&failure);
@@ -684,6 +687,28 @@ impl SpotifySync {
             .await
             .map_err(|error| SpotifyError::Store(format!("record playlist sync: {error}")))?;
         Ok(synced)
+    }
+
+    /// Fork: heart what a synced Liked Songs playlist links, every run, so
+    /// a song downloaded since the last change is hearted too.
+    async fn heart_liked(&self, row: &SyncRow) {
+        let linked: HashSet<String> = match self.entries(row).await {
+            Ok(entries) => entries
+                .into_iter()
+                .filter_map(|entry| entry.library_file_id)
+                .collect(),
+            Err(error) => {
+                tracing::warn!(?error, "liked songs unreadable for hearts");
+                return;
+            }
+        };
+        match self.library.heart_liked(&row.user_id, &linked).await {
+            Ok((0, 0)) => {}
+            Ok((hearted, unhearted)) => {
+                tracing::info!(user_id = %row.user_id, hearted, unhearted, "liked songs hearted");
+            }
+            Err(error) => tracing::warn!(%error, "liked songs not hearted"),
+        }
     }
 
     async fn entries(
