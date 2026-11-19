@@ -4,7 +4,6 @@
 
 pub mod choice;
 pub mod decisions;
-pub mod duplicates;
 mod hand_match;
 pub(crate) mod looks_wrong;
 pub mod models;
@@ -13,5 +12,6 @@ pub mod port;
 pub mod service;
 pub(crate) mod sql;
 pub mod status;
+pub mod tidy;
 
 pub(crate) const PROVIDER: &str = "musicbrainz";

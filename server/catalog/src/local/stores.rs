@@ -215,6 +215,8 @@ pub struct AlbumRecord {
     /// True when the match is a guess its files' tags contradict
     /// (`NAMED_GROUP_DIFFERS`): it owns no group through that guess.
     pub guess_contradicted: bool,
+    /// Fork: true when the album has an accepted Deezer match.
+    pub provider_linked: bool,
     /// Streamable track count.
     pub track_count: u64,
     /// Summed streamable-track duration, seconds.

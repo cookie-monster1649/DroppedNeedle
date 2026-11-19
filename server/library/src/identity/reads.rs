@@ -307,6 +307,113 @@ pub fn group_owned(conn: &Connection, release_group_mbid: &str) -> rusqlite::Res
     }
 }
 
+/// The credited names in an artist string, folded: "Lusanda, noxz" and
+/// "Sam Wills x Kaisha & David Nuri feat. X" split into their artists.
+fn credited_names(artists: &str) -> Vec<String> {
+    let folded = straight_apostrophes(&droppedneedle_kernel::db::fold::fold_text(artists));
+    let mut spaced = format!(" {folded} ");
+    for joiner in [
+        ",",
+        ";",
+        "/",
+        " & ",
+        " x ",
+        " and ",
+        " feat. ",
+        " feat ",
+        " ft. ",
+        " ft ",
+        " featuring ",
+        " with ",
+        " vs. ",
+        " vs ",
+    ] {
+        spaced = spaced.replace(joiner, "\u{1f}");
+    }
+    spaced
+        .split('\u{1f}')
+        .map(|name| name.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// Fork: whether an indexed track holds the song `artist` - `title`, in
+/// any edition ([`held_copy`]).
+pub fn song_held(conn: &Connection, artist: &str, title: &str) -> rusqlite::Result<bool> {
+    Ok(held_copy(conn, artist, title)?.is_some())
+}
+
+const LOSSLESS: &[&str] = &["flac", "alac", "wav", "aiff", "aif", "ape", "wv"];
+
+/// Fork: `text` with every apostrophe look-alike (’ ‘ ʼ `) as `'`, so a
+/// Spotify "D'Angelo" and a tagged "D’Angelo" are one name.
+fn straight_apostrophes(text: &str) -> String {
+    text.replace(['\u{2019}', '\u{2018}', '\u{2bc}', '`'], "'")
+}
+
+/// Fork: the best indexed track holding the song `artist` - `title`, in
+/// any edition: the folded title is the same and the track's artist or
+/// album artist shares a credited name with `artist`. Several copies: a
+/// lossless file first, then the deeper, then the higher bitrate, then the
+/// lowest id.
+pub fn held_copy(conn: &Connection, artist: &str, title: &str) -> rusqlite::Result<Option<String>> {
+    held_copy_except(conn, artist, title, None)
+}
+
+/// Fork: [`held_copy`], never answering with file `except` (a copy a
+/// person removed or unlinked from a playlist entry).
+pub fn held_copy_except(
+    conn: &Connection,
+    artist: &str,
+    title: &str,
+    except: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    let title = droppedneedle_kernel::db::fold::fold_text(title);
+    let wanted = credited_names(artist);
+    if title.is_empty() || wanted.is_empty() {
+        return Ok(None);
+    }
+    // Fork: a title matches whatever apostrophe its tag uses; the stored
+    // folded titles keep theirs, so ask for each common spelling.
+    let straight = straight_apostrophes(&title);
+    let curly = straight.replace('\'', "\u{2019}");
+    let mut stmt = conn.prepare_cached(sql::TRACK_TITLE_ARTISTS.text())?;
+    let rows = stmt.query_map(params![title, straight, curly], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
+        ))
+    })?;
+    let mut best: Option<((bool, i64, i64), String)> = None;
+    for row in rows {
+        let (track_artist, album_artist, id, format, depth, rate) = row?;
+        if except == Some(id.as_str()) {
+            continue;
+        }
+        let held = credited_names(&format!("{track_artist}, {album_artist}"));
+        if !wanted.iter().any(|name| held.contains(name)) {
+            continue;
+        }
+        let rank = (
+            LOSSLESS.contains(&format.to_ascii_lowercase().as_str()),
+            depth.unwrap_or(0),
+            rate.unwrap_or(0),
+        );
+        let better = match &best {
+            None => true,
+            Some((top, top_id)) => rank > *top || (rank == *top && id < *top_id),
+        };
+        if better {
+            best = Some((rank, id));
+        }
+    }
+    Ok(best.map(|(_, id)| id))
+}
+
 /// The title and album artist of a live album a local-only album titled
 /// `title_folded` by `artist_folded` would repeat: one of that name, one
 /// owning `tagged_group`, or one the scan keyed on `tagged_release`.

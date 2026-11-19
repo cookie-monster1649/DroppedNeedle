@@ -1831,89 +1831,68 @@ impl ReleaseSource for StandInBlind {
     }
 }
 
-/// Fork: held files matched by hand to a Deezer-only album (a stand-in
-/// group) go in under it, paired against the Deezer track list; a stand-in
-/// whose track list cannot be read refuses with a reason, never silently.
+/// Fork: a hand match of a download keeps to the edition the request asked
+/// for (the plain album) when the library has none, even when the folder
+/// carries more files: a 9-track album held with 12 files (three bonus
+/// remixes) goes onto the 9-track edition, not the 12-track promo whose
+/// count fits. With nothing asked the closest count still wins.
 #[tokio::test]
-async fn a_hand_match_to_a_deezer_album_places_the_files_under_it() {
-    use droppedneedle_providers::virtual_ids::{Kind, mint};
-    const TITLES: [&str; 3] = ["Wandering Star", "It's a Fire", "Numb"];
-    let stand_in = mint("deezer", Kind::ReleaseGroup, "777");
-    let stand_in_release = mint("deezer", Kind::Release, "777");
-    let unread = mint("deezer", Kind::ReleaseGroup, "778");
-    let mut deezer = release(&TITLES, &[None; 3]);
-    deezer.id = stand_in_release.clone();
-    deezer.release_group_id = stand_in.clone();
-    deezer.title = "Rough Mixes".to_owned();
-    let (db, library, dir, auth) = bundles().await;
-    let group = stand_in.clone();
-    db.write("test.stand_in", move |tx| {
-        tx.execute(
-            "INSERT INTO source_identities (uuid, provider, kind, provider_id, \
-             provider_album_id, created_at) VALUES (?1, 'deezer', 'release_group', '777', '777', 1)",
-            rusqlite::params![group],
-        )?;
-        Ok(())
-    })
-    .await
-    .expect("stand-in minted");
-    let acquire = acquire_over(
-        &auth,
-        &library,
-        Arc::new(LibraryLanding::new(
-            &library,
-            every_priority(Arc::new(StandInBlind(LargeGroups(vec![deezer])))),
-        )),
-    );
-    let curator = Viewer {
-        user_id: "u-curator".to_owned(),
-        admin: false,
-    };
-    let work = dir.join("work");
-    std::fs::create_dir_all(&work).expect("work dir");
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
-    for (index, title) in TITLES.iter().enumerate() {
-        let track = index as u32 + 1;
-        let bytes = tagged(&work, "flac_full_01.flac", "Rough Mixes", title, track);
-        files.push((format!("Rough Mixes/{track:02} {title}.flac"), bytes));
-    }
-    let entries: Vec<(&str, &Vec<u8>)> = files
-        .iter()
-        .map(|(name, bytes)| (name.as_str(), bytes))
+async fn a_hand_match_keeps_the_asked_edition_over_a_bonus_one() {
+    use droppedneedle_acquire::drop_import::identify::{Outcome, assigned};
+    const GROUP_T: &str = "0f8ce4c1-0000-4000-8000-000000000001";
+    const STANDARD: &str = "0f8ce4c1-0000-4000-8000-000000000009";
+    const PLUS: &str = "0f8ce4c1-0000-4000-8000-000000000012";
+    let titles: Vec<String> = (1..=9)
+        .map(|n| format!("Song {n}"))
+        .chain((1..=3).map(|n| format!("Song {n} (Remix)")))
         .collect();
-    let job = drop_zip(&acquire, &curator, "deezer-only", &entries).await;
-    let item = &job.items[0];
-    assert_eq!(
-        item.status,
-        DropItemStatus::NeedsReview,
-        "{:?}",
-        item.detail
-    );
-    let (entry, _) = entry_of(&acquire, &curator.user_id, item.id).await;
-    let held_viewer = HeldViewer {
-        user_id: curator.user_id.clone(),
-        admin: false,
+    let edition = |id: &str, count: usize, status: &str| {
+        let names: Vec<&str> = titles[..count].iter().map(String::as_str).collect();
+        let mut edition = release(&names, &vec![None; count]);
+        edition.id = id.to_owned();
+        edition.release_group_id = GROUP_T.to_owned();
+        edition.title = "Tourist".to_owned();
+        edition.status = Some(status.to_owned());
+        edition.media[0].track_count = count as u32;
+        for (position, track) in edition.tracks.iter_mut().enumerate() {
+            track.id = format!("{}{position:02}", &id[..id.len() - 2]);
+        }
+        edition
     };
-
-    let refused = acquire
-        .held
-        .match_album(&held_viewer, entry.id, &unread, None, &curator.user_id)
-        .await
-        .expect_err("a stand-in with no track list refuses");
-    assert!(
-        refused.to_string().contains("track list"),
-        "the refusal says why: {refused}"
+    let (_db, library, dir, _auth) = bundles().await;
+    let landing_library = LibraryLanding::new(
+        &library,
+        every_priority(Arc::new(LargeGroups(vec![
+            edition(STANDARD, 9, "Official"),
+            edition(PLUS, 12, "Promotion"),
+        ]))),
     );
+    let work = dir.join("tourist");
+    std::fs::create_dir_all(&work).expect("work dir");
+    let paths: Vec<PathBuf> = titles
+        .iter()
+        .enumerate()
+        .map(|(index, title)| {
+            let track = index as u32 + 1;
+            tagged(&work, "flac_full_01.flac", "Tourist", title, track);
+            work.join(format!("{track:02}-{title}.flac"))
+        })
+        .collect();
+    let landing = droppedneedle_acquire::landing::probe::probe(&paths, &[]);
+    assert_eq!(landing.audio.len(), 12);
 
-    let matched = acquire
-        .held
-        .match_album(&held_viewer, entry.id, &stand_in, None, &curator.user_id)
-        .await
-        .expect("matched by hand");
-    assert_eq!(matched.imported, 3, "{matched:?}");
-    let placed: Vec<String> = acquire.db.db().column(
-        "SELECT DISTINCT release_group_mbid FROM local_album_external_identities",
-        rusqlite::params![],
+    let picked = |outcome: Outcome| match outcome {
+        Outcome::Matched(summary) => summary.best().expect("an edition").release.id.clone(),
+        _ => panic!("no edition matched"),
+    };
+    assert_eq!(
+        picked(assigned(&landing_library, &landing, GROUP_T, Some(STANDARD)).await),
+        STANDARD,
+        "the asked edition stands"
     );
-    assert_eq!(placed, vec![stand_in]);
+    assert_eq!(
+        picked(assigned(&landing_library, &landing, GROUP_T, None).await),
+        PLUS,
+        "nothing asked: the closest track count"
+    );
 }

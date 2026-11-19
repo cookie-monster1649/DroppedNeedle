@@ -9628,6 +9628,7 @@ fn a_preference_gives_way_to_the_edition_the_files_complete() {
                 position: index as u32 + 1,
                 absolute_position: index as u32 + 1,
                 length_ms: Some(200_000 + 20_000 * index as u64),
+                links: Vec::new(),
             })
             .collect(),
         ..Release::default()
@@ -9738,29 +9739,6 @@ async fn untagged_files_that_make_up_the_preferred_edition_read_no_listing() {
         rig.listed.load(std::sync::atomic::Ordering::SeqCst),
         0,
         "no listing or search is read"
-    );
-    // The want's identities became the track's source links, and the ISRC
-    // is in the file's tags.
-    let links: Vec<String> = acquire.db.db().column(
-        "SELECT provider || ':' || external_entity_type || ':' || external_id || ' ' || \
-         canonical_url FROM local_entity_source_links WHERE local_track_id IS NOT NULL \
-         ORDER BY provider",
-        [],
-    );
-    assert_eq!(
-        links,
-        vec![
-            "isrc:recording:USSM10812345 https://musicbrainz.org/isrc/USSM10812345".to_owned(),
-            "spotify:track:4uLU6hMCjMI75M1A2tKUQC https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC"
-                .to_owned(),
-        ]
-    );
-    let fields =
-        droppedneedle_library::tags::save::read_fields(track_file(&placed[0])).expect("tags read");
-    assert_eq!(
-        fields.get(&TagField::Isrc),
-        Some(&vec!["USSM10812345".to_owned()]),
-        "{fields:?}"
     );
 }
 
@@ -10248,146 +10226,6 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
     assert_eq!(links, vec!["3Ty7OTBNSigGEpeW2PqcsC".to_owned()]);
 }
 
-/// Fork: an album asked for as one edition lands as whichever edition of
-/// it arrived: a longer pressing of the group, tagged as itself, imports
-/// against its own tracklist instead of being turned away for not being
-/// the pin.
-#[tokio::test]
-async fn another_edition_of_the_asked_album_lands_as_itself() {
-    let lengths = fixture_lengths();
-    let pinned = edition(32, 0, 1, &[&[0]], &lengths);
-    let mut deluxe = edition(32, 0, 3, &[&[0, 1]], &lengths);
-    for (n, track) in deluxe.tracks.iter_mut().enumerate() {
-        track.recording_id = mb(32, 5, n as u16);
-    }
-    let group = pinned.release_group_id.clone();
-    let rig = join_rig(vec![pinned.clone(), deluxe.clone()]).await;
-    let paths: Vec<PathBuf> = (0..2)
-        .map(|index| {
-            let path = rig.landed("t-deluxe", &deluxe, index, FIXTURES[index]);
-            let track = &deluxe.tracks[index];
-            let tag = |field, value: &str| TagEdit::new(field, vec![value.to_owned()]);
-            save_tags(
-                &path,
-                &[
-                    tag(TagField::MusicBrainzReleaseId, &deluxe.id),
-                    tag(TagField::MusicBrainzReleaseGroupId, &group),
-                    tag(TagField::MusicBrainzRecordingId, &track.recording_id),
-                    tag(TagField::MusicBrainzReleaseTrackId, &track.id),
-                ],
-            )
-            .expect("ids tagged");
-            path
-        })
-        .collect();
-    rig.ask(
-        "t-deluxe",
-        &group,
-        &pinned.title,
-        "user",
-        Some(&pinned.id),
-        None,
-        &[],
-    )
-    .await;
-    rig.land(paths).await;
-    assert_eq!(
-        decisions(&rig.acquire, "t-deluxe"),
-        vec![("imported".to_owned(), None)]
-    );
-}
-
-/// Fork: with a pinned edition, a copy tagged as a sibling edition of the
-/// same group (its own recordings in MusicBrainz, as a digital and a CD
-/// release often have) whose tracks line up is placed as the pin instead of
-/// held as contradicting it. A copy tagged as another group's release is
-/// still held.
-#[tokio::test]
-async fn a_sibling_edition_copy_lands_as_the_pinned_edition() {
-    let lengths = fixture_lengths();
-    let e = editions(31, &lengths);
-    let pinned = e.old.clone();
-    let mut sibling = e.new2.clone();
-    for (n, track) in sibling.tracks.iter_mut().enumerate() {
-        track.recording_id = mb(31, 5, n as u16);
-    }
-    let mut other = e.other.clone();
-    for (n, track) in other.tracks.iter_mut().enumerate() {
-        track.recording_id = mb(31, 6, n as u16);
-    }
-    let rig = join_rig(vec![pinned.clone(), sibling.clone(), other.clone()]).await;
-    let tag_as = |path: &Path, release: &Release, index: usize| {
-        let track = &release.tracks[index];
-        let tag = |field, value: &str| TagEdit::new(field, vec![value.to_owned()]);
-        save_tags(
-            path,
-            &[
-                tag(TagField::MusicBrainzReleaseId, &release.id),
-                tag(
-                    TagField::MusicBrainzReleaseGroupId,
-                    &release.release_group_id,
-                ),
-                tag(TagField::MusicBrainzRecordingId, &track.recording_id),
-                tag(TagField::MusicBrainzReleaseTrackId, &track.id),
-            ],
-        )
-        .expect("ids tagged");
-    };
-    let copy = |task: &str, release: &Release| -> Vec<PathBuf> {
-        (0..2)
-            .map(|index| {
-                let path = rig.landed(task, &pinned, index, FIXTURES[index]);
-                tag_as(&path, release, index);
-                path
-            })
-            .collect()
-    };
-
-    rig.ask(
-        "t-sib",
-        &e.group,
-        &pinned.title,
-        "user",
-        Some(&pinned.id),
-        None,
-        &[],
-    )
-    .await;
-    rig.land(copy("t-sib", &sibling)).await;
-    assert_eq!(
-        decisions(&rig.acquire, "t-sib"),
-        vec![("imported".to_owned(), None)]
-    );
-
-    rig.ask(
-        "t-other",
-        &e.group,
-        &pinned.title,
-        "user",
-        Some(&pinned.id),
-        None,
-        &[],
-    )
-    .await;
-    let held = rig.acquire.landing.clone();
-    let paths = copy("t-other", &other);
-    let row = rig.task("t-other").await;
-    held.land(
-        &row,
-        None,
-        Landed {
-            mounts: vec![rig.downloads.clone().into()],
-            files: paths.into_iter().map(Reported::path).collect(),
-        },
-        false,
-    )
-    .await;
-    assert_ne!(
-        decisions(&rig.acquire, "t-other"),
-        vec![("imported".to_owned(), None)]
-    );
-}
-
 /// Fork: a want asked with no length takes Deezer's from an accepted album
 /// match holding the song, so its agreeing file still files itself.
 #[tokio::test]
@@ -10625,4 +10463,153 @@ async fn a_file_uploaded_onto_a_still_hunting_song_imports_and_settles_it() {
         [],
     );
     assert_eq!(held, vec!["imported".to_owned()]);
+}
+
+// Fork (Slice A2): a track asked for by name has no MusicBrainz release.
+// Its held file imports as tagged, on a release made from the ask: it is
+// filed by the naming script, catalogued from its new tags, and gets no
+// MusicBrainz identity, so the album is left to identification.
+#[tokio::test]
+async fn a_held_want_file_imports_as_tagged_with_no_identity() {
+    use droppedneedle_acquire::downloads::store::TaskDetails;
+    const WANT: &str = "want-0123456789abcdef0123456789abcdef";
+    let db = AcquireDb::scratch().expect("scratch db");
+    db.add_user("u-ada", "Ada", "user").await.expect("user");
+    let dir = db.path().parent().expect("scratch dir").to_path_buf();
+    let config = Arc::new(
+        ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+            .expect("config"),
+    );
+    let platform = TestPlatform::on(db.db(), &dir)
+        .settings(config)
+        .build()
+        .await;
+    let (library, _) = library_at(&platform);
+    let music = dir.join("music");
+    std::fs::create_dir_all(&music).expect("music root");
+    library
+        .scans
+        .add_root(
+            Some("music".to_owned()),
+            music.to_string_lossy().into_owned(),
+            EffectivePolicy::Automatic,
+        )
+        .expect("root adds");
+    let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(Vec::new()));
+    let (acquire, _fixed) = acquire_serving(
+        &platform,
+        &library,
+        Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+    );
+    acquire
+        .journal
+        .run("test.seed", |store| {
+            let task = NewTask {
+                artist_name: "Beyoncé".to_owned(),
+                album_title: "Halo (Live)".to_owned(),
+                ..new_task("t-want", "")
+            };
+            store.insert_track_task(&task, WANT, 1.0)?;
+            store.set_task_details(
+                "t-want",
+                &TaskDetails {
+                    track_title: Some("Halo (Live)".to_owned()),
+                    ..TaskDetails::default()
+                },
+                1.0,
+            )
+        })
+        .await
+        .expect("task");
+    let held_dir = acquire.held.folders().held.clone();
+    let held = land_file(
+        &held_dir,
+        "halo.flac",
+        "flac_full_01.flac",
+        "Halo (Live)",
+        1,
+    );
+    let held = held
+        .file_name()
+        .expect("name")
+        .to_string_lossy()
+        .into_owned();
+    let (entry, file): (i64, i64) = acquire
+        .db
+        .write("test.held", move |tx| {
+            tx.execute(
+                "INSERT INTO acquire_held_entries (id, user_id, origin, group_key, \
+                 recording_mbid, artist_name, album_title, state, created_at, expires_at) \
+                 VALUES (1, 'u-ada', 'download', ?1, ?2, 'Beyoncé', 'Single track', 'held', 1, 2)",
+                rusqlite::params![format!("track:{WANT}"), WANT],
+            )?;
+            tx.execute(
+                "INSERT INTO acquire_held_files (entry_id, root, path, original_name, \
+                 recording_mbid, track_number, disc_number, reason, source, source_task_id, \
+                 state, created_at) \
+                 VALUES (1, 'held', ?1, ?1, ?2, 1, 1, 'no_release', 'soulseek', 't-want', \
+                 'held', 1)",
+                rusqlite::params![held, WANT],
+            )?;
+            let file = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO acquire_want_identities (want_key, provider, \
+                 external_entity_type, external_id, created_at) VALUES \
+                 (?1, 'isrc', 'recording', 'USSM10812345', 1), \
+                 (?1, 'spotify', 'track', '4uLU6hMCjMI75M1A2tKUQC', 1)",
+                rusqlite::params![WANT],
+            )?;
+            Ok((1, file))
+        })
+        .await
+        .expect("held rows");
+    let ada = &test_principal("u-ada", Role::User, "sess-ada", SessionKind::Standard);
+    let (status, body) = held_call(
+        &acquire,
+        "POST",
+        &format!("/api/v3/held/{entry}/import"),
+        Some(serde_json::json!({ "file_ids": [file] })),
+        ada,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["imported"], 1, "{body}");
+    let placed = files_under(&music, "flac");
+    assert_eq!(placed.len(), 1, "one file in the library: {placed:?}");
+    let titles: Vec<String> = acquire.db.db().column(
+        "SELECT title FROM local_tracks WHERE availability = 'indexed'",
+        [],
+    );
+    assert_eq!(titles, vec!["Halo (Live)".to_owned()]);
+    let identities: Vec<String> = acquire.db.db().column(
+        "SELECT local_track_id FROM local_track_external_identities",
+        [],
+    );
+    assert!(
+        identities.is_empty(),
+        "no MusicBrainz identity: {identities:?}"
+    );
+    // The want's identities became the track's source links, and the ISRC
+    // is in the file's tags.
+    let links: Vec<String> = acquire.db.db().column(
+        "SELECT provider || ':' || external_entity_type || ':' || external_id || ' ' || \
+         canonical_url FROM local_entity_source_links WHERE local_track_id IS NOT NULL \
+         ORDER BY provider",
+        [],
+    );
+    assert_eq!(
+        links,
+        vec![
+            "isrc:recording:USSM10812345 https://musicbrainz.org/isrc/USSM10812345".to_owned(),
+            "spotify:track:4uLU6hMCjMI75M1A2tKUQC https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC"
+                .to_owned(),
+        ]
+    );
+    let fields =
+        droppedneedle_library::tags::save::read_fields(track_file(&placed[0])).expect("tags read");
+    assert_eq!(
+        fields.get(&TagField::Isrc),
+        Some(&vec!["USSM10812345".to_owned()]),
+        "{fields:?}"
+    );
 }

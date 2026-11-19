@@ -39,7 +39,11 @@
 		Trash2,
 		Users,
 		FileMusic,
-		FileSpreadsheet
+		FileSpreadsheet,
+		RefreshCw,
+		RefreshCwOff,
+		Bell,
+		BellOff
 	} from 'lucide-svelte';
 	import JellyfinIcon from '$lib/media/icons/JellyfinIcon.svelte';
 	import NavidromeIcon from '$lib/media/icons/NavidromeIcon.svelte';
@@ -63,6 +67,8 @@
 		onplaylistupdate: (updated: PlaylistDetail) => void;
 		onshare?: () => void;
 		onleave?: () => void;
+		/** Fork: request every song the library lacks (prompt after an import). */
+		onrequestall?: () => Promise<void>;
 	}
 
 	let {
@@ -74,7 +80,8 @@
 		ondeleteclick,
 		onplaylistupdate,
 		onshare,
-		onleave
+		onleave,
+		onrequestall
 	}: Props = $props();
 
 	// The owner sees whom a private playlist is shared with.
@@ -232,6 +239,11 @@
 	}
 
 	let exportModal = $state<ReturnType<typeof PlaylistExportModal> | null>(null);
+
+	// Fork: Spotify sync, for the owner of a playlist imported from Spotify.
+	const spotifySync = new PlaylistSpotifySync(() =>
+		playlist.is_owner && sourceType === 'spotify' ? playlist.id : null
+	);
 
 	const menuItems = $derived.by(() => {
 		const items: MenuItem[] = [];
@@ -477,6 +489,8 @@
 		</div>
 	</div>
 </section>
+
+<SpotifySyncPrompt sync={spotifySync} {onrequestall} />
 
 <PlaylistExportModal bind:this={exportModal} playlistId={playlist.id} />
 

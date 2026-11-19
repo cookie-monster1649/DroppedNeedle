@@ -2805,9 +2805,11 @@ async fn a_track_asked_for_by_name_alone_is_a_want() {
         .await
         .expect("task reads")
         .expect("task row");
+    let catalog = crate::common::bundles::closed_catalog(journal.db().db()).await;
     let targets = droppedneedle_acquire::target::Targets::new(
         journal,
         Arc::new(crate::common::acquire::FixedAlbums::default()),
+        catalog,
     );
     let target = targets.target(&task).await.expect("target");
     assert!(!target.has_album(), "no album to search for");

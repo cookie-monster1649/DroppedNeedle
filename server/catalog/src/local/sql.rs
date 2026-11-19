@@ -235,6 +235,8 @@ droppedneedle_kernel::sql! {
         rte.provider_artist_id AS artist_mbid, \
         (ae.local_album_id IS NOT NULL) AS linked, "
         + (named_group_guess!("a.id")) + " AS guess_contradicted, \
+        EXISTS (SELECT 1 FROM library_album_provider_matches pl WHERE pl.local_album_id = a.id \
+         AND pl.match_state = 'confirmed') AS provider_linked, \
         COUNT(t.id) AS track_count, \
         COALESCE(SUM(t.duration_seconds), 0.0) AS total_duration_seconds, \
         COALESCE(SUM(t.file_size_bytes), 0) AS total_size_bytes, "

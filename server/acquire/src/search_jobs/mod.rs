@@ -535,18 +535,21 @@ impl SearchJobs {
             },
             // A preferred edition goes into the plan, so the download still
             // takes another edition of the album; an asked one is a pin.
+            // Fork: an edition picked from the folder's other editions pins.
             details: TaskDetails {
-                release_mbid: payload
-                    .release_mbid
-                    .clone()
-                    .filter(|_| !payload.release_preferred),
+                release_mbid: edition.clone().or_else(|| {
+                    payload
+                        .release_mbid
+                        .clone()
+                        .filter(|_| !payload.release_preferred)
+                }),
                 year: row.year,
                 ..TaskDetails::default()
             },
             preferred_release: payload
                 .release_mbid
                 .clone()
-                .filter(|_| payload.release_preferred),
+                .filter(|_| edition.is_none() && payload.release_preferred),
             username: match &candidate.pin {
                 Pin::Soulseek { username, .. } => Some(username.clone()),
                 Pin::Release { .. } => None,

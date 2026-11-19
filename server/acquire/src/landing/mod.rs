@@ -526,10 +526,15 @@ impl LandingService {
                         .await
                     }
                     _ => {
+                        let whole_copy = whole_copy(&decision, &matched)
+                            || want_agreed(&target, &landing, &decision);
                         let held = self
                             .hold_decided(task, &target, &landing, &decision, Some(&matched))
                             .await;
-                        Acted::holding(decision, held)
+                        Acted {
+                            whole_copy,
+                            ..Acted::holding(decision, held)
+                        }
                     }
                 }
             }
@@ -719,21 +724,61 @@ impl LandingService {
             return (0, true);
         }
         let found = matched.and_then(MatchSummary::best);
+        // Fork: a want's files that agree with the ask are held paired to
+        // it; the held loop files them by themselves (`landing::want`).
+        let ask = (*code == Reason::NoRelease)
+            .then(|| want::ask(target))
+            .flatten();
+        // One song is one file: only the first agreeing copy is paired, so a
+        // download holding the song twice files it once; the rest wait for
+        // a person.
+        let mut paired = false;
+        // Fork: songs by other artists that are no track of the release are
+        // not part of this album: they are left where they landed, never
+        // held under it (`landing::foreign`). Unless nothing would be left.
+        let release = found.map(|found| &found.release);
+        let foreign: HashSet<usize> = release
+            .map(|release| foreign::foreign_files(target, landing, release))
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        let foreign = if foreign.len() < landing.audio.len() {
+            foreign
+        } else {
+            HashSet::new()
+        };
+        if !foreign.is_empty() {
+            tracing::info!(task_id = %task.id, left_out = foreign.len(), "files by other artists not held under the album");
+        }
         let held: Vec<Held<'_>> = landing
             .audio
             .iter()
             .enumerate()
-            .map(|(index, file)| Held {
-                file,
-                track: found
-                    .and_then(|found| found.scored.pair_for(index))
-                    .filter(|pair| pair.distance <= ACCEPT_TRACK)
-                    .map(|pair| pair.track),
-                code: *code,
-                detail: detail.clone(),
+            .filter(|(index, _)| !foreign.contains(index))
+            .map(|(index, file)| {
+                let wanted = ask
+                    .as_ref()
+                    .filter(|_| !paired && want::agrees(target, file))
+                    .map(|_| 0);
+                paired |= wanted.is_some();
+                Held {
+                    file,
+                    track: wanted.or_else(|| {
+                        found
+                            .and_then(|found| found.scored.pair_for(index))
+                            .filter(|pair| pair.distance <= ACCEPT_TRACK)
+                            .map(|pair| pair.track)
+                    }),
+                    code: *code,
+                    detail: detail.clone(),
+                }
             })
             .collect();
-        (self.hold(task, target, landing, found, held).await, false)
+        (
+            self.hold(task, target, landing, ask.as_ref().or(found), release, held)
+                .await,
+            false,
+        )
     }
 
     /// Whether this album's open entry already holds copies the recipe does
@@ -1292,10 +1337,6 @@ impl LandingService {
     }
 }
 
-/// Fork: a weak-match hold on the album's names alone. The files pair with
-/// every track of the matched release, carry nothing beyond it, and are
-/// close enough as a whole to import but for the album title or artist.
-/// Files that name other tracks are far from the release and are not this.
 /// Fork: a want held for want of a release, with a file that agrees with
 /// the ask: that file lands by itself, so no other copy is fetched.
 fn want_agreed(target: &Target, landing: &Landing, decision: &Decision) -> bool {
@@ -1309,6 +1350,10 @@ fn want_agreed(target: &Target, landing: &Landing, decision: &Decision) -> bool 
         && landing.audio.iter().any(|file| want::agrees(target, file))
 }
 
+/// Fork: a weak-match hold on the album's names alone. The files pair with
+/// every track of the matched release, carry nothing beyond it, and are
+/// close enough as a whole to import but for the album title or artist.
+/// Files that name other tracks are far from the release and are not this.
 fn whole_copy(decision: &Decision, matched: &MatchSummary) -> bool {
     matches!(
         &decision.outcome,

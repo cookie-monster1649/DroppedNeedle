@@ -1468,6 +1468,7 @@ mod tests {
             type_info: None,
             score: 90,
             releases: None,
+            track: None,
         }
     }
 

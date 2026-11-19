@@ -2,7 +2,9 @@
 	Albums the library holds more than once: every release group two or more
 	albums own, marked when two copies share a release, the copies name
 	different releases, or one has fewer tracks. Each copy opens its album
-	page. Nothing here deletes or merges.
+	page. Nothing here deletes or merges, except the fork's "Tidy up"
+	(admins): it merges a group's other albums into the one to keep and
+	sends the lesser copies to the recycle bin, after asking.
 -->
 <script lang="ts">
 	import { CopyCheck } from 'lucide-svelte';
@@ -23,6 +25,15 @@
 	import PageShell from '$lib/ui/PageShell.svelte';
 	import QueryBoundary from '$lib/ui/QueryBoundary.svelte';
 	import StatusChip from '$lib/ui/StatusChip.svelte';
+	import ConfirmDialog from '$lib/ui/ConfirmDialog.svelte';
+	import { authStore } from '$lib/stores/authStore.svelte';
+	import { toastStore } from '$lib/stores/toast';
+	import { count, failureSentence } from '$lib/features/library/components/edition/editionCopy';
+	import {
+		createTidyDuplicateGroupMutation,
+		fetchTidyPlan,
+		type TidyPlan
+	} from '../queries/TidyDuplicates.svelte';
 
 	const duplicates = getDuplicateAlbumsQuery();
 	const groups = $derived(duplicates.data?.pages.flatMap((page) => page.items) ?? []);
@@ -39,6 +50,56 @@
 		legacy_import: 'carried from v2',
 		embedded: 'from the tags'
 	};
+
+	// Fork: Tidy up. The plan is read when asked, so it is never stale.
+	const tidyGroup = createTidyDuplicateGroupMutation();
+	let working = $state<string | null>(null);
+	let asking = $state<TidyPlan | null>(null);
+
+	function tidySummary(plan: TidyPlan): string {
+		const others = plan.albums.length - 1;
+		const removed = plan.surplus_track_ids.length;
+		const merge =
+			others > 0 ? `Merge ${count(others, 'album', 'albums')} into ${plan.albums[0].title}` : '';
+		const remove =
+			removed > 0
+				? `send ${count(removed, 'lesser copy', 'lesser copies')} to the recycle bin`
+				: '';
+		return [merge, remove].filter(Boolean).join(', then ') + '. Both can be undone.';
+	}
+
+	async function askTidy(group: DuplicateGroup): Promise<void> {
+		working = group.id;
+		try {
+			const plan = await fetchTidyPlan(group.copies.map((copy) => copy.album_id));
+			if (plan) asking = plan;
+			else toastStore.show({ message: 'Nothing to tidy here any more.', type: 'info' });
+		} catch (error) {
+			toastStore.show({
+				message: failureSentence(error, "Couldn't work out how to tidy this group."),
+				type: 'error'
+			});
+		} finally {
+			working = null;
+		}
+	}
+
+	async function tidy(plan: TidyPlan): Promise<void> {
+		asking = null;
+		const keep = plan.albums[0];
+		working = keep.album_id;
+		try {
+			await tidyGroup.mutateAsync(plan);
+			toastStore.show({ message: `Tidied ${keep.title}.`, type: 'success' });
+		} catch (error) {
+			toastStore.show({
+				message: failureSentence(error, `${keep.title} couldn't be tidied. Open it to see why.`),
+				type: 'error'
+			});
+		} finally {
+			working = null;
+		}
+	}
 
 	function classTone(kind: DuplicateClass): 'warning' | 'info' | 'neutral' {
 		if (kind === 'incomplete_copy') return 'warning';
@@ -60,7 +121,10 @@
 	}
 </script>
 
-<PageShell title="Duplicates" subtitle="Albums you have more than once. Nothing here changes them.">
+<PageShell
+	title="Duplicates"
+	subtitle="Albums you have more than once. Only Tidy up changes them, and it asks first."
+>
 	<QueryBoundary query={duplicates} what="the duplicates list" isEmpty={() => groups.length === 0}>
 		{#snippet empty()}
 			<Card variant="bordered" padding="lg">
@@ -86,10 +150,20 @@
 										{group.artist} · {group.copies.length} copies
 									</p>
 								</div>
-								<div class="flex flex-wrap gap-2">
+								<div class="flex flex-wrap items-center gap-2">
 									{#each group.classes as kind (kind)}
 										<StatusChip tone={classTone(kind)}>{classLabels[kind]}</StatusChip>
 									{/each}
+									{#if authStore.isAdmin}
+										<Button
+											variant="primary"
+											size="sm"
+											loading={working === group.id}
+											disabled={working !== null}
+											aria-label={`Tidy up ${group.title}`}
+											onclick={() => void askTidy(group)}>Tidy up</Button
+										>
+									{/if}
 								</div>
 							</div>
 						{/snippet}
@@ -152,3 +226,12 @@
 		{/if}
 	</QueryBoundary>
 </PageShell>
+
+<ConfirmDialog
+	open={asking !== null}
+	title={asking ? `Tidy up ${asking.albums[0].title}?` : ''}
+	message={asking ? tidySummary(asking) : ''}
+	confirmLabel="Tidy up"
+	onconfirm={() => asking && void tidy(asking)}
+	oncancel={() => (asking = null)}
+/>

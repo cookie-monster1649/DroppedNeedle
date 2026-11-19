@@ -584,6 +584,113 @@ impl PlaylistStore {
         Self { db }
     }
 
+    /// Fork: link every entry the library can now play to its track
+    /// ([`sql::LINK_LIBRARY`]), across all playlists. Answers how many
+    /// entries were linked. Runs on the linker loop and after an import
+    /// fills a playlist, so a download that lands shows on its playlists
+    /// without anyone adding it by hand.
+    pub async fn link_library(&self) -> Result<usize, StoreError> {
+        let now = i64::try_from(self.db.now_epoch()).unwrap_or(i64::MAX);
+        self.db
+            .write("playlists.link_library", move |tx| {
+                // A file put back lifts its marks; a file a person removed
+                // unlinks its entries and marks their songs not to fetch.
+                tx.execute(sql::UNDECLINE_RESTORED.text(), [])?;
+                let removed: Vec<RemovedLink> = tx
+                    .prepare_cached(sql::LINKED_REMOVED.text())?
+                    .query_map([], |row| {
+                        Ok(RemovedLink {
+                            entry: row.get(0)?,
+                            playlist: row.get(1)?,
+                            artist: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                            title: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                            spotify: row.get(4)?,
+                            file: row.get(5)?,
+                        })
+                    })?
+                    .collect::<Result<_, _>>()?;
+                for link in removed {
+                    let key = droppedneedle_library::matching::strings::want_key(
+                        &link.artist,
+                        &link.title,
+                    );
+                    tx.execute(
+                        sql::DECLINE.text(),
+                        rusqlite::params![link.playlist, key, link.spotify, link.file, now],
+                    )?;
+                    tx.execute(sql::UNLINK_REMOVED.text(), [&link.entry])?;
+                }
+                let mut linked = tx.execute(sql::LINK_LIBRARY.text(), [])?;
+                // An entry asked for by name links to the track its want's
+                // download landed as, whatever that file's tags say.
+                let named: Vec<(String, String, String)> = tx
+                    .prepare_cached(sql::UNLINKED_BY_NAME.text())?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<Result<_, _>>()?;
+                let mut track_of = tx.prepare_cached(sql::TRACK_OF_WANT.text())?;
+                for (entry, artist, title) in named {
+                    if artist.trim().is_empty() || title.trim().is_empty() {
+                        continue;
+                    }
+                    let key = droppedneedle_library::matching::strings::want_key(&artist, &title);
+                    let track: Option<String> =
+                        track_of.query_row([key], |row| row.get(0)).optional()?;
+                    if let Some(track) = track {
+                        linked +=
+                            tx.execute(sql::LINK_ENTRY.text(), rusqlite::params![entry, track])?;
+                    }
+                }
+                drop(track_of);
+                // Then by name: the library's best copy of the same song,
+                // whatever its edition, unless a person turned the song away.
+                let unlinked: Vec<(String, String, String, String)> = tx
+                    .prepare_cached(sql::UNLINKED_ENTRIES.text())?
+                    .query_map([], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                            row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                        ))
+                    })?
+                    .collect::<Result<_, _>>()?;
+                for (entry, playlist, artist, title) in unlinked {
+                    if artist.trim().is_empty() || title.trim().is_empty() {
+                        continue;
+                    }
+                    let key = droppedneedle_library::matching::strings::want_key(&artist, &title);
+                    // A mark names the copy a person removed or unlinked:
+                    // that copy never links again, but another copy of the
+                    // song does, and lifts the mark. A mark with no file
+                    // keeps the entry unlinked.
+                    let declined: Option<Option<String>> = tx
+                        .prepare_cached(sql::DECLINED_FILE.text())?
+                        .query_row(rusqlite::params![playlist, key], |row| row.get(0))
+                        .optional()?;
+                    let except = match &declined {
+                        Some(None) => continue,
+                        Some(Some(file)) => Some(file.as_str()),
+                        None => None,
+                    };
+                    if let Some(track) = droppedneedle_library::identity::reads::held_copy_except(
+                        tx, &artist, &title, except,
+                    )? {
+                        let made =
+                            tx.execute(sql::LINK_ENTRY.text(), rusqlite::params![entry, track])?;
+                        if made > 0 && declined.is_some() {
+                            tx.execute(sql::UNDECLINE.text(), rusqlite::params![playlist, key])?;
+                        }
+                        linked += made;
+                    }
+                }
+                tx.execute(sql::MARK_LINKED_LOCAL.text(), [])?;
+                tx.execute(sql::FILL_LINKED_LOCAL.text(), [])?;
+                tx.execute(sql::FILL_LINKED_COVER.text(), [])?;
+                Ok(linked)
+            })
+            .await
+    }
+
     /// Every playlist, as (owner, playlist), holding an entry with no source
     /// that an album now in the library owns.
     pub async fn to_link(&self) -> Result<Vec<(String, String)>, StoreError> {
@@ -1429,4 +1536,14 @@ mod tests {
             assert!(!titles_agree(entry, track), "{entry:?} / {track:?}");
         }
     }
+}
+
+/// Fork: an entry linked to a file a person removed.
+struct RemovedLink {
+    entry: String,
+    playlist: String,
+    artist: String,
+    title: String,
+    spotify: Option<String>,
+    file: String,
 }

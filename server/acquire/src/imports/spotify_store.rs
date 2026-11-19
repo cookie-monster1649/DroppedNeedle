@@ -365,6 +365,12 @@ impl CollectionsPlaylistBridge {
                 {
                     tracing::warn!(%error, "imported playlist not linked to the library");
                 }
+                // Fork: rows upstream's linker leaves unlinked (no album,
+                // name-only) get the fork's name linker now rather than on
+                // its next pass. Best effort: the loop catches up.
+                if let Err(error) = self.playlists.link_library().await {
+                    tracing::warn!(%error, "imported playlist not name-linked to the library yet");
+                }
                 Ok(())
             }
             Written::Missing => Err(SpotifyError::Store(format!(

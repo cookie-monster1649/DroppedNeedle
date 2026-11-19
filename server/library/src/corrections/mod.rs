@@ -48,7 +48,6 @@ pub mod models;
 pub(crate) mod placement;
 pub mod reasons;
 pub(crate) mod release_join;
-mod release_merge;
 mod reset;
 pub(crate) mod retag_merge;
 mod retag_pairs;
@@ -56,6 +55,7 @@ pub mod service;
 pub(crate) mod sql;
 
 pub use artist_convergence::{V2Fold, fold_v2_placeholder};
+pub(crate) use artists::retire_split_credit;
 pub(crate) use merge_basis::same_name_joins;
 pub use merge_basis::{V2PlaceholderFacts, V2PlaceholderKept};
 pub use service::Corrections;

@@ -5072,3 +5072,30 @@ fn flac_with_two_comment_blocks_keeps_the_last() {
     );
     assert_eq!(std::fs::read(&path).unwrap(), before, "file unchanged");
 }
+
+/// Fork: an imported MP3 whose ID3 frame carries flag bits the wrapper
+/// cannot keep (a reserved bit) is refused by the strict staged write, and
+/// written with a fresh tag by the import's write. Plain status flags no
+/// longer refuse upstream, so the test sets a reserved bit.
+#[test]
+fn an_imported_mp3_with_a_flagged_frame_gets_a_fresh_tag() {
+    use droppedneedle_library::publish::staging::{stage_tags, stage_tags_import};
+    use droppedneedle_library::publish::{TagTarget, TagUpdates};
+    let (_dir, source) = temp_copy("mp3_full_01.mp3", "fresh-tag");
+    // Set a reserved status bit on the first frame's header.
+    let mut bytes = std::fs::read(&source).unwrap();
+    assert_eq!(&bytes[..3], b"ID3");
+    bytes[10 + 8] = 0x01;
+    std::fs::write(&source, &bytes).unwrap();
+    let temp = source.with_file_name(".staged.mp3");
+    let mut updates = TagUpdates::new();
+    updates.insert(TagTarget::Field(TagField::Title), vec!["Fresh".to_owned()]);
+
+    std::fs::copy(&source, &temp).unwrap();
+    assert!(stage_tags(&temp, &updates, None).is_err());
+
+    std::fs::copy(&source, &temp).unwrap();
+    stage_tags_import(&temp, &source, &updates, None).expect("fresh tag");
+    let (tag, _) = tags::read::read_tags(track_file(&temp)).unwrap();
+    assert_eq!(tag.title, "Fresh");
+}

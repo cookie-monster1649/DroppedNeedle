@@ -32,7 +32,16 @@
 	} from '$lib/features/playlists/queries/playlistV3Adapter';
 	import { queryClient } from '$lib/queries/QueryClient';
 	import { withBasePath } from '$lib/utils/basePath';
-	import { Music, Download, Lock, LogOut } from 'lucide-svelte';
+	import {
+		Music,
+		Download,
+		Lock,
+		LogOut,
+		Loader,
+		LoaderCircle,
+		RefreshCw,
+		TriangleAlert
+	} from 'lucide-svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import ConfirmDialog from '$lib/ui/ConfirmDialog.svelte';
 	import type { PageData } from './$types';
@@ -444,6 +453,7 @@
 			onplaylistupdate={handlePlaylistUpdate}
 			onshare={() => shareModal?.showModal()}
 			onleave={() => (leaveOpen = true)}
+			onrequestall={handleRequestAll}
 		/>
 
 		<div class="mx-auto max-w-7xl space-y-6 px-4 pb-10 sm:px-6 lg:px-8">
@@ -521,16 +531,17 @@
 					</div>
 				{/if}
 
-			<PlaylistTrackList
-				bind:this={trackList}
-				{playlist}
-				readonly={!playlist.can_edit}
-				ontrackchange={() => {}}
-				onsourcechange={handleSourceChange}
-				onplaytrack={playFromTrack}
-				{rowStates}
-				onrequesttrack={handleRequestTrack}
-			/>
+				<PlaylistTrackList
+					bind:this={trackList}
+					{playlist}
+					readonly={!playlist.can_edit}
+					ontrackchange={() => {}}
+					onsourcechange={handleSourceChange}
+					onplaytrack={playFromTrack}
+					{rowStates}
+					onrequesttrack={handleRequestTrack}
+				/>
+			{/if}
 		</div>
 
 		{#if isOwner}

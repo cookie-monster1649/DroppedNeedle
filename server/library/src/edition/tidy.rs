@@ -1,20 +1,18 @@
-//! Fork: albums the library holds twice, for Check albums' Duplicates list.
+//! Fork: "Tidy up" for one group on upstream's Duplicates page.
 //!
-//! Two listed albums with the same folded album artist and title are one
-//! album split in two (a MusicBrainz-matched half and a half grouped only
-//! by its tags) or the same songs kept twice (one copy in FLAC, one in
-//! MP3, in two folders). Each group names the album to keep (a MusicBrainz
+//! Upstream lists albums that own one release group and changes nothing.
+//! Given one group's albums, this names the album to keep (a MusicBrainz
 //! match first, then the most files, then the better files) and the
 //! surplus copies: for every song held more than once, every copy but the
-//! best one. Tidying a group merges the others into the kept album and
-//! sends the surplus copies to the recycle bin, through the existing merge
-//! and removal routes, so both can be undone the usual ways.
+//! best one. The page then merges the others into the kept album and sends
+//! the surplus copies to the recycle bin through the existing merge and
+//! removal routes, so both can be undone the usual ways.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 
 use rusqlite::Connection;
 
-use crate::edition::sql::{DUPLICATE_ALBUM_FILES, DuplicateFileRow};
+use crate::edition::sql::{TIDY_ALBUM_FILES, TidyFileRow};
 
 /// Whether merging adds songs the kept album lacks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,28 +79,10 @@ fn album_quality(album: &DuplicateAlbum) -> i64 {
     album.tracks.iter().map(quality).max().unwrap_or(0)
 }
 
-/// Group the files into duplicate groups: albums with one Deezer match
-/// shared by another album group by that match (singles of one release),
-/// the others by folded artist and title.
-pub(super) fn group(rows: Vec<DuplicateFileRow>) -> Vec<DuplicateGroup> {
-    let mut sharing: HashMap<&str, HashSet<&str>> = HashMap::new();
-    for row in &rows {
-        if let Some(id) = row.provider_album_id.as_deref() {
-            sharing.entry(id).or_default().insert(row.album_id.as_str());
-        }
-    }
-    let shared: HashSet<String> = sharing
-        .into_iter()
-        .filter(|(_, albums)| albums.len() > 1)
-        .map(|(id, _)| id.to_owned())
-        .collect();
-    let mut by_key: BTreeMap<(String, String), Vec<DuplicateAlbum>> = BTreeMap::new();
+/// The albums the rows name, in row order, each with its files.
+fn albums_of(rows: Vec<TidyFileRow>) -> Vec<DuplicateAlbum> {
+    let mut albums: Vec<DuplicateAlbum> = Vec::new();
     for row in rows {
-        let key = match &row.provider_album_id {
-            Some(id) if shared.contains(id) => ("\u{0}provider".to_owned(), id.clone()),
-            _ => (row.artist_folded.clone(), row.title_folded.clone()),
-        };
-        let albums = by_key.entry(key).or_default();
         if albums
             .last()
             .is_none_or(|album| album.album_id != row.album_id)
@@ -135,11 +115,13 @@ pub(super) fn group(rows: Vec<DuplicateFileRow>) -> Vec<DuplicateGroup> {
             });
         }
     }
-    by_key
-        .into_values()
-        .filter(|albums| albums.len() > 1)
-        .map(one_group)
-        .collect()
+    albums
+}
+
+/// What tidying `rows`' albums does; `None` unless two or more hold files.
+pub(super) fn group(rows: Vec<TidyFileRow>) -> Option<DuplicateGroup> {
+    let albums = albums_of(rows);
+    (albums.len() > 1).then(|| one_group(albums))
 }
 
 fn one_group(mut albums: Vec<DuplicateAlbum>) -> DuplicateGroup {
@@ -189,11 +171,16 @@ fn one_group(mut albums: Vec<DuplicateAlbum>) -> DuplicateGroup {
     }
 }
 
-/// Every duplicate group in the library.
-pub fn duplicate_groups(conn: &Connection) -> rusqlite::Result<Vec<DuplicateGroup>> {
-    let mut stmt = conn.prepare(DUPLICATE_ALBUM_FILES.text())?;
+/// What tidying the listed albums does. Albums with no indexed file, or
+/// gone, are left out; `None` when fewer than two remain.
+pub fn tidy_plan(
+    conn: &Connection,
+    album_ids: &[String],
+) -> rusqlite::Result<Option<DuplicateGroup>> {
+    let ids = serde_json::to_string(album_ids).unwrap_or_else(|_| "[]".to_owned());
+    let mut stmt = conn.prepare(TIDY_ALBUM_FILES.text())?;
     let rows = stmt
-        .query_map([], DuplicateFileRow::read)?
+        .query_map([ids], TidyFileRow::read)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(group(rows))
 }
@@ -201,6 +188,10 @@ pub fn duplicate_groups(conn: &Connection) -> rusqlite::Result<Vec<DuplicateGrou
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn groups_of(rows: Vec<TidyFileRow>) -> Vec<DuplicateGroup> {
+        group(rows).into_iter().collect()
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn row(
@@ -210,14 +201,12 @@ mod tests {
         title: &str,
         format: &str,
         kbps: i64,
-    ) -> DuplicateFileRow {
-        DuplicateFileRow {
+    ) -> TidyFileRow {
+        TidyFileRow {
             album_id: album.to_owned(),
             album_title: "One Night".to_owned(),
             artist_name: "Two Another".to_owned(),
             album_revision: 1,
-            artist_folded: "two another".to_owned(),
-            title_folded: "one night".to_owned(),
             release_group_mbid: mbid.map(str::to_owned),
             track_id: track.to_owned(),
             track_title: Some(title.to_owned()),
@@ -227,13 +216,12 @@ mod tests {
             bit_depth: None,
             duration_seconds: Some(200.0),
             track_revision: 1,
-            provider_album_id: None,
         }
     }
 
     #[test]
     fn the_same_song_twice_keeps_the_lossless_copy() {
-        let groups = group(vec![
+        let groups = groups_of(vec![
             row("a1", None, "t1", "One Night", "flac", 900),
             row("a2", None, "t2", "One Night", "mp3", 320),
         ]);
@@ -245,7 +233,7 @@ mod tests {
 
     #[test]
     fn a_split_album_keeps_its_musicbrainz_half_and_the_better_copies() {
-        let groups = group(vec![
+        let groups = groups_of(vec![
             row("tag", None, "t1", "Song A", "flac", 900),
             row("tag", None, "t2", "Song C", "flac", 900),
             row("mb", Some("rg"), "t3", "Song A", "mp3", 320),
@@ -259,14 +247,11 @@ mod tests {
     }
 
     #[test]
-    fn singles_of_one_release_group_by_their_match() {
-        let mut one = row("s1", None, "t1", "Song A", "flac", 900);
-        one.title_folded = "song a".to_owned();
-        one.provider_album_id = Some("42".to_owned());
-        let mut two = row("s2", None, "t2", "Song B", "flac", 900);
-        two.title_folded = "song b".to_owned();
-        two.provider_album_id = Some("42".to_owned());
-        let groups = group(vec![one, two]);
+    fn two_albums_with_different_songs_add_up() {
+        let groups = groups_of(vec![
+            row("s1", None, "t1", "Song A", "flac", 900),
+            row("s2", None, "t2", "Song B", "flac", 900),
+        ]);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].kind, DuplicateKind::SameAlbum);
         assert!(groups[0].surplus_track_ids.is_empty());
@@ -274,6 +259,6 @@ mod tests {
 
     #[test]
     fn a_lone_album_is_no_group() {
-        assert!(group(vec![row("a1", None, "t1", "One Night", "flac", 900)]).is_empty());
+        assert!(group(vec![row("a1", None, "t1", "One Night", "flac", 900)]).is_none());
     }
 }

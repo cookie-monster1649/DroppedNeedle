@@ -2252,6 +2252,8 @@ async fn a_query_asks_musicbrainz_once_per_endpoint() {
         .sent()
         .iter()
         .map(|sent| sent.url.path().to_owned())
+        // Fork: search also asks Deezer; this pins MusicBrainz alone.
+        .filter(|path| path.starts_with("/musicbrainz/"))
         .collect();
     paths.sort();
     assert_eq!(

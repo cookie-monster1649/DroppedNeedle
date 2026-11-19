@@ -41,14 +41,14 @@ impl Operations {
         })
     }
 
-    /// Fork: albums the library holds twice. Blocking.
-    pub fn duplicate_albums(
+    /// Fork: what tidying these albums (one Duplicates group) does. Blocking.
+    pub fn tidy_plan(
         &self,
-    ) -> Result<Vec<crate::edition::duplicates::DuplicateGroup>, OperationError> {
-        self.db
-            .read_blocking("operations.duplicate_albums", |conn| {
-                Ok::<_, OperationError>(crate::edition::duplicates::duplicate_groups(conn)?)
-            })
+        album_ids: Vec<String>,
+    ) -> Result<Option<crate::edition::tidy::DuplicateGroup>, OperationError> {
+        self.db.read_blocking("operations.tidy_plan", move |conn| {
+            Ok::<_, OperationError>(crate::edition::tidy::tidy_plan(conn, &album_ids)?)
+        })
     }
 
     /// One page of the albums whose match waits for a person. Blocking.

@@ -1947,3 +1947,202 @@ async fn a_tag_only_track_with_no_identity_links_and_counts_as_held() {
         .unwrap();
     assert!(held);
 }
+
+/// Fork: the playlist linker points an entry at the indexed track whose
+/// MusicBrainz recording is the entry's, whatever its case; a recording
+/// held only by a missing file, or none at all, stays unlinked; an entry
+/// already linked keeps its file; and a second pass changes nothing.
+#[tokio::test]
+async fn playlist_entries_link_to_the_library_tracks_they_name() {
+    use droppedneedle_catalog::collections::store::playlists::{NewEntry, PlaylistStore};
+
+    let fixture = sqlite_fixture().await;
+    seed(
+        &fixture,
+        "INSERT INTO local_track_external_identities (local_track_id, provider, recording_mbid, \
+         decision_source, selected_at) VALUES \
+         ('t1', 'musicbrainz', 'aa000000-0000-4000-8000-000000000001', 'manual', 1), \
+         ('t3', 'musicbrainz', 'aa000000-0000-4000-8000-000000000003', 'manual', 1), \
+         ('t4', 'musicbrainz', 'aa000000-0000-4000-8000-000000000004', 'manual', 1)",
+    )
+    .await;
+    let store = PlaylistStore::new(droppedneedle_catalog::collections::db::CollectionsDb::new(
+        fixture.runtime.db().clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    ));
+    let entry = |name: &str, recording: Option<&str>| NewEntry {
+        track_name: name.to_owned(),
+        artist_name: "Aurora".to_owned(),
+        album_name: "First Light".to_owned(),
+        recording_mbid: recording.map(str::to_owned),
+        ..NewEntry::default()
+    };
+    let owner = store.owned_by("u1");
+    let (id, _) = owner
+        .create_with(
+            "Spotify",
+            vec![
+                entry("Opener", Some("AA000000-0000-4000-8000-000000000001")),
+                entry("Gone", Some("aa000000-0000-4000-8000-000000000003")),
+                entry("Unknown", None),
+                entry("Single", Some("aa000000-0000-4000-8000-000000000004")),
+            ],
+        )
+        .await
+        .unwrap();
+    fixture
+        .runtime
+        .db()
+        .write(
+            droppedneedle_kernel::db::Lane::Foreground,
+            "hand link",
+            move |tx| {
+                tx.execute_batch(
+                    "UPDATE catalog_playlist_tracks SET library_file_id = 't6' \
+                     WHERE track_name = 'Single'",
+                )
+                .map_err(droppedneedle_kernel::db::DbError::from)
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(store.link_library().await.unwrap(), 1);
+    let linked: Vec<(String, Option<String>)> = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|track| (track.track_name, track.library_file_id))
+        .collect();
+    assert_eq!(
+        linked,
+        vec![
+            ("Opener".to_owned(), Some("t1".to_owned())),
+            ("Gone".to_owned(), None),
+            ("Unknown".to_owned(), None),
+            ("Single".to_owned(), Some("t6".to_owned())),
+        ]
+    );
+    assert_eq!(
+        store.link_library().await.unwrap(),
+        0,
+        "nothing left to link"
+    );
+    // Linked entries list the library as a source (what the player reads),
+    // once each; unlinked ones are untouched.
+    let sources: Vec<(String, Option<Vec<String>>)> = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|track| (track.track_name, track.available_sources))
+        .collect();
+    let local = || Some(vec!["local".to_owned()]);
+    assert_eq!(
+        sources,
+        vec![
+            ("Opener".to_owned(), local()),
+            ("Gone".to_owned(), None),
+            ("Unknown".to_owned(), None),
+            ("Single".to_owned(), local()),
+        ]
+    );
+    // Linked entries take the shape of one added from the library: the
+    // file is their local source.
+    for track in owner.tracks(&id).await.unwrap() {
+        if track.library_file_id.is_some() {
+            assert_eq!(track.source_type, "local", "{}", track.track_name);
+            assert_eq!(
+                track.track_source_id, track.library_file_id,
+                "{}",
+                track.track_name
+            );
+        }
+    }
+
+    // An entry asked for by name links to the track its want's download
+    // landed as, though that file's tags name it otherwise.
+    let key = droppedneedle_library::matching::strings::want_key("aurora", "UNKNOWN");
+    seed(
+        &fixture,
+        String::leak(format!(
+            "INSERT INTO download_tasks (id, user_id, download_type, release_group_mbid, \
+             recording_mbid, artist_name, album_title, status, created_at, updated_at) \
+             VALUES ('dl-1', 'u1', 'track', '', '{key}', 'Aurora', '', 'completed', 1, 1); \
+             UPDATE local_tracks SET download_task_id = 'dl-1' WHERE id = 't2'"
+        )),
+    )
+    .await;
+    assert_eq!(store.link_library().await.unwrap(), 1);
+    let unknown = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|track| track.track_name == "Unknown")
+        .and_then(|track| track.library_file_id);
+    assert_eq!(unknown.as_deref(), Some("t2"));
+
+    // A file a person removes unlinks its entry and marks the song not to be
+    // fetched again; putting the file back lifts the mark and links it.
+    seed(
+        &fixture,
+        "UPDATE local_tracks SET availability = 'missing' WHERE id = 't1'; \
+         INSERT INTO library_catalog_actions (id, action_kind, local_track_id, before_json, \
+         after_json, created_at) VALUES ('act-1', 'remove_track', 't1', '{}', '{}', 1)",
+    )
+    .await;
+    store.link_library().await.unwrap();
+    let opener = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|track| track.track_name == "Opener")
+        .unwrap();
+    assert_eq!(opener.library_file_id, None);
+    assert_eq!(opener.available_sources, Some(vec![]));
+    let declines = || {
+        let db = fixture.runtime.db().clone();
+        async move {
+            db.read("declines", |conn| {
+                conn.query_row(
+                    "SELECT name_key, library_file_id FROM catalog_playlist_declines",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .map(Some)
+                .or_else(|error| match error {
+                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                    other => Err(other),
+                })
+                .map_err(droppedneedle_kernel::db::DbError::from)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(
+        declines().await,
+        Some((
+            droppedneedle_library::matching::strings::want_key("Aurora", "Opener"),
+            Some("t1".to_owned())
+        ))
+    );
+    seed(
+        &fixture,
+        "UPDATE local_tracks SET availability = 'indexed' WHERE id = 't1'",
+    )
+    .await;
+    store.link_library().await.unwrap();
+    assert_eq!(declines().await, None);
+    let opener = owner
+        .tracks(&id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|track| track.track_name == "Opener")
+        .and_then(|track| track.library_file_id);
+    assert_eq!(opener.as_deref(), Some("t1"));
+}

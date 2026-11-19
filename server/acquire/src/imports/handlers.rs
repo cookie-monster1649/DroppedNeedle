@@ -42,8 +42,9 @@ use super::lidarr::{
 use super::models::{
     LidarrArtistListResponse, LidarrConnectionSettings, LidarrImportRequest, LidarrImportResponse,
     LidarrTestResponse, SlskdStatusResponse, SpotifyAuthUrlResponse, SpotifyImportRequest,
-    SpotifyImportResponse, SpotifyPlaylistListResponse, SpotifyRedirectUri, SpotifySettings,
-    UsenetStatusResponse,
+    SpotifyImportResponse, SpotifyImportStatus, SpotifyPlaylistListQuery,
+    SpotifyPlaylistListResponse, SpotifyRedirectUri, SpotifySettings, SpotifySyncState,
+    SpotifySyncUpdate, UsenetStatusResponse,
 };
 use super::models::{
     SpotifyLibraryState, SpotifyLibraryUpdate, SpotifyResolution, SpotifyResolveQuery,

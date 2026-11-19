@@ -72,7 +72,9 @@ fn schema_rows(connection: &Connection) -> Vec<(String, String, String, Option<S
 fn fresh_migrate_marks_version_and_seeds() {
     let connection = migrated();
     assert_eq!(scalar(&connection, "PRAGMA user_version"), latest_version());
-    assert_eq!(table_names(&connection).len(), 180);
+    // 180 upstream tables, plus the extension ledger and the catalogue
+    // extension's tables (fork).
+    assert_eq!(table_names(&connection).len(), 204);
     assert_eq!(
         scalar(
             &connection,
@@ -2072,6 +2074,18 @@ const FOREIGN_KEYS: &[(&str, &str, &str, &str)] = &[
     ("user_quotas", "user_id", "auth_users", "CASCADE"),
     ("wanted_seen_candidates", "release_group_mbid_lower", "wanted_watches", "CASCADE"),
     ("wanted_watches", "user_id", "auth_users", "CASCADE"),
+    ("catalog_playlist_declines", "playlist_id", "catalog_playlists", "CASCADE"),
+    ("library_album_provider_matches", "local_album_id", "local_albums", "CASCADE"),
+    ("library_artist_suggestions", "local_artist_id", "local_artists", "CASCADE"),
+    ("source_edition_checks", "local_album_id", "local_albums", "CASCADE"),
+    ("source_promotion_checks", "local_album_id", "local_albums", "CASCADE"),
+    ("catalog_playlist_entry_identities", "entry_id", "catalog_playlist_tracks", "CASCADE"),
+    ("acquire_spotify_followed_artists", "user_id", "auth_users", "CASCADE"),
+    ("acquire_spotify_library", "user_id", "auth_users", "CASCADE"),
+    ("acquire_spotify_liked_hearts", "user_id", "auth_users", "CASCADE"),
+    ("acquire_spotify_listed_playlists", "user_id", "auth_users", "CASCADE"),
+    ("acquire_spotify_playlist_syncs", "playlist_id", "catalog_playlists", "CASCADE"),
+    ("acquire_spotify_saved_albums", "user_id", "auth_users", "CASCADE"),
 ];
 
 /// Every foreign key in the schema is listed in [`FOREIGN_KEYS`] with its

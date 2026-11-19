@@ -13,7 +13,14 @@ const mockForgetSources = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock('$lib/api/playlists', async (importOriginal) => ({
 	isRedactedPlaylist: (p: { is_redacted?: boolean } | null | undefined) => p?.is_redacted === true,
 	requestMissingTracks: vi.fn(),
-	downloadPlaylistExport: vi.fn()
+	downloadPlaylistExport: vi.fn(),
+	planMissingRequests: (await importOriginal<typeof import('$lib/api/playlists')>())
+		.planMissingRequests,
+	fetchPlaylistRows: vi.fn(() => Promise.resolve(new Map())),
+	fetchSpotifySync: vi.fn(() =>
+		Promise.resolve({ enabled: false, auto_request: false, checked_at: null, last_error: null })
+	),
+	setSpotifySync: vi.fn()
 }));
 
 // The detail page consumes the user-scoped TanStack detail query + V3 mutations;

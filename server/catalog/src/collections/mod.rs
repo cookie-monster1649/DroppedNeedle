@@ -13,6 +13,8 @@ pub mod handlers;
 pub mod http;
 mod import;
 pub mod library_links;
+/// Fork: the name-based playlist linker, for entries the library links cannot place.
+pub mod linker;
 pub mod models;
 pub mod remote_import;
 pub mod service;

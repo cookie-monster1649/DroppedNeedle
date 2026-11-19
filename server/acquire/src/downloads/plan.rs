@@ -63,6 +63,11 @@ pub struct TaskPlan {
     /// accepted. Never set with `planned_album`; absent means a pin.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub release_preferred: bool,
+    /// Fork: the download settings' mark when the retry pass started this
+    /// task ([`crate::downloads::retry_pause`]). A retry whose outcome
+    /// repeats waits while the mark is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_mark: Option<i64>,
 }
 
 impl TaskPlan {
@@ -89,6 +94,8 @@ impl TaskPlan {
             planned_album: self.planned_album.clone(),
             album_version: self.album_version,
             release_preferred: self.release_preferred,
+            playlist_song: self.playlist_song,
+            bulk_request: self.bulk_request,
             ..Self::default()
         }
     }

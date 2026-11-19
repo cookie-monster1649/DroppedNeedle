@@ -7975,47 +7975,6 @@ async fn a_library_folder_reached_through_a_symlink_takes_writes() {
     assert!(second.exists(), "the file stays");
 }
 
-/// Fork: the same album in two folders is one duplicate group in Check
-/// albums: the kept album first, the second copy of each song surplus.
-#[tokio::test]
-async fn check_albums_lists_an_album_held_twice_as_duplicates() {
-    let rig = Rig::start("lib-check-dupes").await;
-    let app = &rig.app;
-    let auth = app.login_admin().await;
-    let headers = [("authorization", auth.as_str())];
-    let music = app.config.root_app_dir.join("music");
-    plant(&music, "copy-a/01.flac", "flac_full_01.flac");
-    plant(&music, "copy-b/01.flac", "flac_full_01.flac");
-    rig.pause_identification().await;
-    app.add_library_folder("music", &music).await;
-    let first = rig
-        .scan_store
-        .track_at("music", "copy-a/01.flac")
-        .unwrap()
-        .expect("track indexed");
-    let second = rig
-        .scan_store
-        .track_at("music", "copy-b/01.flac")
-        .unwrap()
-        .expect("track indexed");
-    let first_album = track_album(app, &headers, &first).await;
-    let second_album = track_album(app, &headers, &second).await;
-    assert_ne!(first_album, second_album, "two folders make two albums");
-
-    let (status, body) = app
-        .call("GET", "/api/v3/library/duplicates", &headers, None)
-        .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let groups = body["groups"].as_array().expect("groups");
-    assert_eq!(groups.len(), 1, "{body}");
-    let group = &groups[0];
-    assert_eq!(group["kind"], json!("same_songs"), "{body}");
-    assert_eq!(group["albums"].as_array().map(Vec::len), Some(2), "{body}");
-    let kept = group["keep_album_id"].as_str().expect("kept album");
-    let surplus = if kept == first_album { &second } else { &first };
-    assert_eq!(group["surplus_track_ids"], json!([surplus]), "{body}");
-}
-
 /// Fork: an album MusicBrainz has nothing for gets a Deezer best guess in
 /// Check albums. "Use this" gives its page the match's label, genres and
 /// track list (with the tracks it lacks marked) and links its file to
@@ -33177,4 +33136,48 @@ async fn joined_credits_split_and_unlinked_artists_settle() {
     assert_eq!(link(&robyn).as_deref(), Some(robyn_mbid));
     // A link a person (or the bulk accept) set is never moved.
     assert_eq!(link(&lead.0).as_deref(), Some(jamie_mbid));
+}
+
+/// Fork: Tidy up on a Duplicates group of the same album in two folders
+/// keeps one album and names the second copy of each song as surplus.
+#[tokio::test]
+async fn tidy_up_plans_an_album_held_twice() {
+    let rig = Rig::start("lib-tidy-dupes").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "copy-a/01.flac", "flac_full_01.flac");
+    plant(&music, "copy-b/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let first = rig
+        .scan_store
+        .track_at("music", "copy-a/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let second = rig
+        .scan_store
+        .track_at("music", "copy-b/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let first_album = track_album(app, &headers, &first).await;
+    let second_album = track_album(app, &headers, &second).await;
+    assert_ne!(first_album, second_album, "two folders make two albums");
+
+    let (status, body) = app
+        .call(
+            "POST",
+            "/api/v3/library/duplicates/tidy-plan",
+            &headers,
+            Some(json!({ "album_ids": [first_album, second_album] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let group = &body["plan"];
+    assert_eq!(group["kind"], json!("same_songs"), "{body}");
+    assert_eq!(group["albums"].as_array().map(Vec::len), Some(2), "{body}");
+    let kept = group["keep_album_id"].as_str().expect("kept album");
+    let surplus = if kept == first_album { &second } else { &first };
+    assert_eq!(group["surplus_track_ids"], json!([surplus]), "{body}");
 }

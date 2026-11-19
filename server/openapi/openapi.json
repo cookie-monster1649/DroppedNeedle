@@ -206,6 +206,55 @@
         ]
       }
     },
+    "/api/v3/acquire/playlists/{playlist_id}/rows": {
+      "get": {
+        "tags": [
+          "imports"
+        ],
+        "summary": "Fork: where each entry of one of the caller's playlists stands (in the\nlibrary, missing, requested, fetching, held, failed), for the playlist\npage's per-row status.",
+        "operationId": "get_playlist_rows",
+        "parameters": [
+          {
+            "name": "playlist_id",
+            "in": "path",
+            "description": "Internal playlist id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entry states",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaylistRowsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not the caller's playlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "user"
+            ]
+          }
+        ]
+      }
+    },
     "/api/v3/acquire/sabnzbd/status": {
       "get": {
         "tags": [
@@ -16425,6 +16474,64 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Curator role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": [
+              "curator"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/v3/library/duplicates/tidy-plan": {
+      "post": {
+        "tags": [
+          "library management"
+        ],
+        "summary": "Fork: what \"Tidy up\" does to one group of the Duplicates page: the\nalbum to keep and the surplus copies. Changes nothing; the page merges\nand recycles through the usual routes.",
+        "operationId": "tidy_duplicates_plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TidyPlanBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The plan, if any",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TidyPlanView"
                 }
               }
             }
@@ -46391,46 +46498,6 @@
           }
         }
       },
-      "DuplicateAlbumView": {
-        "type": "object",
-        "description": "Fork: one album of a duplicate group.",
-        "required": [
-          "album_id",
-          "title",
-          "artist_name",
-          "row_revision",
-          "tracks"
-        ],
-        "properties": {
-          "album_id": {
-            "type": "string"
-          },
-          "artist_name": {
-            "type": "string"
-          },
-          "release_group_mbid": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The album's MusicBrainz release group, when it is matched."
-          },
-          "row_revision": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Echoed by the merge routes."
-          },
-          "title": {
-            "type": "string"
-          },
-          "tracks": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DuplicateTrackView"
-            }
-          }
-        }
-      },
       "DuplicateCandidate": {
         "type": "object",
         "required": [
@@ -70491,6 +70558,168 @@
           "dark",
           "midnight"
         ]
+      },
+      "TidyAlbumView": {
+        "type": "object",
+        "description": "Fork: one album to tidy.",
+        "required": [
+          "album_id",
+          "title",
+          "artist_name",
+          "row_revision",
+          "tracks"
+        ],
+        "properties": {
+          "album_id": {
+            "type": "string"
+          },
+          "artist_name": {
+            "type": "string"
+          },
+          "release_group_mbid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album's MusicBrainz release group, when it is matched."
+          },
+          "row_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Echoed by the merge routes."
+          },
+          "title": {
+            "type": "string"
+          },
+          "tracks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TidyTrackView"
+            }
+          }
+        }
+      },
+      "TidyGroupView": {
+        "type": "object",
+        "description": "Fork: what tidying one Duplicates group does.",
+        "required": [
+          "kind",
+          "keep_album_id",
+          "albums",
+          "surplus_track_ids"
+        ],
+        "properties": {
+          "albums": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TidyAlbumView"
+            },
+            "description": "The kept album first."
+          },
+          "keep_album_id": {
+            "type": "string",
+            "description": "The album the others merge into: a MusicBrainz match first, then\nthe most files, then the better files."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TidyKindView"
+          },
+          "surplus_track_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every copy of a song held more than once but its best one, to send\nto the recycle bin."
+          }
+        }
+      },
+      "TidyKindView": {
+        "type": "string",
+        "description": "Fork: whether merging adds songs the kept album lacks.",
+        "enum": [
+          "same_album",
+          "same_songs"
+        ]
+      },
+      "TidyPlanBody": {
+        "type": "object",
+        "description": "Fork: the albums of one Duplicates group.",
+        "required": [
+          "album_ids"
+        ],
+        "properties": {
+          "album_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TidyPlanView": {
+        "type": "object",
+        "description": "Fork: the plan, or none when fewer than two of the albums hold files.",
+        "properties": {
+          "plan": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TidyGroupView"
+              }
+            ]
+          }
+        }
+      },
+      "TidyTrackView": {
+        "type": "object",
+        "description": "Fork: one file of an album to tidy.",
+        "required": [
+          "track_id",
+          "title",
+          "row_revision"
+        ],
+        "properties": {
+          "bit_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "bit_rate": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bits per second."
+          },
+          "duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "file_format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "row_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Echoed by the removal route."
+          },
+          "title": {
+            "type": "string"
+          },
+          "track_id": {
+            "type": "string"
+          }
+        }
       },
       "TopAlbumsResponse": {
         "type": "object",

@@ -103,7 +103,10 @@ impl From<(AlbumRecord, bool, bool)> for AlbumView {
             release_group_mbid: album.release_group_mbid,
             release_mbid: album.release_mbid,
             artist_mbid: album.artist_mbid,
-            identity_state: identity_state(album.linked),
+            identity_state: identity_state(
+                album.linked && !stand_in,
+                album.provider_linked || stand_in,
+            ),
             guess_contradicted: album.guess_contradicted,
             track_count: album.track_count,
             expected_track_count: None,

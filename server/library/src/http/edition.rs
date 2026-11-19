@@ -25,8 +25,6 @@
 //!   write it, and `POST .../tags/{job_id}/undo` to plan putting it back.
 //! - `GET /library/unconfirmed`: albums whose match waits for a look, or
 //!   that someone marked "Looks wrong".
-//! - `GET /library/duplicates`: albums held twice, with what tidying them
-//!   does (fork).
 //! - `GET /library/artist-suggestions`: artists with no MusicBrainz link,
 //!   each with an artist to merge into or a MusicBrainz artist to link
 //!   (fork); `DELETE /library/artists/{id}/suggestion` turns one down;
@@ -99,8 +97,8 @@ pub fn routes() -> Routes<LibraryServices> {
         .curator(routes!(apply_edition_tags))
         .curator(routes!(undo_edition_tags))
         .user(routes!(list_unconfirmed))
-        .curator(routes!(list_duplicates))
         .curator(routes!(decide_provider_match))
+        .curator(routes!(tidy_duplicates_plan))
         .curator(routes!(list_artist_suggestions))
         .curator(routes!(decline_artist_suggestion))
         .admin(routes!(count_exact_guesses, accept_exact_guesses))
@@ -1203,19 +1201,19 @@ pub async fn list_unconfirmed(
     )))
 }
 
-/// Fork: what tidying a duplicate group does.
+/// Fork: whether merging adds songs the kept album lacks.
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum DuplicateKindView {
+pub enum TidyKindView {
     /// The others hold songs the kept album lacks: one album split in two.
     SameAlbum,
     /// Every song is in the kept album already: the same songs kept twice.
     SameSongs,
 }
 
-/// Fork: one file of a duplicated album.
+/// Fork: one file of an album to tidy.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DuplicateTrackView {
+pub struct TidyTrackView {
     pub track_id: String,
     pub title: String,
     pub file_format: Option<String>,
@@ -1227,9 +1225,9 @@ pub struct DuplicateTrackView {
     pub row_revision: i64,
 }
 
-/// Fork: one album of a duplicate group.
+/// Fork: one album to tidy.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DuplicateAlbumView {
+pub struct TidyAlbumView {
     pub album_id: String,
     pub title: String,
     pub artist_name: String,
@@ -1237,42 +1235,48 @@ pub struct DuplicateAlbumView {
     pub row_revision: i64,
     /// The album's MusicBrainz release group, when it is matched.
     pub release_group_mbid: Option<String>,
-    pub tracks: Vec<DuplicateTrackView>,
+    pub tracks: Vec<TidyTrackView>,
 }
 
-/// Fork: albums that are one album.
+/// Fork: what tidying one Duplicates group does.
 #[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DuplicateGroupView {
-    pub kind: DuplicateKindView,
+pub struct TidyGroupView {
+    pub kind: TidyKindView,
     /// The album the others merge into: a MusicBrainz match first, then
     /// the most files, then the better files.
     pub keep_album_id: String,
     /// The kept album first.
-    pub albums: Vec<DuplicateAlbumView>,
+    pub albums: Vec<TidyAlbumView>,
     /// Every copy of a song held more than once but its best one, to send
     /// to the recycle bin.
     pub surplus_track_ids: Vec<String>,
 }
 
-/// Fork: every duplicate group.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DuplicatesView {
-    pub groups: Vec<DuplicateGroupView>,
+/// Fork: the albums of one Duplicates group.
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct TidyPlanBody {
+    pub album_ids: Vec<String>,
 }
 
-impl From<crate::edition::duplicates::DuplicateGroup> for DuplicateGroupView {
-    fn from(group: crate::edition::duplicates::DuplicateGroup) -> Self {
-        use crate::edition::duplicates::DuplicateKind;
+/// Fork: the plan, or none when fewer than two of the albums hold files.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct TidyPlanView {
+    pub plan: Option<TidyGroupView>,
+}
+
+impl From<crate::edition::tidy::DuplicateGroup> for TidyGroupView {
+    fn from(group: crate::edition::tidy::DuplicateGroup) -> Self {
+        use crate::edition::tidy::DuplicateKind;
         Self {
             kind: match group.kind {
-                DuplicateKind::SameAlbum => DuplicateKindView::SameAlbum,
-                DuplicateKind::SameSongs => DuplicateKindView::SameSongs,
+                DuplicateKind::SameAlbum => TidyKindView::SameAlbum,
+                DuplicateKind::SameSongs => TidyKindView::SameSongs,
             },
             keep_album_id: group.keep_album_id,
             albums: group
                 .albums
                 .into_iter()
-                .map(|album| DuplicateAlbumView {
+                .map(|album| TidyAlbumView {
                     album_id: album.album_id,
                     title: album.title,
                     artist_name: album.artist_name,
@@ -1281,7 +1285,7 @@ impl From<crate::edition::duplicates::DuplicateGroup> for DuplicateGroupView {
                     tracks: album
                         .tracks
                         .into_iter()
-                        .map(|track| DuplicateTrackView {
+                        .map(|track| TidyTrackView {
                             track_id: track.track_id,
                             title: track.title,
                             file_format: track.file_format,
@@ -1298,25 +1302,30 @@ impl From<crate::edition::duplicates::DuplicateGroup> for DuplicateGroupView {
     }
 }
 
-/// Fork: albums the library holds twice (the same folded album artist and
-/// title), with the album to keep and the surplus copies.
+/// Fork: what "Tidy up" does to one group of the Duplicates page: the
+/// album to keep and the surplus copies. Changes nothing; the page merges
+/// and recycles through the usual routes.
 #[utoipa::path(
-    get,
+    post,
     tag = "library management",
-    path = "/api/v3/library/duplicates",
+    path = "/api/v3/library/duplicates/tidy-plan",
+    request_body = TidyPlanBody,
     responses(
-        (status = 200, description = "Every duplicate group", body = DuplicatesView),
+        (status = 200, description = "The plan, if any", body = TidyPlanView),
         (status = 401, description = "Not authenticated"),
         (status = 403, description = "Curator role required"),
     )
 )]
-pub async fn list_duplicates(
+pub async fn tidy_duplicates_plan(
     State(ops): State<Operations>,
     _caller: Curator,
-) -> Result<Json<DuplicatesView>, ApiError> {
-    let groups = blocking(move || ops.duplicate_albums()).await?;
-    Ok(Json(DuplicatesView {
-        groups: groups.into_iter().map(Into::into).collect(),
+    ValidJson(body): ValidJson<TidyPlanBody>,
+) -> Result<Json<TidyPlanView>, ApiError> {
+    let mut ids = body.album_ids;
+    ids.truncate(50);
+    let plan = blocking(move || ops.tidy_plan(ids)).await?;
+    Ok(Json(TidyPlanView {
+        plan: plan.map(Into::into),
     }))
 }
 

@@ -96,6 +96,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v3/acquire/playlists/{playlist_id}/rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fork: where each entry of one of the caller's playlists stands (in the
+         *     library, missing, requested, fetching, held, failed), for the playlist
+         *     page's per-row status.
+         */
+        get: operations["get_playlist_rows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v3/acquire/sabnzbd/status": {
         parameters: {
             query?: never;
@@ -4745,6 +4766,27 @@ export interface paths {
         get: operations["list_duplicate_albums"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v3/library/duplicates/tidy-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Fork: what "Tidy up" does to one group of the Duplicates page: the
+         *     album to keep and the surplus copies. Changes nothing; the page merges
+         *     and recycles through the usual routes.
+         */
+        post: operations["tidy_duplicates_plan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12871,7 +12913,7 @@ export interface components {
          * @description The stable code of a [`CandidateNote`].
          * @enum {string}
          */
-        CandidateNoteCode: "complete" | "incomplete" | "title_conflict" | "lengths" | "quality" | "no_tracklist" | "names_album" | "title_unclear" | "strong" | "weak" | "turned_down_before";
+        CandidateNoteCode: "complete" | "incomplete" | "title_conflict" | "lengths" | "quality" | "no_tracklist" | "names_album" | "title_unclear" | "strong" | "weak" | "turned_down_before" | "other_edition";
         /**
          * @description Why a candidate is outside the download settings. Declared in the order
          *     the page names them: the first that applies is shown.
@@ -14557,20 +14599,6 @@ export interface components {
         /** @description The upload form: one or more `files` parts (audio or `.zip`). */
         DropUploadForm: {
             files: string[];
-        };
-        /** @description Fork: one album of a duplicate group. */
-        DuplicateAlbumView: {
-            album_id: string;
-            artist_name: string;
-            /** @description The album's MusicBrainz release group, when it is matched. */
-            release_group_mbid?: string | null;
-            /**
-             * Format: int64
-             * @description Echoed by the merge routes.
-             */
-            row_revision: number;
-            title: string;
-            tracks: components["schemas"]["DuplicateTrackView"][];
         };
         DuplicateCandidate: {
             artist_name: string;
@@ -25310,6 +25338,69 @@ export interface components {
          * @enum {string}
          */
         ThemeChoice: "system" | "light" | "dark" | "midnight";
+        /** @description Fork: one album to tidy. */
+        TidyAlbumView: {
+            album_id: string;
+            artist_name: string;
+            /** @description The album's MusicBrainz release group, when it is matched. */
+            release_group_mbid?: string | null;
+            /**
+             * Format: int64
+             * @description Echoed by the merge routes.
+             */
+            row_revision: number;
+            title: string;
+            tracks: components["schemas"]["TidyTrackView"][];
+        };
+        /** @description Fork: what tidying one Duplicates group does. */
+        TidyGroupView: {
+            /** @description The kept album first. */
+            albums: components["schemas"]["TidyAlbumView"][];
+            /**
+             * @description The album the others merge into: a MusicBrainz match first, then
+             *     the most files, then the better files.
+             */
+            keep_album_id: string;
+            kind: components["schemas"]["TidyKindView"];
+            /**
+             * @description Every copy of a song held more than once but its best one, to send
+             *     to the recycle bin.
+             */
+            surplus_track_ids: string[];
+        };
+        /**
+         * @description Fork: whether merging adds songs the kept album lacks.
+         * @enum {string}
+         */
+        TidyKindView: "same_album" | "same_songs";
+        /** @description Fork: the albums of one Duplicates group. */
+        TidyPlanBody: {
+            album_ids: string[];
+        };
+        /** @description Fork: the plan, or none when fewer than two of the albums hold files. */
+        TidyPlanView: {
+            plan?: null | components["schemas"]["TidyGroupView"];
+        };
+        /** @description Fork: one file of an album to tidy. */
+        TidyTrackView: {
+            /** Format: int64 */
+            bit_depth?: number | null;
+            /**
+             * Format: int64
+             * @description Bits per second.
+             */
+            bit_rate?: number | null;
+            /** Format: double */
+            duration_seconds?: number | null;
+            file_format?: string | null;
+            /**
+             * Format: int64
+             * @description Echoed by the removal route.
+             */
+            row_revision: number;
+            title: string;
+            track_id: string;
+        };
         /** @description `GET /artists/{artist_mbid}/top-albums`. */
         TopAlbumsResponse: {
             /** @description Albums, most played first. */
@@ -27073,6 +27164,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsenetStatusResponse"];
+                };
+            };
+        };
+    };
+    get_playlist_rows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Internal playlist id */
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entry states */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaylistRowsResponse"];
+                };
+            };
+            /** @description Not the caller's playlist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -38285,6 +38408,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Not authenticated */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Curator role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    tidy_duplicates_plan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TidyPlanBody"];
+            };
+        };
+        responses: {
+            /** @description The plan, if any */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TidyPlanView"];
                 };
             };
             /** @description Not authenticated */

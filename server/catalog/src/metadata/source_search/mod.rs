@@ -71,7 +71,7 @@ pub(crate) fn merge_hits(
         .iter()
         .map(|hit| match kind {
             RemoteKind::Artist => (fold(&hit.title), String::new()),
-            RemoteKind::Album => album_key(hit.artist.as_deref(), &hit.title),
+            RemoteKind::Album | RemoteKind::Track => album_key(hit.artist.as_deref(), &hit.title),
         })
         .collect();
     let mut out = Vec::new();
@@ -84,6 +84,8 @@ pub(crate) fn merge_hits(
                 virtual_ids::mint(catalogue::PROVIDER, Kind::Artist, &id),
                 None,
             ),
+            // Songs come from MusicBrainz recordings only.
+            RemoteKind::Track => return Vec::new(),
             RemoteKind::Album => {
                 let (primary, secondary) = types(hit.record_type.as_deref());
                 if !allowed(primary, &secondary) {
@@ -105,7 +107,7 @@ pub(crate) fn merge_hits(
             title: hit.title.clone(),
             artist: match kind {
                 RemoteKind::Artist => None,
-                RemoteKind::Album => artist,
+                RemoteKind::Album | RemoteKind::Track => artist,
             },
             year: None,
             disambiguation: None,
@@ -116,6 +118,7 @@ pub(crate) fn merge_hits(
             // Fork: Deezer gives no release count; an exact title still
             // ranks as exact, after MusicBrainz's exact groups that have one.
             releases: None,
+            track: None,
         });
     }
     out
@@ -169,6 +172,7 @@ impl Catalog {
         let (label, path) = match kind {
             RemoteKind::Artist => ("deezer_artist_search", "artist"),
             RemoteKind::Album => ("deezer_album_search", "album"),
+            RemoteKind::Track => return Vec::new(),
         };
         let text = query.trim().to_owned();
         let limit = DEEZER_HITS.to_string();
@@ -212,7 +216,7 @@ impl Catalog {
                 let id = hit.id.to_string();
                 let kind = match kind {
                     RemoteKind::Artist => Kind::Artist,
-                    RemoteKind::Album => Kind::ReleaseGroup,
+                    RemoteKind::Album | RemoteKind::Track => Kind::ReleaseGroup,
                 };
                 ids.contains(virtual_ids::mint(catalogue::PROVIDER, kind, &id).as_str())
             })
@@ -234,6 +238,7 @@ impl Catalog {
                                 now,
                             )?;
                         }
+                        RemoteKind::Track => {}
                         RemoteKind::Album => {
                             let Some(artist) = hit.artist.as_ref() else {
                                 continue;
@@ -278,6 +283,7 @@ mod tests {
             type_info: None,
             score: 100,
             releases: None,
+            track: None,
         }
     }
 

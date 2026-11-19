@@ -725,8 +725,9 @@ impl Imports {
         }
 
         // The commit seals the match against this document and makes no
-        // outside call, so it is kept first. A local-only album has none.
-        if local.is_none() {
+        // outside call, so it is kept first. A local-only album has none,
+        // nor do files placed as tagged (fork: no release id).
+        if local.is_none() && !release.id.trim().is_empty() {
             self.identify_store
                 .save_release(release, Lane::Background)
                 .map_err(|error| match error {
@@ -1165,6 +1166,7 @@ impl Imports {
                             folder: placement.copy_folder.clone(),
                         }),
                         set_aside: placement.set_aside,
+                        links: track.links.clone(),
                         ..dest_policy(placement.policy)
                     }),
                     replaces: None,

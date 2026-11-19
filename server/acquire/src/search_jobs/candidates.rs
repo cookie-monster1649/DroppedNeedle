@@ -269,6 +269,7 @@ pub fn mark_other_editions(candidates: &mut [Candidate], editions: &[EditionTrac
                 tracklist: &edition.tracks,
                 wanted: &[],
                 single_track: false,
+                release_preferred: false,
             };
             crate::slskd::folders::rank_listing(&hits, request, &policy)
                 .first()

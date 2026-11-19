@@ -374,6 +374,20 @@ impl Catalog {
     /// rejected. Library ids are shaped like MBIDs, so the library is asked
     /// first: one keyed read, and MusicBrainz is never asked for them.
     async fn album_id(&self, raw_id: &str) -> Result<String, CatalogError> {
+        // Fork: a stand-in linked to the MusicBrainz group it turned out to
+        // be opens that group's page.
+        if let Ok(id) = checked_mbid(raw_id, "album")
+            && droppedneedle_providers::virtual_ids::is_virtual(&id)
+        {
+            let linked = self
+                .local()
+                .linked_group(&id)
+                .await
+                .map_err(CatalogError::database)?;
+            if let Some(group) = linked {
+                return Ok(group);
+            }
+        }
         let local = raw_id.trim();
         if !local.is_empty() && local.len() <= 128 {
             let found = self

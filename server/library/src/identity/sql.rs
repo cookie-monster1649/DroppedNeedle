@@ -663,6 +663,14 @@ droppedneedle_kernel::sql! {
              OR b.grouping_key = ?4 \
              OR b.id IN (SELECT album_id FROM (" + (owns_group!("= ?3")) + "))) \
              ORDER BY b.created_at, b.id LIMIT 1";
+    /// Fork: the artists, id and quality of every indexed track titled `?1`,
+    /// `?2` or `?3` (folded; the apostrophe spellings of one title), for
+    /// "is this song already in the library" whatever the edition.
+    pub(super) TRACK_TITLE_ARTISTS = "SELECT coalesce(t.artist_name_folded, ''), \
+             coalesce(t.album_artist_name_folded, ''), t.id, \
+             coalesce(t.file_format, ''), t.bit_depth, t.bit_rate \
+             FROM local_tracks t INDEXED BY idx_local_tracks_search \
+             WHERE t.title_folded IN (?1, ?2, ?3) AND t.availability = 'indexed'";
     /// Whether the album (`?1`) carries a flag a landing must keep: a
     /// person's detach, an undone automatic edition, or a guess the files
     /// contradict.

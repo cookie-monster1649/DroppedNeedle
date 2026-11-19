@@ -100,5 +100,25 @@ export const ROUTE_REASONS: readonly { method: string; path: string; reason: str
 		method: 'POST',
 		path: '/api/v3/admin/playlist-import/release-hold',
 		reason: 'fork admin tool run by scripts; no page'
+	},
+	{
+		method: 'POST',
+		path: '/api/v3/admin/playlist-import/link-ids',
+		reason: 'fork admin tool run by scripts; no page'
+	},
+	{
+		method: 'GET',
+		path: '/api/v3/admin/bulk-requests',
+		reason: 'fork bulk-request tool driven by scripts; no page'
+	},
+	{
+		method: 'GET',
+		path: '/api/v3/admin/bulk-requests/{run_id}',
+		reason: 'fork bulk-request tool driven by scripts; no page'
+	},
+	{
+		method: 'POST',
+		path: '/api/v3/admin/bulk-requests/{run_id}/state',
+		reason: 'fork bulk-request tool driven by scripts; no page'
 	}
 ];
