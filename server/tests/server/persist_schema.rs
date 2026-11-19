@@ -4341,6 +4341,11 @@ mod extension_chains {
                 "catalog/0020_bulk_requests.sql",
                 "711500c6153dbf69fa63383a9f6b3d85a93ec412845c3e99729e04122988cbf6",
             ),
+            (
+                "catalog",
+                "catalog/0021_spotify_liked_hearts.sql",
+                "612b4d1610c95b3696e86e2a7fdfc3c594a371bd3e766309459f85b262b20b7c",
+            ),
         ];
         for chain in droppedneedle_kernel::schema::extensions::EXTENSIONS {
             for migration in chain.migrations {

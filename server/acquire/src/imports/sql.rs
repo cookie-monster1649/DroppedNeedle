@@ -159,6 +159,16 @@ droppedneedle_kernel::sql! {
     /// Record one album's lookup.
     pub(crate) MATCH_ALBUM = "UPDATE acquire_spotify_saved_albums SET release_group = ?3, \
          matched_by = ?4, matched_at = ?5 WHERE user_id = ?1 AND spotify_album_id = ?2";
+    /// The library tracks user `?1`'s Liked Songs sync has seen, as
+    /// `(track_id, hearted_by_sync)`.
+    pub(crate) LIKED_HEARTS = "SELECT track_id, hearted_by_sync FROM acquire_spotify_liked_hearts \
+         WHERE user_id = ?1";
+    /// Record one liked library track; `?3` is 1 when the sync hearted it.
+    pub(crate) KEEP_LIKED_HEART = "INSERT OR IGNORE INTO acquire_spotify_liked_hearts \
+         (user_id, track_id, hearted_by_sync, created_at) VALUES (?1, ?2, ?3, ?4)";
+    /// Forget one track that is no longer liked.
+    pub(crate) DROP_LIKED_HEART = "DELETE FROM acquire_spotify_liked_hearts \
+         WHERE user_id = ?1 AND track_id = ?2";
     /// Record the favourite the sync added.
     pub(crate) FAVORITED_ALBUM = "UPDATE acquire_spotify_saved_albums SET favorite_album_id = ?3 \
          WHERE user_id = ?1 AND spotify_album_id = ?2";
