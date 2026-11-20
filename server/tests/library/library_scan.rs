@@ -12768,3 +12768,54 @@ async fn same_folder_albums_merge_by_themselves() {
         "nothing left to merge"
     );
 }
+
+/// Fork: two records in one folder matched to different releases (two
+/// editions, so two grouping keys) fold together when the releases share a
+/// MusicBrainz release group, and stay apart when they do not.
+#[tokio::test]
+async fn same_folder_editions_of_one_release_group_merge() {
+    for (second_group, expected) in [("rg-one", 1), ("rg-other", 2)] {
+        let scratch = ScratchDir::new(&format!("scan-same-folder-{second_group}"));
+        let music = scratch.join("music");
+        plant(&music, "a/01.flac", "flac_full_02.flac");
+        plant(&music, "b/02.flac", "flac_full_02.flac");
+        let library = bundle(&scratch).await;
+        scan(&library).await;
+        std::fs::rename(music.join("b/02.flac"), music.join("a/02.flac")).expect("move");
+        scan(&library).await;
+        let albums = |library: &LibrarySetup| {
+            query(
+                library,
+                "SELECT COUNT(DISTINCT local_album_id) FROM local_tracks \
+                 WHERE availability = 'indexed'",
+            )
+        };
+        assert_eq!(albums(&library), 2, "split before the pass");
+        let album = |relative: &str| {
+            format!(
+                "(SELECT local_album_id FROM local_tracks \
+                 WHERE relative_path = '{relative}' AND availability = 'indexed')"
+            )
+        };
+        let (first, second) = (album("a/01.flac"), album("a/02.flac"));
+        library
+            .scan_store
+            .db()
+            .run_sql(&format!(
+                "INSERT OR IGNORE INTO auth_users (id, display_name, role, created_at) \
+                 VALUES ('admin', 'Admin', 'admin', 1); \
+                 UPDATE local_albums SET grouping_key = 'mbid:rel-1' WHERE id = {first}; \
+                 UPDATE local_albums SET grouping_key = 'mbid:rel-2' WHERE id = {second}; \
+                 INSERT INTO local_album_external_identities (local_album_id, provider, \
+                 release_group_mbid, release_mbid, decision_source, selected_at) \
+                 SELECT {first}, 'musicbrainz', 'RG-ONE', 'rel-1', 'automatic', 0; \
+                 INSERT INTO local_album_external_identities (local_album_id, provider, \
+                 release_group_mbid, release_mbid, decision_source, selected_at) \
+                 SELECT {second}, 'musicbrainz', '{second_group}', 'rel-2', 'automatic', 0;"
+            ))
+            .expect("editions");
+        let corrections = crate::common::library::services(&library).corrections;
+        corrections.merge_same_folder_albums().expect("merge pass");
+        assert_eq!(albums(&library), expected, "second edition on {second_group}");
+    }
+}
