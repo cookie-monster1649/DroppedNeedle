@@ -49782,6 +49782,21 @@
               "null"
             ]
           },
+          "requested_duration_seconds": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Fork: that song's length."
+          },
+          "requested_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fork: the song the track download asked for, when it was one."
+          },
           "source": {
             "type": "string",
             "description": "`soulseek`, `usenet`, `plugin:<key>`, `upload` or `import_folder`."

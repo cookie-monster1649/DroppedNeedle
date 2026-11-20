@@ -11,12 +11,18 @@ droppedneedle_kernel::sql! {
     pub(super) fragment ENTRY_ROW = "SELECT id, user_id, origin, group_key, release_group_mbid, \
              recording_mbid, drop_item_id, artist_name, album_title, state, created_at, \
              expires_at, retry_at FROM acquire_held_entries";
-    /// Every file column, in the order `HeldFile::from_row` reads them.
+    /// Every file column, in the order `HeldFile::from_row` reads them, then
+    /// the song its track download asked for (fork).
     pub(super) fragment FILE_ROW = "SELECT id, entry_id, root, path, original_name, release_mbid, \
              release_track_mbid, recording_mbid, disc_number, track_number, track_title, \
              file_format, duration_seconds, expected_duration_seconds, evidence_title, \
              evidence_artist, evidence_score, source, source_task_id, reason, reason_detail, \
-             created_at, file_size, file_modified_at FROM acquire_held_files";
+             created_at, file_size, file_modified_at, \
+             (SELECT d.track_title FROM download_tasks d \
+              WHERE d.id = source_task_id AND d.download_type = 'track'), \
+             (SELECT d.track_duration_seconds FROM download_tasks d \
+              WHERE d.id = source_task_id AND d.download_type = 'track') \
+             FROM acquire_held_files";
     /// The open entry of user `?1` (NULL for no user's) under key `?2`.
     pub(super) OPEN_ENTRY = "SELECT id FROM acquire_held_entries \
              WHERE user_id IS ?1 AND group_key = ?2 AND state IN " + OPEN;

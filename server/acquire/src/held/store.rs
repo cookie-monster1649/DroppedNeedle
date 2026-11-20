@@ -202,6 +202,10 @@ pub struct HeldFile {
     pub file_size: Option<i64>,
     pub file_modified_at: Option<i64>,
     pub created_at: i64,
+    /// Fork: the song its track download asked for, and that song's
+    /// length, to set beside what the file is.
+    pub requested_title: Option<String>,
+    pub requested_duration_seconds: Option<f64>,
 }
 
 impl HeldFile {
@@ -233,6 +237,8 @@ impl HeldFile {
             created_at: row.get(21)?,
             file_size: row.get(22)?,
             file_modified_at: row.get(23)?,
+            requested_title: row.get(24)?,
+            requested_duration_seconds: row.get(25)?,
         })
     }
 

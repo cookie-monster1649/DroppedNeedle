@@ -125,6 +125,10 @@ pub struct HeldFileResponse {
     pub actions: Vec<HeldFileAction>,
     /// When it was held, in milliseconds.
     pub created_at: i64,
+    /// Fork: the song the track download asked for, when it was one.
+    pub requested_title: Option<String>,
+    /// Fork: that song's length.
+    pub requested_duration_seconds: Option<f64>,
 }
 
 impl From<HeldFile> for HeldFileResponse {
@@ -161,6 +165,8 @@ impl HeldFileResponse {
             reason_kind: file.reason.kind(),
             reason_detail: file.reason_detail,
             created_at: file.created_at,
+            requested_title: file.requested_title,
+            requested_duration_seconds: file.requested_duration_seconds,
         }
     }
 }

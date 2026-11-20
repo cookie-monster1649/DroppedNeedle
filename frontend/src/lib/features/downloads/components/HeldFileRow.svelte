@@ -137,11 +137,16 @@
 
 	const fmt = (s: number) => formatCountdown(Number.isFinite(s) ? s : 0);
 
+	// Fork: the song a track download asked for, beside what the file is, so a
+	// wrong song shows at a glance.
+	const asked = $derived(file.requested_title?.trim() || null);
+	const expected = $derived(
+		file.expected_duration_seconds ?? file.requested_duration_seconds ?? null
+	);
+
 	const meta = $derived(
 		[
-			file.expected_duration_seconds != null && total > 0
-				? `Length ${fmt(total)} · expected ${fmt(file.expected_duration_seconds)}`
-				: null,
+			expected != null && total > 0 ? `Length ${fmt(total)} · expected ${fmt(expected)}` : null,
 			showExpiry ? keptUntil(entry.expires_at) : null
 		]
 			.filter(Boolean)
@@ -172,6 +177,15 @@
 <div class="space-y-2">
 	{#if showTitle}
 		<p class="truncate text-sm font-semibold" title={file.original_name}>{title}</p>
+	{/if}
+	{#if asked}
+		<p class="text-xs">
+			<span class="text-muted">Asked for</span> “{asked}”{#if file.requested_duration_seconds}<span
+					class="tabular-nums text-muted"
+				>
+					({fmt(file.requested_duration_seconds)})</span
+				>{/if}
+		</p>
 	{/if}
 	<p class="text-xs text-muted">
 		{file.reason_text}{#if evidence}{` ${evidence}.`}{/if}

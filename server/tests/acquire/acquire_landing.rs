@@ -7407,19 +7407,27 @@ async fn a_single_lands_as_the_song_only_on_proof() {
                     SingleCase::titled("Love Me", "Unknown Album"),
                     imported(),
                 ),
+                // Fork: from another album nobody showed to be the song's
+                // own, at the single's length and named as it: the song.
                 (
                     "t-singles",
                     SingleCase::titled("Love Me", "Singles 2020"),
-                    held_as("weak_match"),
+                    imported(),
                 ),
-                // A malformed group tag proves nothing.
                 (
                     "t-malformed",
                     SingleCase {
                         group_tag: Some("not-a-release-group"),
                         ..SingleCase::titled("Love Me", "Singles 2020")
                     },
-                    held_as("weak_match"),
+                    imported(),
+                ),
+                // Fork: plainly another song is no decision for a person:
+                // the next source is tried.
+                (
+                    "t-other-song",
+                    SingleCase::titled("Glory Box", "Love Me"),
+                    vec![("rejected".to_owned(), Some("wrong_track".to_owned()))],
                 ),
                 (
                     "t-love-me-do",

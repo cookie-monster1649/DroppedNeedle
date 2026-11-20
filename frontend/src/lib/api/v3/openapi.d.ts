@@ -16106,6 +16106,13 @@ export interface components {
             recording_mbid?: string | null;
             release_mbid?: string | null;
             release_track_mbid?: string | null;
+            /**
+             * Format: double
+             * @description Fork: that song's length.
+             */
+            requested_duration_seconds?: number | null;
+            /** @description Fork: the song the track download asked for, when it was one. */
+            requested_title?: string | null;
             /** @description `soulseek`, `usenet`, `plugin:<key>`, `upload` or `import_folder`. */
             source: string;
             source_task_id?: string | null;

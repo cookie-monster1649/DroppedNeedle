@@ -25,7 +25,7 @@ use serde::Serialize;
 use super::matching::{
     FoundRelease, MatchState, MatchSummary, album_tag, file_name_parts, is_various,
 };
-use super::probe::Landing;
+use super::probe::{LandedFile, Landing};
 use super::quality::{RecipeFit, names_format, recipe_fit};
 use crate::downloads::quarantine::QuarantineReason;
 use crate::reason::Reason;
@@ -34,7 +34,7 @@ use droppedneedle_library::matching::decide::{ACCEPT_ALBUM, ACCEPT_TRACK};
 use droppedneedle_library::matching::model::credit_text;
 use droppedneedle_library::matching::score::{NAME_GATE, SAME_MASTER_SECS, Support, TrackPair};
 use droppedneedle_library::matching::strings::{
-    artist_subset, basic_dist, fold, string_dist, strip_edition_words,
+    artist_subset, basic_dist, fold, string_dist, strip_edition_words, undecorated,
 };
 
 /// What a rejection means for retry and failover.
@@ -1100,12 +1100,85 @@ fn the_song_itself(subject: &Subject<'_>, found: &FoundRelease) -> Option<String
         &strip_edition_words(album_tag(file)),
         &strip_edition_words(&found.release.title),
     ) <= NAME_GATE;
-    let named = same_album
-        && string_dist(&title, &track.title) <= NAME_GATE
-        && !artist.is_empty()
+    let same_title = string_dist(&title, &track.title) <= NAME_GATE
+        || string_dist(&undecorated(&title), &undecorated(&track.title)) <= NAME_GATE;
+    let same_artist = !artist.is_empty()
         && (string_dist(artist, &release_artist) <= NAME_GATE
             || artist_subset(artist, &release_artist));
-    named.then(|| format!("the song '{}' by {artist}, at its length", track.title))
+    if !(same_title && same_artist) {
+        return None;
+    }
+    if same_album {
+        return Some(format!("the song '{}' by {artist}, at its length", track.title));
+    }
+    // Fork: from another release (a compilation, a DJ mix, a label
+    // sampler), at the requested length within a few seconds: title, track
+    // artist and length together name the song. The artist's own album
+    // copy, shown to be the song's album, stays the person's call
+    // ([`album_version`]).
+    if subject.target.album_copy_proven
+        && album_version(subject.target, subject.landing, found).is_some()
+    {
+        return None;
+    }
+    let (Some(length_ms), Some(seconds)) = (track.length_ms, file.header.duration_seconds) else {
+        return None;
+    };
+    let expected = length_ms as f64 / 1000.0;
+    ((seconds - expected).abs() <= ALBUM_COPY_DRIFT_SECS).then(|| {
+        format!(
+            "the song '{}' by {artist}, {seconds:.0}s against the requested {expected:.0}s",
+            track.title
+        )
+    })
+}
+
+/// Fork: the title a landed file names itself by: its title tag, else its
+/// file name.
+fn own_title(file: &LandedFile) -> String {
+    match file.tag.title.trim() {
+        "" => file_name_parts(file).2,
+        tagged => tagged.to_owned(),
+    }
+}
+
+/// Fork: why the file paired with the requested track of a track download
+/// is plainly another song: its title (tag, else file name) neither agrees
+/// with the requested title nor contains it, and nothing else names it as
+/// the song (AcoustID, its recording tag). Such a file is no decision for
+/// a person: the next source is tried.
+fn another_song(subject: &Subject<'_>, found: &FoundRelease, pair: &TrackPair) -> Option<String> {
+    let file = subject.landing.audio.get(pair.local)?;
+    let track = found.release.tracks.get(pair.track)?;
+    let wanted = subject
+        .target
+        .track_title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or(&track.title);
+    let title = own_title(file);
+    let (have, want) = (undecorated(&title), undecorated(wanted));
+    if have.is_empty() || want.is_empty() {
+        return None;
+    }
+    if string_dist(&title, wanted) <= NAME_GATE
+        || string_dist(&have, &want) <= NAME_GATE
+        || fold(&have).contains(&fold(&want))
+        || fold(&want).contains(&fold(&have))
+    {
+        return None;
+    }
+    if heard_requested(subject, found) {
+        return None;
+    }
+    if let (Some(tagged), Some(asked)) = (
+        file.tag.musicbrainz_recording_id.as_deref(),
+        subject.target.recording_mbid.as_deref(),
+    ) && tagged.trim().eq_ignore_ascii_case(asked)
+    {
+        return None;
+    }
+    Some(format!("the file is '{title}', not the requested '{wanted}'"))
 }
 
 /// Fork: how close a file's length must be to the requested track for its
@@ -1689,7 +1762,9 @@ impl ImportSpec for RightTrack {
         let Some(pair) = found.requested_pair(target) else {
             return wrong("no landed file is the requested track".to_owned());
         };
-        match wrong_track(found, pair, subject.landing) {
+        match wrong_track(found, pair, subject.landing)
+            .or_else(|| another_song(subject, found, pair))
+        {
             Some(detail) => wrong(detail),
             None => Verdict::accept(),
         }

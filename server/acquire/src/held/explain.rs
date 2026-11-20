@@ -368,6 +368,8 @@ mod tests {
             file_size: None,
             file_modified_at: None,
             created_at: 0,
+            requested_title: None,
+            requested_duration_seconds: None,
         }
     }
 
