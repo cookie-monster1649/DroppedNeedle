@@ -214,6 +214,63 @@ pub fn core_title(title: &str) -> String {
     lower[..cut].trim().to_owned()
 }
 
+/// Fork: why `file` is plainly not the asked song, if it is: its title
+/// (once versions and credits are set aside) neither agrees with the asked
+/// title nor holds it nor is held by it, or its tags name an artist that
+/// stands for none of the asked ones. A file whose tags say nothing is
+/// not judged.
+pub fn plainly_other(target: &Target, file: &LandedFile) -> Option<String> {
+    let asked = target.track_title.as_deref()?;
+    let tag = &file.tag;
+    let title = tag.title.trim();
+    if !title.is_empty() {
+        let (have, want) = (core_title(title), core_title(asked));
+        let fold = |text: &str| droppedneedle_library::matching::strings::fold(text);
+        let agrees = string_dist(title, asked) <= NAME_GATE
+            || (!have.is_empty()
+                && !want.is_empty()
+                && (string_dist(&have, &want) <= NAME_GATE
+                    || fold(&have).contains(&fold(&want))
+                    || fold(&want).contains(&fold(&have))));
+        if !agrees {
+            return Some(format!(
+                "the file is '{title}', not the requested '{asked}'"
+            ));
+        }
+    }
+    let named: Vec<&str> = [Some(tag.artist.as_str()), tag.album_artist.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    if named.is_empty() {
+        return None;
+    }
+    let asked_artists: Vec<&str> = target
+        .artist_name
+        .split([',', '&'])
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect();
+    let stands_for_one = named.iter().any(|heard| {
+        names_agree(heard, &target.artist_name)
+            || asked_artists.iter().any(|asked| names_agree(heard, asked))
+            || heard
+                .split([',', '&', '/', ';'])
+                .flat_map(|part| part.split(" x ").flat_map(|p| p.split(" X ")))
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .any(|part| asked_artists.iter().any(|asked| names_agree(part, asked)))
+    });
+    (!stands_for_one).then(|| {
+        format!(
+            "the file is by '{}', not the requested '{}'",
+            named[0], target.artist_name
+        )
+    })
+}
+
 /// Fork: whether one credited name stands for one of the asked artists:
 /// close, or one holds the other ("Robert Glasper Experiment" for "Robert
 /// Glasper", "KING" for "We Are KING").
@@ -281,6 +338,85 @@ mod fork_tests {
             want_seconds: Some(seconds),
             ..Default::default()
         }
+    }
+
+    fn landed(title: &str, artist: &str) -> crate::landing::probe::LandedFile {
+        crate::landing::probe::LandedFile {
+            path: std::path::PathBuf::from("/d/x.mp3"),
+            format: droppedneedle_library::tags::AudioFormat::Mp3,
+            tag: droppedneedle_library::tags::AudioTag {
+                title: title.to_owned(),
+                artist: artist.to_owned(),
+                ..Default::default()
+            },
+            header: Default::default(),
+            size_bytes: 1,
+        }
+    }
+
+    /// Fork: another title or another artist is plainly another song; a
+    /// tail, a credit or one of several asked artists is not.
+    #[test]
+    fn a_plainly_other_song_is_told_apart() {
+        use super::plainly_other;
+        let high = ask("Shkolnik", "High", 217.0);
+        assert!(plainly_other(&high, &landed("Skiptracing", "Mild High Club")).is_some());
+        assert!(
+            plainly_other(
+                &high,
+                &landed("High in the Air", "Paul K and The Weathermen")
+            )
+            .is_some()
+        );
+        let dill = ask("S I M", "Dill Pickles", 138.0);
+        assert!(
+            plainly_other(
+                &dill,
+                &landed("Charles L. Johnson: Dill Pickles", "Max Morath")
+            )
+            .is_some()
+        );
+        let al = ask("Narine Dovlatyan", "Al Ayloughs", 212.0);
+        assert!(
+            plainly_other(
+                &al,
+                &landed(
+                    "Al Ayloughs | Նարինե Դովլաթյան - Ալ Այլուղս",
+                    "Narine Dovlatyan"
+                )
+            )
+            .is_none()
+        );
+        let beggin = ask("Evil Genius, Isaac Waddington", "Beggin' Man", 202.0);
+        assert!(
+            plainly_other(
+                &beggin,
+                &landed("Beggin' Man", "Evil Genius X Isaac Waddington")
+            )
+            .is_none()
+        );
+        let reich = ask(
+            "Steve Reich, David Robertson, Orchestre National De Lyon",
+            "Triple quarte (for string orchestra) III.",
+            219.0,
+        );
+        assert!(
+            plainly_other(
+                &reich,
+                &landed(
+                    "Triple quarte (for string orchestra) (Ii.)",
+                    "David Robertson"
+                )
+            )
+            .is_none(),
+            "a movement number is left to the length"
+        );
+        let amaal = ask("Amaal Nuux", "Later", 226.0);
+        assert!(plainly_other(&amaal, &landed("Later", "Amaal")).is_none());
+        assert!(
+            plainly_other(&amaal, &landed("", "")).is_none(),
+            "nothing to judge"
+        );
     }
 
     #[test]

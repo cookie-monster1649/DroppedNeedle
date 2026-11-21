@@ -799,6 +799,18 @@ impl ImportSpec for UpgradeFloor {
 // Match checks.
 // ---------------------------------------------------------------------------
 
+/// Fork: why every landed file of a want is plainly another song, when
+/// each one is (`want::plainly_other`).
+fn want_other(subject: &Subject<'_>) -> Option<String> {
+    super::want::want_key(subject.target)?;
+    let mut why = None;
+    for file in &subject.landing.audio {
+        let other = super::want::plainly_other(subject.target, file)?;
+        why.get_or_insert(other);
+    }
+    why
+}
+
 /// A release of the requested group must be found to check against.
 struct ReleaseFound;
 
@@ -810,10 +822,17 @@ impl ImportSpec for ReleaseFound {
     fn check(&self, subject: &Subject<'_>) -> Verdict {
         match subject.matched.map(|matched| &matched.state) {
             None | Some(MatchState::Matched) | Some(MatchState::Contradictory) => Verdict::accept(),
-            Some(MatchState::NoCandidate) => Verdict::hold(
-                Reason::NoRelease,
-                "MusicBrainz has no release of the requested album to check the files against",
-            ),
+            // Fork: a want whose every file is plainly another song is no
+            // decision for a person: the next source is tried.
+            Some(MatchState::NoCandidate) => match want_other(subject) {
+                Some(detail) => {
+                    Verdict::reject(Reason::WrongTrack, Disposition::Permanent, None, detail)
+                }
+                None => Verdict::hold(
+                    Reason::NoRelease,
+                    "MusicBrainz has no release of the requested album to check the files against",
+                ),
+            },
             Some(MatchState::Unavailable(detail)) => Verdict::reject(
                 Reason::MusicbrainzUnavailable,
                 Disposition::Temporary,

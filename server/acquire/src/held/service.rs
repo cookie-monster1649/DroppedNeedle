@@ -2283,7 +2283,41 @@ impl HeldService {
                 } else {
                     match self.heard_as_ask(file.id, &target, &landed).await {
                         Some(heard) => Some(heard),
-                        None => continue,
+                        None => {
+                            // Fork: AcoustID answered and did not hear the
+                            // ask, and the tags name plainly another song:
+                            // nothing for a person; the copy goes and the
+                            // download tries its next source.
+                            let answered = self
+                                .heard_asked
+                                .lock()
+                                .map(|set| set.contains(&file.id))
+                                .unwrap_or(false);
+                            if answered
+                                && let Some(why) =
+                                    crate::landing::want::plainly_other(&target, &landed)
+                            {
+                                let viewer = Viewer {
+                                    user_id: entry.user_id.clone().unwrap_or_default(),
+                                    admin: entry.user_id.is_none(),
+                                };
+                                match self.discard(&viewer, entry_id, Some(vec![file.id])).await {
+                                    Ok(_) => tracing::info!(
+                                        entry_id,
+                                        file_id = file.id,
+                                        why,
+                                        "held want file discarded: plainly another song"
+                                    ),
+                                    Err(error) => tracing::warn!(
+                                        entry_id,
+                                        file_id = file.id,
+                                        %error,
+                                        "held want file not discarded"
+                                    ),
+                                }
+                            }
+                            continue;
+                        }
                     }
                 };
                 // Fork: a file AcoustID placed on a MusicBrainz release

@@ -9923,7 +9923,8 @@ async fn wants_from_one_album_land_as_one_album() {
 
 /// Fork (Slice B3): a want's file agreeing with the ask by title, artist
 /// and length is held paired to the ask, the task stops fetching, and the
-/// held loop files it by itself. A file of another song stays for a person.
+/// held loop files it by itself. A file of another version stays for a
+/// person.
 #[tokio::test]
 async fn a_want_file_agreeing_with_the_ask_files_itself() {
     use droppedneedle_acquire::downloads::plan::ExpectedTrack;
@@ -9974,7 +9975,12 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
         1,
     );
     let seconds = length_ms(&right).expect("length") as f64 / 1000.0;
-    for (id, key, title) in [("t-right", WANT, "Sour Times"), ("t-wrong", OTHER, "Roads")] {
+    // Fork: the other ask is the same song name at another length (another
+    // version): not plainly another song, so it waits for a person.
+    for (id, key, title, drift) in [
+        ("t-right", WANT, "Sour Times", 3.0),
+        ("t-wrong", OTHER, "Glory Box", 60.0),
+    ] {
         acquire
             .journal
             .run("test.seed", move |store| {
@@ -9998,7 +10004,7 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
                         expected_tracks: vec![ExpectedTrack {
                             track_number: 0,
                             disc_number: 1,
-                            duration_seconds: Some(seconds + 3.0),
+                            duration_seconds: Some(seconds + drift),
                             recording_mbid: None,
                             title: Some(title.to_owned()),
                             release_track_mbid: None,
@@ -10054,7 +10060,7 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
         "{:?}",
         report.result
     );
-    assert!(!report.whole_copy, "another song: the next source is tried");
+    assert!(!report.whole_copy, "another version: the next source is tried");
     let paired: Vec<String> = acquire.db.db().column(
         "SELECT source_task_id || ' ' || COALESCE(recording_mbid, '-') || ' ' || \
          COALESCE(release_mbid, '-') FROM acquire_held_files ORDER BY source_task_id",
@@ -10100,7 +10106,7 @@ async fn a_want_file_agreeing_with_the_ask_files_itself() {
     assert_eq!(
         waiting,
         vec!["t-wrong".to_owned()],
-        "the other song waits; the second copy of the filed song is discarded"
+        "the other version waits; the second copy of the filed song is discarded"
     );
     let discarded: Vec<String> = acquire.db.db().column(
         "SELECT source_task_id FROM acquire_held_files WHERE state = 'discarded'",
@@ -10343,6 +10349,91 @@ async fn a_want_with_no_length_is_checked_against_an_accepted_deezer_match() {
         [],
     );
     assert_eq!(paired, vec![WANT.to_owned()]);
+}
+
+/// Fork: a want's file that is plainly another song is no decision for a
+/// person: the landing rejects it as the wrong track, so the next source
+/// is tried, and nothing is held.
+#[tokio::test]
+async fn a_wants_file_of_another_song_is_rejected() {
+    use droppedneedle_acquire::downloads::store::TaskDetails;
+    const WANT: &str = "want-0123456789abcdef0123456789abcdea";
+    let db = AcquireDb::scratch().expect("scratch db");
+    db.add_user("u-ada", "Ada", "user").await.expect("user");
+    let dir = db.path().parent().expect("scratch dir").to_path_buf();
+    let config = Arc::new(
+        ConfigStore::scratch(&dir, Crypto::from_key_bytes(&[7u8; 32]).expect("key"))
+            .expect("config"),
+    );
+    let platform = TestPlatform::on(db.db(), &dir)
+        .settings(config)
+        .build()
+        .await;
+    let (library, _) = library_at(&platform);
+    let music = dir.join("music");
+    std::fs::create_dir_all(&music).expect("music root");
+    library
+        .scans
+        .add_root(
+            Some("music".to_owned()),
+            music.to_string_lossy().into_owned(),
+            EffectivePolicy::Automatic,
+        )
+        .expect("root adds");
+    let releases: Arc<dyn ReleaseSource> = Arc::new(Releases(Vec::new()));
+    let (acquire, _fixed) = acquire_serving(
+        &platform,
+        &library,
+        Arc::new(LibraryLanding::new(&library, every_priority(releases))),
+    );
+    let mount = dir.join("downloads");
+    let file = land_file(
+        &mount.join("a"),
+        "sour.flac",
+        "flac_full_01.flac",
+        "Sour Times",
+        1,
+    );
+    acquire
+        .journal
+        .run("test.seed", move |store| {
+            let task = NewTask {
+                artist_name: "Portishead".to_owned(),
+                album_title: String::new(),
+                ..new_task("t-want", "")
+            };
+            store.insert_track_task(&task, WANT, 1.0)?;
+            store.set_task_details(
+                "t-want",
+                &TaskDetails {
+                    track_title: Some("Glory Box".to_owned()),
+                    ..TaskDetails::default()
+                },
+                1.0,
+            )
+        })
+        .await
+        .expect("task");
+    let task = acquire
+        .journal
+        .read_task("t-want")
+        .await
+        .expect("task reads")
+        .expect("task");
+    let landed = Landed {
+        mounts: vec![mount.into()],
+        files: vec![Reported::path(file)],
+    };
+    let report = acquire.landing.land(&task, None, landed, false).await;
+    let LandingResult::Rejected(rejection) = report.result else {
+        panic!("another song is rejected: {:?}", report.result);
+    };
+    assert_eq!(rejection.code, Reason::WrongTrack);
+    let held: Vec<String> = acquire
+        .db
+        .db()
+        .column("SELECT path FROM acquire_held_files", []);
+    assert!(held.is_empty(), "{held:?}");
 }
 
 /// Fork: a file uploaded onto a still-hunting song imports at that song
