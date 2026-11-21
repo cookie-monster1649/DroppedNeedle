@@ -42,7 +42,14 @@ pub fn agrees(target: &Target, file: &LandedFile) -> bool {
         return false;
     };
     let tag = &file.tag;
-    if tag.title.trim().is_empty() || string_dist(&tag.title, title) > NAME_GATE {
+    // Fork: or once both titles set aside what versions, credits and a
+    // " | …" or " - …" tail add ("Al Ayloughs | Նարինե Դովլաթյան - …");
+    // the length below still tells a remix from the song.
+    let core = core_title(&tag.title);
+    if tag.title.trim().is_empty()
+        || (string_dist(&tag.title, title) > NAME_GATE
+            && (core.is_empty() || string_dist(&core, &core_title(title)) > NAME_GATE))
+    {
         return false;
     }
     let artist = if tag.artist.trim().is_empty() {
@@ -149,6 +156,24 @@ mod tests {
         );
         assert!(!agrees(&asked, &file("", "Bonobo", 230.0)), "no title");
         assert!(
+            agrees(
+                &asked,
+                &file("Days To Come | Live Session", "Bonobo", 231.0)
+            ),
+            "a tail after the title"
+        );
+        assert!(
+            agrees(&asked, &file("Days To Come (2006)", "Bonobo", 231.0)),
+            "a bracketed part"
+        );
+        assert!(
+            !agrees(
+                &asked,
+                &file("Days To Come (Extended Mix)", "Bonobo", 380.0)
+            ),
+            "a longer mix"
+        );
+        assert!(
             !agrees(&target(None), &file("Days To Come", "Bonobo", 230.0)),
             "no length"
         );
@@ -181,7 +206,7 @@ pub fn core_title(title: &str) -> String {
     }
     let lower = out.to_lowercase();
     let mut cut = lower.len();
-    for marker in [" - ", " feat.", " feat ", " ft.", " featuring "] {
+    for marker in [" - ", " | ", " feat.", " feat ", " ft.", " featuring "] {
         if let Some(at) = lower.find(marker) {
             cut = cut.min(at);
         }

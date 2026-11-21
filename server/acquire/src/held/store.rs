@@ -1140,6 +1140,45 @@ impl<'c> HeldRows<'c> {
 mod tests {
     use super::*;
 
+    /// Fork: once one copy of a want went into the library, its other
+    /// unpaired copies are leftovers, a Deezer id its tag carried
+    /// notwithstanding; another want's copy is not.
+    #[tokio::test]
+    async fn a_wants_other_copies_are_superseded_once_one_is_in() {
+        let db = crate::db::AcquireDb::scratch().expect("scratch db");
+        db.add_user("u1", "Ada", "admin").await.expect("user");
+        let claimed = db
+            .write("test.want_superseded", |tx| {
+                tx.execute_batch(
+                    "INSERT INTO download_tasks (id, user_id, release_group_mbid, recording_mbid, \
+                       artist_name, album_title, download_type, origin, status, created_at, \
+                       updated_at) VALUES ('t1', 'u1', '', 'want-x', 'A', 'Song', 'track', 'user', \
+                       'failed', 1, 1);
+                     INSERT INTO acquire_held_entries (id, user_id, origin, group_key, \
+                       recording_mbid, state, created_at, expires_at) VALUES \
+                       (1, 'u1', 'download', 'track:want-x', 'want-x', 'resolved', 1, 9999999999999), \
+                       (2, 'u1', 'download', 'track:want-x', 'want-x', 'held', 2, 9999999999999), \
+                       (3, 'u1', 'download', 'track:want-y', 'want-y', 'held', 2, 9999999999999);
+                     INSERT INTO acquire_held_files (id, entry_id, root, path, original_name, \
+                       source, source_task_id, recording_mbid, reason, state, created_at) VALUES \
+                       (10, 1, 'held', 'a.flac', 'a.flac', 'soulseek', 't1', 'want-x', \
+                         'no_release', 'imported', 1), \
+                       (20, 2, 'held', 'a.mp3', 'a.mp3', 'soulseek', 't1', '2066573327@deezer', \
+                         'no_release', 'held', 2), \
+                       (30, 3, 'held', 'b.mp3', 'b.mp3', 'soulseek', 't1', NULL, \
+                         'no_release', 'held', 2);",
+                )?;
+                Ok::<_, droppedneedle_kernel::db::DbError>(
+                    HeldRows::new(tx).claim_superseded(10)?,
+                )
+            })
+            .await
+            .expect("claimed");
+        let files: Vec<i64> = claimed.files.iter().map(|(file, _, _)| *file).collect();
+        assert_eq!(files, vec![20]);
+        assert_eq!(claimed.claimed, vec![2]);
+    }
+
     #[test]
     fn keys_are_written_by_one_rule() {
         let key = |kind, recording, group| GroupKey::for_download(kind, recording, group, "t1");

@@ -2242,14 +2242,16 @@ impl HeldService {
                 continue;
             };
             // One song is one file: an entry with a paired copy already
-            // waits for nothing more.
-            if entry.files.iter().any(HeldFile::is_paired) {
+            // waits for nothing more. Fork: a recording id a file's own tag
+            // carried (a Deezer or Spotify id, as some rippers write) pairs
+            // it with nothing; only a release track or the ask does.
+            if entry.files.iter().any(paired_for_want) {
                 continue;
             }
             for file in entry
                 .files
                 .iter()
-                .filter(|file| file.reason == Reason::NoRelease && !file.is_paired())
+                .filter(|file| file.reason == Reason::NoRelease && !paired_for_want(file))
             {
                 let Ok((_, Some(mut target))) = self.task_target(file).await else {
                     continue;
@@ -2929,6 +2931,16 @@ fn settles_as_automatic(file: &HeldFile) -> bool {
 pub fn retries_by_itself(file: &HeldFile) -> bool {
     file.is_paired()
         && (is_retry(file.reason) || settles_as_automatic(file) || agrees_with_ask(file))
+}
+
+/// Fork: whether a want's held file is paired: to a release track, or to
+/// the ask itself. A recording id alone came from the file's own tag.
+fn paired_for_want(file: &HeldFile) -> bool {
+    file.pairing
+        .release_track_mbid
+        .as_deref()
+        .is_some_and(|id| !id.is_empty())
+        || agrees_with_ask(file)
 }
 
 /// Fork: a want's file the landing found agreeing with the ask by name and

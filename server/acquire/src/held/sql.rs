@@ -120,7 +120,7 @@ droppedneedle_kernel::sql! {
              JOIN acquire_held_files f ON f.entry_id = e.id \
              WHERE e.state = 'held' AND e.origin = 'download' \
              AND e.recording_mbid LIKE 'want-%' AND f.state = 'held' \
-             AND f.reason = 'no_release' AND COALESCE(f.recording_mbid, '') = '' \
+             AND f.reason = 'no_release' AND COALESCE(f.recording_mbid, '') NOT LIKE 'want-%' \
              AND COALESCE(f.release_track_mbid, '') = '' ORDER BY e.id LIMIT ?1";
     /// Fork: songs of user `?1`'s playlists imported from Spotify whose
     /// title or artist holds `?2` (lowercased, `%`-wrapped), one per song,
@@ -199,16 +199,25 @@ droppedneedle_kernel::sql! {
     /// is `imported` with no position missing and nothing of its own held,
     /// made after the copy was held. Another copy filled the album, so
     /// these are leftovers; a file held by the very import that filled it
-    /// (a bonus track, say) is not. At most `?1`.
+    /// (a bonus track, say) is not. Fork: so are a want's unpaired copies
+    /// once another copy of the same want went into the library (imported
+    /// or found already owned): one song is one file. At most `?1`.
     pub(super) SUPERSEDED_FILES = "SELECT f.id, f.entry_id, f.path \
              FROM acquire_held_files f JOIN acquire_held_entries e ON e.id = f.entry_id \
              WHERE e.origin = 'download' AND e.state = 'held' \
                AND f.root = 'held' AND f.state = 'held' AND f.source_task_id IS NOT NULL \
-               AND EXISTS (SELECT 1 FROM download_import_decisions d \
+               AND (EXISTS (SELECT 1 FROM download_import_decisions d \
                    WHERE d.id = (SELECT MAX(n.id) FROM download_import_decisions n \
                                  WHERE n.task_id = f.source_task_id) \
                      AND d.outcome = 'imported' AND d.missing_positions = '[]' \
                      AND d.files_held = 0 AND d.decided_at > f.created_at) \
+                 OR (e.recording_mbid LIKE 'want-%' AND f.reason = 'no_release' \
+                   AND COALESCE(f.recording_mbid, '') NOT LIKE 'want-%' \
+                   AND COALESCE(f.release_track_mbid, '') = '' \
+                   AND EXISTS (SELECT 1 FROM acquire_held_files o \
+                       JOIN acquire_held_entries oe ON oe.id = o.entry_id \
+                       WHERE oe.recording_mbid = e.recording_mbid AND o.id != f.id \
+                         AND o.state IN ('imported', 'already_owned')))) \
              ORDER BY f.entry_id, f.id LIMIT ?1";
     /// Owner `?1`'s files held as only the album version by their other
     /// track downloads (not `?3`) of recording `?2`.
