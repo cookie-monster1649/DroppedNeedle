@@ -49,6 +49,11 @@ const SEARCH_HITS: u32 = 5;
 const DETAILS_PER_ALBUM: usize = 3;
 /// Two lengths this close (seconds) are the same recording.
 const LENGTH_SLACK: f64 = 10.0;
+/// Fork: the lowest score a match accepts itself at, with the album's own
+/// title and artist and every file accounted for ([`sure`]).
+pub const SURE: f64 = 0.95;
+/// Fork: stored suggestions [`Matches::confirm_sure`] looks at per pass.
+const SURE_SWEEP: u32 = 50;
 
 /// The catalogue a match comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,6 +275,30 @@ pub fn fit(
     }
 }
 
+/// Fork: whether a match is sure enough to accept without a person: it
+/// scores at least [`SURE`], its title is the album's own once folded
+/// (an "All Mixes" or "Remixed" edition is not), so is its artist, and
+/// its track list accounts for every file. People accepted every such
+/// guess they were shown; the two they turned down named another edition
+/// in the title.
+pub fn sure(
+    album_title: &str,
+    album_artist: &str,
+    files: usize,
+    title: &str,
+    artist: &str,
+    fit: Fit,
+) -> bool {
+    let (own, found) = (norm(album_title), norm(title));
+    fit.score >= SURE
+        && files > 0
+        && fit.matched_files == files
+        && !own.is_empty()
+        && own == found
+        && !norm(album_artist).is_empty()
+        && norm(album_artist) == norm(artist)
+}
+
 fn tracks_of(album: &DeezerAlbum) -> Vec<MatchTrack> {
     album
         .tracks
@@ -470,17 +499,37 @@ impl ProviderMatches {
             };
             let now = self.clock.now_ms();
             let album_id = album.album_id.clone();
+            let is_sure = best.as_ref().is_some_and(|(found, fit)| {
+                sure(
+                    &album.title,
+                    &album.artist_name,
+                    album.files.len(),
+                    &found.title,
+                    &found.artist_name,
+                    *fit,
+                )
+            });
             let wrote = self
                 .db
                 .write(Lane::Background, "provider_match.put", move |tx| {
                     match &best {
-                        Some((found, fit)) => put_match(tx, &album_id, found, fit.score, now)?,
+                        Some((found, fit)) => {
+                            put_match(tx, &album_id, found, fit.score, now)?;
+                            if is_sure {
+                                settle(tx, &album_id, true, None, now)?;
+                                tracing::info!(
+                                    album = album_id,
+                                    score = fit.score,
+                                    "deezer match accepted: sure"
+                                );
+                            }
+                        }
                         None => {
                             tx.prepare_cached(sql::PUT_NOT_FOUND.text())?
                                 .execute(params![album_id, DEEZER, now])?;
                         }
                     }
-                    Ok::<_, droppedneedle_kernel::db::DbError>(best.is_some())
+                    Ok::<_, OperationError>(best.is_some())
                 })
                 .await
                 .map_err(|error| error.to_string())?;
@@ -563,30 +612,96 @@ impl ProviderMatches {
         let now = self.clock.now_ms();
         self.db
             .write_blocking(Lane::Foreground, "provider_match.decide", |tx| {
-                let Some(found) = match_of(tx, album_id)? else {
-                    return Err(no_suggestion());
-                };
-                if found.state == ProviderMatchState::NotFound {
-                    return Err(no_suggestion());
-                }
-                let state = if accept {
-                    ProviderMatchState::Confirmed
-                } else {
-                    ProviderMatchState::Declined
-                };
-                tx.prepare_cached(sql::DECIDE.text())?
-                    .execute(params![album_id, state, user_id, now])?;
-                if accept {
-                    link(tx, &found, user_id, now)?;
-                }
-                let decided = ProviderMatch { state, ..found };
-                // Fork: the album takes the source's stand-in identity.
-                if accept {
-                    crate::sources::adopt::adopt(tx, &decided, Some(user_id), now)?;
-                }
-                Ok(decided)
+                settle(tx, album_id, accept, Some(user_id), now)
             })
     }
+
+    /// Fork: accept the stored suggestions that are [`sure`], a few at a
+    /// time, against the album's files as they stand now. Answers how many
+    /// it accepted.
+    ///
+    /// # Errors
+    ///
+    /// A store fault.
+    pub async fn confirm_sure(&self) -> Result<usize, String> {
+        let now = self.clock.now_ms();
+        self.db
+            .write(Lane::Background, "provider_match.confirm_sure", move |tx| {
+                let rows: Vec<(String, String, String)> = tx
+                    .prepare_cached(sql::SUGGESTED_ALBUMS.text())?
+                    .query_map(params![i64::from(SURE_SWEEP)], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
+                let mut accepted = 0;
+                for (album_id, title, artist) in rows {
+                    let Some(found) = match_of(tx, &album_id)? else {
+                        continue;
+                    };
+                    let files = held_files(tx, &album_id)?;
+                    // An ISRC hit only lifts the score; a sure match needs none.
+                    let fitted = fit(
+                        &title,
+                        &artist,
+                        &files,
+                        &found.title,
+                        &found.artist_name,
+                        &found.tracks,
+                        false,
+                    );
+                    if sure(
+                        &title,
+                        &artist,
+                        files.len(),
+                        &found.title,
+                        &found.artist_name,
+                        fitted,
+                    ) {
+                        settle(tx, &album_id, true, None, now)?;
+                        accepted += 1;
+                    }
+                }
+                if accepted > 0 {
+                    tracing::info!(accepted, "deezer matches accepted: sure");
+                }
+                Ok::<_, OperationError>(accepted)
+            })
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// Settle album `album_id`'s suggestion: accepted (`accept`) or turned
+/// down, by `user_id`, or by DroppedNeedle itself when `None`.
+fn settle(
+    tx: &rusqlite::Transaction<'_>,
+    album_id: &str,
+    accept: bool,
+    user_id: Option<&str>,
+    now: i64,
+) -> Result<ProviderMatch, OperationError> {
+    let Some(found) = match_of(tx, album_id)? else {
+        return Err(no_suggestion());
+    };
+    if found.state == ProviderMatchState::NotFound {
+        return Err(no_suggestion());
+    }
+    let state = if accept {
+        ProviderMatchState::Confirmed
+    } else {
+        ProviderMatchState::Declined
+    };
+    tx.prepare_cached(sql::DECIDE.text())?
+        .execute(params![album_id, state, user_id, now])?;
+    if accept {
+        link(tx, &found, user_id, now)?;
+    }
+    let decided = ProviderMatch { state, ..found };
+    // Fork: the album takes the source's stand-in identity.
+    if accept {
+        crate::sources::adopt::adopt(tx, &decided, user_id, now)?;
+    }
+    Ok(decided)
 }
 
 fn no_suggestion() -> OperationError {
@@ -627,7 +742,12 @@ fn put_match(
 }
 
 /// Link the album, and each file the track list accounts for, to Deezer.
-fn link(conn: &Connection, found: &ProviderMatch, user_id: &str, now: i64) -> rusqlite::Result<()> {
+fn link(
+    conn: &Connection,
+    found: &ProviderMatch,
+    user_id: Option<&str>,
+    now: i64,
+) -> rusqlite::Result<()> {
     let page = found
         .link_url
         .clone()
@@ -641,6 +761,11 @@ fn link(conn: &Connection, found: &ProviderMatch, user_id: &str, now: i64) -> ru
             page,
             user_id,
             now,
+            if user_id.is_some() {
+                "manual"
+            } else {
+                "automatic"
+            },
         ])?;
     let files = held_files(conn, &found.album_id)?;
     for held in held_tracks(&files, &found.tracks) {
@@ -691,6 +816,64 @@ mod tests {
             position: 1,
             isrc: None,
         }
+    }
+
+    /// Fork: a full-marks guess with the album's own title and artist
+    /// accepts itself; another edition's title, another artist or a file
+    /// left over waits for a person.
+    #[test]
+    fn only_a_sure_match_accepts_itself() {
+        let full = Fit {
+            score: 1.0,
+            matched_files: 2,
+        };
+        assert!(sure(
+            "FEMME",
+            "Poppy Ajudha",
+            2,
+            "Femme",
+            "Poppy Ajudha",
+            full
+        ));
+        assert!(!sure(
+            "Psycho Strings",
+            "Gorje Hewek",
+            2,
+            "Psycho Strings (All Mixes)",
+            "Gorje Hewek",
+            full
+        ));
+        assert!(!sure("FEMME", "Poppy Ajudha", 2, "FEMME", "Poppy", full));
+        assert!(!sure(
+            "FEMME",
+            "Poppy Ajudha",
+            3,
+            "FEMME",
+            "Poppy Ajudha",
+            full
+        ));
+        assert!(!sure(
+            "FEMME",
+            "Poppy Ajudha",
+            2,
+            "FEMME",
+            "Poppy Ajudha",
+            Fit {
+                score: 0.9,
+                matched_files: 2
+            }
+        ));
+        assert!(!sure(
+            "",
+            "",
+            0,
+            "",
+            "",
+            Fit {
+                score: 1.0,
+                matched_files: 0
+            }
+        ));
     }
 
     #[test]

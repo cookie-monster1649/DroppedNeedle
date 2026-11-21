@@ -960,6 +960,15 @@ pub(crate) fn start_loops(
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "source edition check failed"),
             }
+            // Fork: suggestions already waiting that are sure accept first.
+            match drive(
+                &match_handle,
+                "sure provider matches",
+                matches.confirm_sure(),
+            )? {
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "sure provider match sweep failed"),
+            }
             match drive(
                 &match_handle,
                 "provider matches",

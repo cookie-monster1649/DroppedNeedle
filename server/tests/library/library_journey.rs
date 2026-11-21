@@ -8027,13 +8027,15 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
     let held = &tracks["items"][0];
     let seconds = held["duration_seconds"].as_f64().unwrap_or(200.0).round() as i64;
 
+    // Fork: another edition's title, so the guess is not sure and waits.
+    let deluxe = format!("{} (Deluxe)", detail["title"].as_str().unwrap_or(""));
     let wire = Arc::new(ScriptedWire::new());
     let json_type = [("content-type", "application/json")];
     wire.answer(
         "http://127.0.0.1:9/deezer/search/album",
         200,
         &json_type,
-        json!({"data": [{"id": 42, "title": detail["title"], "nb_tracks": 2,
+        json!({"data": [{"id": 42, "title": deluxe, "nb_tracks": 2,
             "artist": {"id": 7, "name": detail["artist_name"]}}]})
         .to_string(),
     );
@@ -8042,7 +8044,7 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
         200,
         &json_type,
         json!({
-            "id": 42, "title": detail["title"], "upc": "0123", "label": "Own Label",
+            "id": 42, "title": deluxe, "upc": "0123", "label": "Own Label",
             "release_date": "2019-05-03", "record_type": "album",
             "cover_xl": "http://127.0.0.1:9/cover.jpg", "link": "https://www.deezer.com/album/42",
             "genres": {"data": [{"name": "Jazz"}]},
@@ -8183,7 +8185,7 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{basic}");
-    assert_eq!(basic["title"], detail["title"], "{basic}");
+    assert_eq!(basic["title"], json!(deluxe), "{basic}");
     let (status, listed) = app
         .call(
             "GET",
@@ -8218,6 +8220,135 @@ async fn check_albums_suggests_a_deezer_album_for_an_album_musicbrainz_lacks() {
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+/// Fork: a Deezer guess with the album's own title and artist that
+/// accounts for every file accepts itself, recorded as DroppedNeedle's
+/// decision with no user; the sweep accepts one already waiting.
+#[tokio::test]
+async fn a_sure_deezer_guess_accepts_itself() {
+    use droppedneedle_library::provider_match::ProviderMatches;
+    use droppedneedle_providers::Providers;
+    use droppedneedle_providers::test_support::ScriptedWire;
+
+    let rig = Rig::start("lib-sure-deezer").await;
+    let app = &rig.app;
+    let auth = app.login_admin().await;
+    let headers = [("authorization", auth.as_str())];
+    let music = app.config.root_app_dir.join("music");
+    plant(&music, "album-s/01.flac", "flac_full_01.flac");
+    rig.pause_identification().await;
+    app.add_library_folder("music", &music).await;
+    let track = rig
+        .scan_store
+        .track_at("music", "album-s/01.flac")
+        .unwrap()
+        .expect("track indexed");
+    let album = track_album(app, &headers, &track).await;
+    app.seed_with(
+        "INSERT INTO library_album_match_state (local_album_id, state, reason_code, \
+         candidates_json, updated_at) VALUES (?1, 'unmatched', 'NO_CANDIDATE', '[]', 1)",
+        rusqlite::params![album],
+    )
+    .await;
+    let (status, detail) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    let (status, tracks) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}/tracks"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tracks}");
+    let held = &tracks["items"][0];
+    let seconds = held["duration_seconds"].as_f64().unwrap_or(200.0).round() as i64;
+
+    let wire = Arc::new(ScriptedWire::new());
+    let json_type = [("content-type", "application/json")];
+    wire.answer(
+        "http://127.0.0.1:9/deezer/search/album",
+        200,
+        &json_type,
+        json!({"data": [{"id": 42, "title": detail["title"], "nb_tracks": 2,
+            "artist": {"id": 7, "name": detail["artist_name"]}}]})
+        .to_string(),
+    );
+    wire.answer(
+        "http://127.0.0.1:9/deezer/album/42",
+        200,
+        &json_type,
+        json!({
+            "id": 42, "title": detail["title"], "label": "Own Label",
+            "release_date": "2019-05-03", "record_type": "album",
+            "link": "https://www.deezer.com/album/42",
+            "artist": {"id": 7, "name": detail["artist_name"]},
+            "tracks": {"data": [
+                {"id": 1001, "title": held["title"], "duration": seconds},
+                {"id": 1002, "title": "A Song Not Held", "duration": 100}
+            ]}
+        })
+        .to_string(),
+    );
+    let matches = ProviderMatches::new(
+        droppedneedle_kernel::db::Db::open_for_tests(&app.config.library_db_path)
+            .expect("database opens"),
+        Providers::unpaced(wire.clone()).previews.clone(),
+        Arc::new(droppedneedle_kernel::clock::SystemClock),
+    );
+    assert_eq!(matches.suggest_some(10).await, Ok(1));
+
+    let decided = || -> (String, Option<String>, String) {
+        app.db()
+            .query_row(
+                "SELECT m.match_state, m.decided_by_user_id, l.decision_source \
+                 FROM library_album_provider_matches m \
+                 JOIN local_entity_source_links l ON l.local_album_id = m.local_album_id \
+                 AND l.provider = 'deezer' AND l.external_entity_type = 'album' \
+                 WHERE m.local_album_id = ?1",
+                [&album],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("decided")
+    };
+    assert_eq!(
+        decided(),
+        ("confirmed".to_owned(), None, "automatic".to_owned())
+    );
+    let (status, stats) = app
+        .call("GET", "/api/v3/library/stats", &headers, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stats}");
+    assert_eq!(stats["guess_count"], json!(0), "{stats}");
+    let (status, detail) = app
+        .call(
+            "GET",
+            &format!("/api/v3/library/albums/{album}"),
+            &headers,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["identity_state"], json!("deezer"), "{detail}");
+
+    // A sure guess left waiting (found before this rule) is swept up.
+    app.seed_with(
+        "UPDATE library_album_provider_matches SET match_state = 'suggested', \
+         decided_by_user_id = NULL WHERE local_album_id = ?1",
+        rusqlite::params![album],
+    )
+    .await;
+    assert_eq!(matches.confirm_sure().await, Ok(1));
+    assert_eq!(decided().0, "confirmed");
+    assert_eq!(matches.confirm_sure().await, Ok(0));
 }
 
 /// Fork: "Use Deezer's title and artist" writes an accepted Deezer match's
@@ -8273,13 +8404,15 @@ async fn an_accepted_deezer_match_writes_its_names_into_the_files() {
     let held = &tracks["items"][0];
     let seconds = held["duration_seconds"].as_f64().unwrap_or(200.0).round() as i64;
 
+    // Fork: another edition's title, so the guess is not sure and waits.
+    let deluxe = format!("{} (Deluxe)", detail["title"].as_str().unwrap_or(""));
     let wire = Arc::new(ScriptedWire::new());
     let json_type = [("content-type", "application/json")];
     wire.answer(
         "http://127.0.0.1:9/deezer/search/album",
         200,
         &json_type,
-        json!({"data": [{"id": 42, "title": detail["title"], "nb_tracks": 1,
+        json!({"data": [{"id": 42, "title": deluxe, "nb_tracks": 1,
             "artist": {"id": 7, "name": detail["artist_name"]}}]})
         .to_string(),
     );
@@ -8288,7 +8421,7 @@ async fn an_accepted_deezer_match_writes_its_names_into_the_files() {
         200,
         &json_type,
         json!({
-            "id": 42, "title": detail["title"], "label": "Own Label",
+            "id": 42, "title": deluxe, "label": "Own Label",
             "release_date": "2019-05-03", "record_type": "album",
             "artist": {"id": 7, "name": detail["artist_name"]},
             "tracks": {"data": [

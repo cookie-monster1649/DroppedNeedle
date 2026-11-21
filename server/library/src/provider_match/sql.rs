@@ -60,6 +60,12 @@ droppedneedle_kernel::sql! {
           created_at, updated_at) VALUES (?1, ?2, '-', '', '', 0, 'not_found', ?3, ?3) \
          ON CONFLICT (local_album_id) DO UPDATE SET updated_at = excluded.updated_at \
          WHERE library_album_provider_matches.match_state = 'not_found'";
+    /// Fork: albums with a suggestion waiting, oldest first, at most `?1`:
+    /// id, title and album artist, for the sure check.
+    pub(super) SUGGESTED_ALBUMS = "SELECT a.id, a.title, COALESCE(a.album_artist_name, '') \
+         FROM library_album_provider_matches m JOIN local_albums a ON a.id = m.local_album_id \
+         WHERE m.match_state = 'suggested' AND " + (crate::owned_album!("a")) + " \
+         ORDER BY m.updated_at, a.id LIMIT ?1";
     /// Album `?1`'s match, whatever its state.
     pub(super) MATCH_OF = "SELECT local_album_id, provider, provider_album_id, title, artist_name, \
          provider_artist_id, artist_picture_url, release_date, label, upc, record_type, \
@@ -71,11 +77,12 @@ droppedneedle_kernel::sql! {
          SET match_state = ?2, decided_by_user_id = ?3, updated_at = ?4 \
          WHERE local_album_id = ?1 AND match_state IN ('suggested', 'confirmed', 'declined')";
     /// Link album `?2` to the provider's album, as row `?1`: provider `?3`,
-    /// id `?4`, page `?5`, chosen by user `?6` at `?7`.
+    /// id `?4`, page `?5`, chosen by user `?6` (none when sure) at `?7`, as
+    /// decision `?8` (`manual`, or fork: `automatic`).
     pub(super) LINK_ALBUM = "INSERT INTO local_entity_source_links \
          (id, local_album_id, provider, external_entity_type, external_id, canonical_url, \
           decision_source, selected_by_user_id, verified_at, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, 'album', ?4, ?5, 'manual', ?6, ?7, ?7, ?7) \
+         VALUES (?1, ?2, ?3, 'album', ?4, ?5, ?8, ?6, ?7, ?7, ?7) \
          ON CONFLICT (local_album_id, provider, external_entity_type, external_id) \
          WHERE local_album_id IS NOT NULL DO NOTHING";
     /// Album `?1`'s indexed files as their tags stand, in album order:
