@@ -370,18 +370,13 @@ async fn failed_retry_insert_retries_next_pass() {
     assert_eq!(task_count(&db), 2, "the next pass spawns the successor");
 }
 
-// Fork: a retry whose outcome repeats under unchanged settings waits
-// instead of adding another failed row; a settings change lets it go.
+// A retry whose outcome repeats still follows the backoff ladder: two
+// failures alike do not hold the third try back.
 #[tokio::test]
-async fn a_repeated_outcome_waits_for_a_settings_change() {
+async fn a_repeated_outcome_still_follows_the_ladder() {
     let db = AcquireDb::scratch().unwrap();
     db.add_user("u-ada", "Ada", "user").await.unwrap();
     let journal = Arc::new(Journal::new(db.clone(), quiet_ticks()));
-    let settings = settings_beside(&journal);
-    let mark: i64 = ["download_policy", "source_priority", "plugins"]
-        .iter()
-        .map(|key| settings.revision(key))
-        .sum();
     let now = now_f64();
     journal
         .run("test.seed", move |store| {
@@ -398,9 +393,6 @@ async fn a_repeated_outcome_waits_for_a_settings_change() {
                 ..task("t-second")
             };
             store.insert_task(&retry, now - 10_800.0)?;
-            let mut plan = store.task_plan("t-second")?;
-            plan.settings_mark = Some(mark);
-            store.set_task_plan("t-second", &plan, now - 10_800.0)?;
             store.transition_task(
                 "t-second",
                 TaskStatus::Failed,
@@ -410,23 +402,10 @@ async fn a_repeated_outcome_waits_for_a_settings_change() {
         })
         .await
         .unwrap();
-    let (worker, _) = worker_over(
-        journal.db(),
-        journal.clone(),
-        &settings,
-        staging_for(&journal).join("slskd"),
-        Arc::new(FixedAlbums::default()),
-        None,
-        droppedneedle_kernel::events::EventHub::new(),
-    )
-    .await;
-    // Hours past the backoff ladder's step; only the pause holds it.
+    let worker = idle_worker(&journal).await;
+    // Hours past the ladder's 30-minute step: the retry goes.
     worker.run_once(1).await;
-    assert_eq!(task_count(&db), 2, "the same outcome twice: no third row");
-
-    review_off_in(&settings);
-    worker.run_once(2).await;
-    assert_eq!(task_count(&db), 3, "the settings changed: the retry goes");
+    assert_eq!(task_count(&db), 3, "the same outcome twice still retries");
 }
 
 // One live download per album, retries included: a failed task whose

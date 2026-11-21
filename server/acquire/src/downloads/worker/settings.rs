@@ -24,7 +24,6 @@ pub struct WorkerSettings {
     usenet: Live<DownloadClients>,
     library: Live<TypedLibrary>,
     musicbrainz: Live<MusicBrainzSettings>,
-    store: ConfigStore,
 }
 
 impl WorkerSettings {
@@ -37,7 +36,6 @@ impl WorkerSettings {
             usenet: store.live(),
             library: store.live(),
             musicbrainz: store.live(),
-            store: store.clone(),
         }
     }
 
@@ -90,13 +88,11 @@ impl WorkerSettings {
         let policy = self.policy.read()?;
         let source_priority = self.source_priority.read()?;
         let usenet = self.usenet.read().unwrap_or_default();
-        let mut config = worker_config(&policy, &source_priority, orphan_mounts(&usenet));
-        // Fork: the retry pass waits on a repeat outcome while this is unchanged.
-        config.settings_mark = ["download_policy", "source_priority", "plugins"]
-            .iter()
-            .map(|key| self.store.revision(key))
-            .sum();
-        Some(config)
+        Some(worker_config(
+            &policy,
+            &source_priority,
+            orphan_mounts(&usenet),
+        ))
     }
 }
 
@@ -183,6 +179,5 @@ fn worker_config(
         orphan_roots,
         worker_id: "download-worker".to_owned(),
         review: crate::search_jobs::review::ReviewMode::from_setting(&policy.search_review),
-        settings_mark: 0,
     }
 }

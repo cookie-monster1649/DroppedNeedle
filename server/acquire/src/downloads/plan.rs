@@ -63,9 +63,9 @@ pub struct TaskPlan {
     /// accepted. Never set with `planned_album`; absent means a pin.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub release_preferred: bool,
-    /// Fork: the download settings' mark when the retry pass started this
-    /// task ([`crate::downloads::retry_pause`]). A retry whose outcome
-    /// repeats waits while the mark is unchanged.
+    /// Fork, retired: the download settings' mark a retry was started
+    /// under, from when a repeated outcome paused retries for a week.
+    /// Nothing reads it now; kept so stored plans that carry it decode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_mark: Option<i64>,
 }

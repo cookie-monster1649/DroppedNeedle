@@ -34,7 +34,6 @@ pub mod queue;
 pub mod queue_rows;
 pub mod reasons;
 pub mod recovery;
-pub mod retry_pause;
 pub mod source_tag;
 pub mod sources;
 pub(crate) mod sql;

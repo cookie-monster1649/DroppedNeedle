@@ -1231,27 +1231,6 @@ impl<'conn> DownloadStore<'conn> {
         self.rows(sql::STORED_REASONS.text(), [], |row| row.get(0))
     }
 
-    /// Fork: the two newest finished downloads of task `task_id`'s ask,
-    /// newest first, for [`crate::downloads::retry_pause`]. A plan that
-    /// does not read counts as unstamped.
-    pub fn ask_history(
-        &self,
-        task_id: &str,
-    ) -> Result<Vec<crate::downloads::retry_pause::Finished>, StoreError> {
-        let mut statement = self.conn.prepare_cached(sql::ASK_HISTORY.text())?;
-        let rows = statement.query_map([task_id], |row| {
-            let plan: String = row.get(2)?;
-            Ok(crate::downloads::retry_pause::Finished {
-                outcome: row.get(0)?,
-                ended_at: secs(row.get::<_, i64>(1)?),
-                settings_mark: crate::downloads::plan::TaskPlan::decode(&plan)
-                    .ok()
-                    .and_then(|plan| plan.settings_mark),
-            })
-        })?;
-        Ok(rows.collect::<Result<_, _>>()?)
-    }
-
     /// Retryable tasks: the newest task per target (album, or track plus
     /// user) when that newest task is terminal `failed`/`partial` under
     /// the retry ceiling. Oldest first so the most overdue retry goes
