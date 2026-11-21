@@ -303,7 +303,7 @@ pub fn match_release(
 
     let mut distance = Distance::default();
     if !various && !local.artist.trim().is_empty() {
-        distance.add("artist", artist_dist(&local.artist, &release.artist_text()));
+        distance.add("artist", release_artist_dist(&local.artist, release));
     }
     if !local.title.trim().is_empty() {
         distance.add_string("album", &local.title, &release.title);
@@ -458,12 +458,30 @@ fn names_agree(local: &LocalAlbum, release: &Release, various: bool, pairs: &[Tr
     // pairs with a track, as it does when embedded ids prove the files.
     let whole = !local.tracks.is_empty()
         && (0..local.tracks.len()).all(|index| pairs.iter().any(|pair| pair.local == index));
-    let release_artist = release.artist_text();
     let artist_ok = various
         || local.artist.trim().is_empty()
-        || artist_dist(&local.artist, &release_artist) <= NAME_GATE
-        || ((proven || (title_named && whole)) && artist_subset(&local.artist, &release_artist));
+        || release_artist_dist(&local.artist, release) <= NAME_GATE
+        || ((proven || (title_named && whole)) && release_artist_subset(&local.artist, release));
     title_ok && artist_ok
+}
+
+/// Fork: how far an artist name is from the release's credit, as credited
+/// or as the artists' own names ([`Release::artist_own_text`]).
+pub fn release_artist_dist(artist: &str, release: &Release) -> f64 {
+    let credited = artist_dist(artist, &release.artist_text());
+    match release.artist_own_text() {
+        Some(own) => credited.min(artist_dist(artist, &own)),
+        None => credited,
+    }
+}
+
+/// Fork: [`artist_subset`] against the release's credit, as credited or as
+/// the artists' own names.
+pub fn release_artist_subset(artist: &str, release: &Release) -> bool {
+    artist_subset(artist, &release.artist_text())
+        || release
+            .artist_own_text()
+            .is_some_and(|own| artist_subset(artist, &own))
 }
 
 /// Most recording MBIDs looked up for merges per album: one per file of
@@ -862,5 +880,42 @@ mod tests {
             ..album("Heavy Is the Crown", both())
         };
         assert!(!agree(&other));
+    }
+
+    /// Fork: a release credited in another script (a Japanese edition's
+    /// "ビリー・アイリッシュ") agrees with files tagged with the artist's own
+    /// name, which MusicBrainz's sort name spells; another artist still
+    /// disagrees.
+    #[test]
+    fn a_release_credited_in_another_script_agrees_with_the_artists_own_name() {
+        let release = Release {
+            title: "Happier Than Ever".to_owned(),
+            artists: vec![crate::matching::CreditedArtist {
+                name: "ビリー・アイリッシュ".to_owned(),
+                sort_name: Some("Eilish, Billie".to_owned()),
+                ..crate::matching::CreditedArtist::default()
+            }],
+            ..release_of(&[("Getting Older", 244), ("Lost Cause", 212)])
+        };
+        assert_eq!(release.artist_own_text().as_deref(), Some("Billie Eilish"));
+        let album = |artist: &str| LocalAlbum {
+            title: "Happier Than Ever".to_owned(),
+            artist: artist.to_owned(),
+            tracks: vec![LocalTrack {
+                id: "t7".to_owned(),
+                title: "Lost Cause".to_owned(),
+                track_number: 7,
+                disc_number: 1,
+                duration_secs: Some(213.0),
+                ..LocalTrack::default()
+            }],
+            ..LocalAlbum::default()
+        };
+        let agree =
+            |local: &LocalAlbum| match_release(local, &release, &HashMap::new()).names_agree;
+        assert!(agree(&album("Billie Eilish")));
+        assert!(agree(&album("ビリー・アイリッシュ")));
+        assert!(!agree(&album("Lorde")));
+        assert!(release_artist_dist("Billie Eilish", &release) <= NAME_GATE);
     }
 }

@@ -32,7 +32,9 @@ use crate::reason::Reason;
 use droppedneedle_kernel::runtime_config::sections::{QualityRecipeEntry, recipe_for_range};
 use droppedneedle_library::matching::decide::{ACCEPT_ALBUM, ACCEPT_TRACK};
 use droppedneedle_library::matching::model::credit_text;
-use droppedneedle_library::matching::score::{NAME_GATE, SAME_MASTER_SECS, Support, TrackPair};
+use droppedneedle_library::matching::score::{
+    NAME_GATE, SAME_MASTER_SECS, Support, TrackPair, release_artist_dist, release_artist_subset,
+};
 use droppedneedle_library::matching::strings::{
     artist_subset, basic_dist, fold, string_dist, strip_edition_words, undecorated,
 };
@@ -1092,7 +1094,6 @@ fn the_song_itself(subject: &Subject<'_>, found: &FoundRelease) -> Option<String
         tagged => tagged.to_owned(),
     };
     let artist = file.tag.artist.trim();
-    let release_artist = found.release.artist_text();
     // The album tag must name this release: a copy from another album
     // (the album's version of a single) is the person's call
     // ([`album_version`]).
@@ -1103,13 +1104,16 @@ fn the_song_itself(subject: &Subject<'_>, found: &FoundRelease) -> Option<String
     let same_title = string_dist(&title, &track.title) <= NAME_GATE
         || string_dist(&undecorated(&title), &undecorated(&track.title)) <= NAME_GATE;
     let same_artist = !artist.is_empty()
-        && (string_dist(artist, &release_artist) <= NAME_GATE
-            || artist_subset(artist, &release_artist));
+        && (release_artist_dist(artist, &found.release) <= NAME_GATE
+            || release_artist_subset(artist, &found.release));
     if !(same_title && same_artist) {
         return None;
     }
     if same_album {
-        return Some(format!("the song '{}' by {artist}, at its length", track.title));
+        return Some(format!(
+            "the song '{}' by {artist}, at its length",
+            track.title
+        ));
     }
     // Fork: from another release (a compilation, a DJ mix, a label
     // sampler), at the requested length within a few seconds: title, track
@@ -1178,7 +1182,9 @@ fn another_song(subject: &Subject<'_>, found: &FoundRelease, pair: &TrackPair) -
     {
         return None;
     }
-    Some(format!("the file is '{title}', not the requested '{wanted}'"))
+    Some(format!(
+        "the file is '{title}', not the requested '{wanted}'"
+    ))
 }
 
 /// Fork: how close a file's length must be to the requested track for its
@@ -1269,10 +1275,9 @@ pub fn album_version(target: &Target, landing: &Landing, found: &FoundRelease) -
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .unwrap_or(tag.artist.trim());
-    let release_artist = found.release.artist_text();
     let same_artist = !artist.is_empty()
-        && (string_dist(artist, &release_artist) <= NAME_GATE
-            || artist_subset(artist, &release_artist));
+        && (release_artist_dist(artist, &found.release) <= NAME_GATE
+            || release_artist_subset(artist, &found.release));
     same_artist.then(|| album.to_owned())
 }
 

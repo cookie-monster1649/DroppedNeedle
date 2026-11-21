@@ -158,6 +158,18 @@ pub struct CreditedArtist {
     pub disambiguation: Option<String>,
 }
 
+/// Fork: a sort name as written: "Eilish, Billie" is "Billie Eilish",
+/// "Beatles, The" is "The Beatles". A name with no single ", " is kept.
+fn unsorted(sort: &str) -> String {
+    let sort = sort.trim();
+    match sort.split_once(", ") {
+        Some((last, first)) if !first.contains(", ") && !first.is_empty() => {
+            format!("{first} {last}")
+        }
+        _ => sort.to_owned(),
+    }
+}
+
 /// Credit display text: credited names with their join phrases.
 pub fn credit_text(artists: &[CreditedArtist]) -> String {
     artists
@@ -367,6 +379,30 @@ pub struct WorkCredit {
 impl Release {
     pub fn artist_text(&self) -> String {
         credit_text(&self.artists)
+    }
+
+    /// Fork: the credit spelled with each artist's own name, rebuilt from
+    /// MusicBrainz's sort name ("Eilish, Billie" is "Billie Eilish"), or
+    /// `None` when that spells it as [`Release::artist_text`] does. A
+    /// release credited in another script (a Japanese edition crediting
+    /// "ビリー・アイリッシュ") still answers to the name the files carry.
+    pub fn artist_own_text(&self) -> Option<String> {
+        let own = self
+            .artists
+            .iter()
+            .map(|artist| {
+                let name = artist
+                    .sort_name
+                    .as_deref()
+                    .map(unsorted)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| artist.name.clone());
+                format!("{name}{}", artist.join)
+            })
+            .collect::<String>()
+            .trim()
+            .to_owned();
+        (!own.is_empty() && own != self.artist_text()).then_some(own)
     }
 
     /// True when `mbid` names this release, directly or as a merged id.

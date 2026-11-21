@@ -20,9 +20,7 @@ use droppedneedle_library::identify::providers::GROUP_FETCH;
 use droppedneedle_library::identify::sources::ReleaseHit;
 use droppedneedle_library::matching::decide::{ACCEPT_TRACK, EDITION_COHORT};
 use droppedneedle_library::matching::score::{NAME_GATE, TrackPair};
-use droppedneedle_library::matching::strings::{
-    artist_subset, fold, string_dist, strip_edition_words,
-};
+use droppedneedle_library::matching::strings::{fold, string_dist, strip_edition_words};
 use droppedneedle_library::matching::{
     LocalAlbum, LocalTrack, Release, ReleaseMatch, ReleaseTrack, usable_mbid,
 };
@@ -492,10 +490,15 @@ pub async fn album_copy_proven(
             return false;
         }
     };
-    let credit = release.artist_text();
     let same_artist = various
-        || string_dist(&credit, &target.artist_name) <= NAME_GATE
-        || artist_subset(&target.artist_name, &credit);
+        || droppedneedle_library::matching::score::release_artist_dist(
+            &target.artist_name,
+            &release,
+        ) <= NAME_GATE
+        || droppedneedle_library::matching::score::release_artist_subset(
+            &target.artist_name,
+            &release,
+        );
     let title = match tag.title.trim() {
         "" => file_name_parts(file).2,
         tagged => tagged.to_owned(),
